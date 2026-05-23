@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Sentinel — Mobile Layout 1: Tactical HUD</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:#070b10;font-family:'Share Tech Mono',monospace;font-size:11px;color:#7ab0c8;max-width:400px;margin:0 auto;min-height:100vh;overflow-x:hidden}
+
+.phone-shell{display:flex;flex-direction:column;min-height:100vh}
+
+/* HEADER */
+.header{padding:14px 16px 10px;background:#070b10;border-bottom:1px solid rgba(0,220,140,0.15);position:sticky;top:0;z-index:10}
+.header-row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.h-brand{font-family:'Orbitron',monospace;font-size:14px;font-weight:700;letter-spacing:3px;color:#00dc8c}
+.h-status-row{display:flex;gap:8px}
+.h-chip{font-size:8px;padding:3px 8px;border:1px solid;letter-spacing:1px}
+.h-chip.g{color:#00dc8c;border-color:rgba(0,220,140,0.3);background:rgba(0,220,140,0.07)}
+.h-chip.r{color:#ff3a5c;border-color:rgba(255,58,92,0.35);background:rgba(255,58,92,0.07)}
+.h-chip.a{color:#f0a020;border-color:rgba(240,160,32,0.35);background:rgba(240,160,32,0.07)}
+
+.header-row2{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
+.h-metric{text-align:center;padding:8px 4px;background:rgba(0,220,140,0.04);border:1px solid rgba(0,220,140,0.1)}
+.h-metric-val{font-family:'Orbitron',monospace;font-size:20px;font-weight:700;color:#00dc8c;line-height:1}
+.h-metric-val.r{color:#ff3a5c}
+.h-metric-val.a{color:#f0a020}
+.h-metric-val.b{color:#00aaff}
+.h-metric-lbl{font-size:7px;color:#2a5a6a;letter-spacing:1px;margin-top:3px}
+
+/* SCROLL BODY */
+.scroll-body{flex:1;padding:12px 14px;padding-bottom:80px;display:flex;flex-direction:column;gap:10px}
+
+/* CARDS */
+.m-card{background:#0a0f18;border:1px solid rgba(0,220,140,0.12);padding:12px 14px;position:relative}
+.m-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:#00dc8c;opacity:0.6}
+.m-card.danger::before{background:#ff3a5c;opacity:0.8}
+.m-card.warn::before{background:#f0a020;opacity:0.7}
+.m-card.blue::before{background:#00aaff;opacity:0.5}
+
+.m-card-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.m-card-title{font-size:8px;letter-spacing:2px;color:#1a5060}
+.m-card-badge{font-size:8px;padding:2px 7px;border:1px solid;letter-spacing:1px}
+.m-card-badge.g{color:#00dc8c;border-color:rgba(0,220,140,0.3)}
+.m-card-badge.r{color:#ff3a5c;border-color:rgba(255,58,92,0.3)}
+.m-card-badge.a{color:#f0a020;border-color:rgba(240,160,32,0.3)}
+.m-card-badge.b{color:#00aaff;border-color:rgba(0,170,255,0.3)}
+
+/* critical alert banner */
+.crit-banner{background:rgba(255,58,92,0.08);border:1px solid rgba(255,58,92,0.3);padding:12px 14px;position:relative;margin-bottom:2px}
+.crit-banner::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:#ff3a5c;animation:scanline 2s infinite}
+@keyframes scanline{0%{opacity:1}50%{opacity:0.4}100%{opacity:1}}
+.crit-title{font-size:10px;color:#ff3a5c;font-family:'Orbitron',monospace;letter-spacing:2px;margin-bottom:6px}
+.crit-device{font-size:11px;color:#ffaaaa;margin-bottom:2px}
+.crit-detail{font-size:9px;color:#8a4040;margin-bottom:10px;line-height:1.5}
+.crit-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn-block{padding:9px;font-size:10px;letter-spacing:2px;background:rgba(255,58,92,0.15);border:1px solid rgba(255,58,92,0.5);color:#ff3a5c;cursor:pointer;font-family:'Share Tech Mono',monospace;width:100%}
+.btn-inv{padding:9px;font-size:10px;letter-spacing:2px;background:none;border:1px solid rgba(0,220,140,0.25);color:#00dc8c;cursor:pointer;font-family:'Share Tech Mono',monospace;width:100%}
+
+/* device rows */
+.d-row-m{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(0,220,140,0.06)}
+.d-row-m:last-child{border:none}
+.d-ind{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.d-ind.g{background:#00dc8c;box-shadow:0 0 4px #00dc8c}
+.d-ind.a{background:#f0a020}
+.d-ind.r{background:#ff3a5c;box-shadow:0 0 4px #ff3a5c}
+.d-info{flex:1;min-width:0}
+.d-name-m{font-size:10px;color:#7ab0c8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-ip-m{font-size:9px;color:#2a6070;margin-top:1px}
+.d-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0}
+.d-bw-m{font-size:10px;color:#00aaff}
+.d-bw-m.hi{color:#f0a020}
+.d-bw-m.crit{color:#ff3a5c}
+.d-tag-m{font-size:8px;padding:1px 5px;border:1px solid rgba(0,220,140,0.2);color:#2a8070}
+.d-tag-m.sus{color:#f0a020;border-color:rgba(240,160,32,0.3)}
+.d-tag-m.crit{color:#ff3a5c;border-color:rgba(255,58,92,0.3)}
+
+/* bars */
+.br{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bl{font-size:9px;color:#2a6070;width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bt{flex:1;height:3px;background:#0f1820}
+.bf{height:100%;background:#00aaff}
+.bf.a{background:#f0a020}
+.bf.r{background:#ff3a5c}
+.bv{font-size:9px;color:#2a6070;width:42px;text-align:right;flex-shrink:0}
+
+/* services */
+.svc-m{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,220,140,0.06);font-size:10px}
+.svc-m:last-child{border:none}
+.svc-m-n{color:#5a9090}
+.svc-m-st{font-size:9px}
+.svc-m-st.on{color:#00dc8c;animation:bm 2s infinite}
+.svc-m-st.ok{color:#2a6070}
+.svc-m-st.sc{color:#1a4050}
+@keyframes bm{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* feed */
+.feed-m{font-size:9px;color:#2a6070;padding:5px 0;border-bottom:1px solid rgba(0,220,140,0.06);display:flex;gap:7px;align-items:flex-start}
+.feed-m:last-child{border:none}
+.feed-ts-m{color:#1a4050;flex-shrink:0;white-space:nowrap}
+.feed-tag-m{font-size:8px;padding:1px 4px;flex-shrink:0}
+.feed-tag-m.ok{color:#00dc8c;border:1px solid rgba(0,220,140,0.25)}
+.feed-tag-m.bad{color:#ff3a5c;border:1px solid rgba(255,58,92,0.25)}
+.feed-tag-m.w{color:#f0a020;border:1px solid rgba(240,160,32,0.25)}
+
+/* BOTTOM NAV */
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:400px;background:#080c14;border-top:1px solid rgba(0,220,140,0.2);display:grid;grid-template-columns:repeat(5,1fr);z-index:20}
+.bnav-item{display:flex;flex-direction:column;align-items:center;padding:10px 4px 8px;cursor:pointer;color:#1a5060;font-size:8px;letter-spacing:1px;transition:all 0.15s;position:relative}
+.bnav-item.active{color:#00dc8c}
+.bnav-item i{font-size:20px;margin-bottom:3px}
+.bnav-badge{position:absolute;top:6px;right:calc(50% - 18px);font-size:7px;background:#ff3a5c;color:#fff;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="phone-shell">
+  <h2 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Sentinel mobile dashboard — tactical HUD layout with bottom navigation</h2>
+
+  <header class="header">
+    <div class="header-row1">
+      <div class="h-brand">SENTINEL</div>
+      <div class="h-status-row">
+        <div class="h-chip g">● XMO</div>
+        <div class="h-chip r">⚠ 2</div>
+        <div class="h-chip a">RISK 47</div>
+      </div>
+    </div>
+    <div class="header-row2">
+      <div class="h-metric"><div class="h-metric-val">13</div><div class="h-metric-lbl">DEVICES</div></div>
+      <div class="h-metric"><div class="h-metric-val r">2</div><div class="h-metric-lbl">ALERTS</div></div>
+      <div class="h-metric"><div class="h-metric-val b">847</div><div class="h-metric-lbl">BLOCKED</div></div>
+      <div class="h-metric"><div class="h-metric-val a">47</div><div class="h-metric-lbl">RISK</div></div>
+    </div>
+  </header>
+
+  <div class="scroll-body">
+
+    <!-- Critical alert -->
+    <div class="crit-banner">
+      <div class="crit-title">⚠ CRITICAL ALERT</div>
+      <div class="crit-device">chuangmi_camera_ipc019</div>
+      <div class="crit-detail">Anomalous upload spike detected<br>1.4 MB/s sustained · 3× baseline · 5min<br>10.100.102.20 · Possible exfiltration</div>
+      <div class="crit-actions">
+        <button class="btn-block" onclick="alert('Block sent to XMO API')">⊘ BLOCK</button>
+        <button class="btn-inv">INSPECT</button>
+      </div>
+    </div>
+
+    <!-- Devices -->
+    <div class="m-card">
+      <div class="m-card-hd">
+        <span class="m-card-title">CONNECTED DEVICES</span>
+        <span class="m-card-badge g">13 ONLINE</span>
+      </div>
+      <div class="d-row-m">
+        <div class="d-ind g"></div>
+        <div class="d-info"><div class="d-name-m">Redmi-Note-13-Pro-5G</div><div class="d-ip-m">10.100.102.10 · -59dBm</div></div>
+        <div class="d-right"><div class="d-bw-m hi">8.4 MB/s</div><div class="d-tag-m">WiFi</div></div>
+      </div>
+      <div class="d-row-m">
+        <div class="d-ind g"></div>
+        <div class="d-info"><div class="d-name-m">DESKTOP-OFNIM7N</div><div class="d-ip-m">10.100.102.23 · -72dBm</div></div>
+        <div class="d-right"><div class="d-bw-m">5.1 MB/s</div><div class="d-tag-m">WiFi</div></div>
+      </div>
+      <div class="d-row-m">
+        <div class="d-ind a"></div>
+        <div class="d-info"><div class="d-name-m">MiWiFi-RA67</div><div class="d-ip-m">10.100.102.17 · eth4</div></div>
+        <div class="d-right"><div class="d-bw-m">4.0 MB/s</div><div class="d-tag-m sus">WARN</div></div>
+      </div>
+      <div class="d-row-m">
+        <div class="d-ind r"></div>
+        <div class="d-info"><div class="d-name-m">chuangmi_camera_ipc019</div><div class="d-ip-m">10.100.102.20 · -71dBm</div></div>
+        <div class="d-right"><div class="d-bw-m crit">1.4 MB/s!</div><div class="d-tag-m crit">SUSP</div></div>
+      </div>
+      <div class="d-row-m">
+        <div class="d-ind g"></div>
+        <div class="d-info"><div class="d-name-m">daniel-Lenovo + 8 more</div><div class="d-ip-m">various</div></div>
+        <div class="d-right"><div class="d-bw-m" style="color:#2a6070">normal</div><div class="d-tag-m">mixed</div></div>
+      </div>
+    </div>
+
+    <!-- Traffic -->
+    <div class="m-card blue">
+      <div class="m-card-hd"><span class="m-card-title">BANDWIDTH</span><span class="m-card-badge b">LIVE</span></div>
+      <div class="br"><span class="bl">Redmi-Note-13</span><div class="bt"><div class="bf" style="width:85%"></div></div><span class="bv">8.4M</span></div>
+      <div class="br"><span class="bl">DESKTOP-OFNIM7N</span><div class="bt"><div class="bf" style="width:52%"></div></div><span class="bv">5.1M</span></div>
+      <div class="br"><span class="bl">MiWiFi-RA67</span><div class="bt"><div class="bf a" style="width:41%"></div></div><span class="bv">4.0M</span></div>
+      <div class="br"><span class="bl">chuangmi_cam</span><div class="bt"><div class="bf r" style="width:14%"></div></div><span class="bv" style="color:#ff3a5c">1.4M!</span></div>
+    </div>
+
+    <!-- Services -->
+    <div class="m-card">
+      <div class="m-card-hd"><span class="m-card-title">SECURITY SERVICES</span><span class="m-card-badge g">7 ACTIVE</span></div>
+      <div class="svc-m"><span class="svc-m-n">XMO Adapter</span><span class="svc-m-st on">● POLLING 15s</span></div>
+      <div class="svc-m"><span class="svc-m-n">Suricata IDS</span><span class="svc-m-st on">● ACTIVE</span></div>
+      <div class="svc-m"><span class="svc-m-n">Pi-hole DNS</span><span class="svc-m-st on">● BLOCKING</span></div>
+      <div class="svc-m"><span class="svc-m-n">Nmap Scanner</span><span class="svc-m-st ok">✓ 11:21</span></div>
+      <div class="svc-m"><span class="svc-m-n">Threat Intel</span><span class="svc-m-st sc">⊙ 23m</span></div>
+    </div>
+
+    <!-- Event log -->
+    <div class="m-card warn">
+      <div class="m-card-hd"><span class="m-card-title">LIVE EVENT LOG</span><span class="m-card-badge a">STREAMING</span></div>
+      <div class="feed-m"><span class="feed-ts-m">11:24</span><span class="feed-tag-m bad">CRIT</span><span>chuangmi upload spike 1.4 MB/s</span></div>
+      <div class="feed-m"><span class="feed-ts-m">11:23</span><span class="feed-tag-m w">WARN</span><span>MiWiFi DNS query — urlhaus flagged</span></div>
+      <div class="feed-m"><span class="feed-ts-m">11:22</span><span class="feed-tag-m ok">INFO</span><span>New device joined: f8:17:2d</span></div>
+      <div class="feed-m"><span class="feed-ts-m">11:21</span><span class="feed-tag-m ok">OK</span><span>Nmap scan complete · 13 hosts</span></div>
+      <div class="feed-m"><span class="feed-ts-m">11:20</span><span class="feed-tag-m ok">OK</span><span>XMO session refreshed</span></div>
+    </div>
+  </div>
+
+  <nav class="bottom-nav" aria-label="Primary navigation">
+    <div class="bnav-item active"><i class="ti ti-layout-dashboard" aria-hidden="true"></i>HOME</div>
+    <div class="bnav-item"><i class="ti ti-device-laptop" aria-hidden="true"></i>DEVICES</div>
+    <div class="bnav-item"><i class="ti ti-bell" aria-hidden="true"></i>ALERTS<div class="bnav-badge">2</div></div>
+    <div class="bnav-item"><i class="ti ti-shield" aria-hidden="true"></i>THREATS</div>
+    <div class="bnav-item"><i class="ti ti-settings" aria-hidden="true"></i>CONFIG</div>
+  </nav>
+</div>
+</body>
+</html>

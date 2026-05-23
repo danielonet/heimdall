@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Sentinel — Mobile Layout 2: Minimal Recon</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:#0c1118;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8899aa;max-width:400px;margin:0 auto;min-height:100vh}
+
+.app{display:flex;flex-direction:column;min-height:100vh}
+
+/* TOP */
+.topbar-m{padding:16px 18px 0;display:flex;align-items:center;justify-content:space-between;background:#0c1118}
+.tb-left{display:flex;flex-direction:column;gap:2px}
+.tb-brand{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:700;letter-spacing:2px;color:#e0eaf4}
+.tb-sub{font-size:9px;letter-spacing:2px;color:#2a4860}
+.tb-right{display:flex;align-items:center;gap:10px}
+.tb-icon-btn{width:36px;height:36px;border:1px solid #1a2840;background:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#2a5070;position:relative}
+.tb-icon-btn.alert-active{border-color:rgba(255,80,100,0.4);color:#ff5064}
+.tb-icon-btn .badge-dot{position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:#ff5064;border:1px solid #0c1118}
+
+/* STATUS ROW */
+.status-row{padding:12px 18px;display:flex;gap:6px;border-bottom:1px solid #111c28}
+.st-pill{font-size:9px;padding:4px 10px;border:1px solid;letter-spacing:1px;display:flex;align-items:center;gap:5px}
+.st-pill.g{color:#00cc80;border-color:rgba(0,204,128,0.25);background:rgba(0,204,128,0.06)}
+.st-pill.r{color:#ff5064;border-color:rgba(255,80,100,0.25);background:rgba(255,80,100,0.06)}
+.st-pill.a{color:#f0a030;border-color:rgba(240,160,48,0.25);background:rgba(240,160,48,0.06)}
+.st-dot2{width:5px;height:5px;border-radius:50%}
+.st-dot2.g{background:#00cc80;animation:p2 2s infinite}
+.st-dot2.r{background:#ff5064}
+.st-dot2.a{background:#f0a030}
+@keyframes p2{0%,100%{opacity:1}50%{opacity:0.35}}
+
+/* SECTION TABS */
+.tabs{display:flex;padding:0 18px;border-bottom:1px solid #111c28;background:#0c1118;position:sticky;top:0;z-index:10;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{padding:10px 14px;font-size:9px;letter-spacing:2px;color:#2a4860;white-space:nowrap;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;flex-shrink:0;font-family:'IBM Plex Mono',monospace;transition:all 0.15s}
+.tab.active{color:#00cc80;border-bottom-color:#00cc80}
+.tab:hover{color:#8899aa}
+
+/* SCROLL BODY */
+.content{flex:1;padding:14px 18px 80px;display:flex;flex-direction:column;gap:12px}
+
+/* ALERT CARD */
+.alert-card{border:1px solid rgba(255,80,100,0.3);padding:14px 16px;background:rgba(255,80,100,0.04);position:relative;overflow:hidden}
+.alert-card::after{content:'! CRITICAL';position:absolute;top:12px;right:14px;font-size:8px;letter-spacing:2px;color:rgba(255,80,100,0.5)}
+.alert-card-label{font-size:8px;letter-spacing:2px;color:#ff5064;margin-bottom:8px}
+.alert-card-device{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;color:#e0eaf4;margin-bottom:3px}
+.alert-card-detail{font-size:10px;color:#5a7090;line-height:1.6;margin-bottom:12px}
+.alert-card-row{display:flex;gap:8px}
+.btn-primary{flex:1;padding:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2px;background:rgba(255,80,100,0.12);border:1px solid rgba(255,80,100,0.4);color:#ff5064;cursor:pointer}
+.btn-sec{flex:1;padding:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2px;background:none;border:1px solid #1a2840;color:#2a5070;cursor:pointer}
+
+/* METRIC STRIP */
+.metric-strip{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.metric-tile{padding:12px 14px;background:#0f1520;border:1px solid #111c28;position:relative}
+.metric-tile::before{content:'';position:absolute;top:0;left:0;width:2px;height:100%;background:#00cc80;opacity:0.5}
+.metric-tile.r::before{background:#ff5064;opacity:0.7}
+.metric-tile.a::before{background:#f0a030;opacity:0.6}
+.metric-tile.b::before{background:#00aaff;opacity:0.5}
+.mt-val{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#00cc80;line-height:1}
+.mt-val.r{color:#ff5064}
+.mt-val.a{color:#f0a030}
+.mt-val.b{color:#00aaff}
+.mt-lbl{font-size:8px;letter-spacing:2px;color:#2a4860;margin-top:4px}
+.mt-sub{font-size:9px;color:#1a4060;margin-top:2px}
+
+/* DEVICE LIST */
+.dev-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #111c28}
+.dev-item:last-child{border:none}
+.dev-icon{width:32px;height:32px;border:1px solid #1a2840;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;color:#2a5070;position:relative}
+.dev-icon .ind2{position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;border:1px solid #0c1118}
+.ind2.g{background:#00cc80}
+.ind2.a{background:#f0a030}
+.ind2.r{background:#ff5064}
+.dev-body{flex:1;min-width:0}
+.dev-name2{font-size:11px;color:#aabccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dev-meta{font-size:9px;color:#2a5070;margin-top:2px}
+.dev-right2{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0}
+.dev-bw2{font-size:11px;color:#00aaff}
+.dev-bw2.hi{color:#f0a030}
+.dev-bw2.crit{color:#ff5064}
+.dev-tag2{font-size:8px;padding:1px 6px;border:1px solid #1a2840;color:#2a5070;letter-spacing:1px}
+.dev-tag2.s{color:#f0a030;border-color:rgba(240,160,48,0.3)}
+.dev-tag2.c{color:#ff5064;border-color:rgba(255,80,100,0.3)}
+
+/* BARS */
+.brow2{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.bl2{font-size:9px;color:#2a5070;width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bt2{flex:1;height:2px;background:#111c28}
+.bf2{height:100%;background:#00aaff}
+.bf2.a{background:#f0a030}
+.bf2.r{background:#ff5064}
+.bv2{font-size:9px;color:#2a5070;width:40px;text-align:right;flex-shrink:0}
+
+/* SECTION TITLES */
+.sec-title{font-size:8px;letter-spacing:3px;color:#1a4060;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.sec-title::after{content:'';flex:1;height:1px;background:#111c28}
+
+/* services list */
+.svc3{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #111c28;font-size:10px}
+.svc3:last-child{border:none}
+.svc3-n{color:#5a7090;display:flex;align-items:center;gap:7px}
+.svc3-n i{font-size:13px}
+.svc3-s{font-size:9px}
+.svc3-s.on{color:#00cc80;animation:p2 2s infinite}
+.svc3-s.ok{color:#2a5070}
+.svc3-s.sc{color:#1a3050}
+
+/* feed */
+.feed3{font-size:9px;color:#2a5070;padding:6px 0;border-bottom:1px solid #111c28;display:flex;gap:8px;align-items:flex-start;line-height:1.4}
+.feed3:last-child{border:none}
+.feed3-ts{color:#1a3050;flex-shrink:0;white-space:nowrap;width:42px}
+.feed3-tag{font-size:8px;padding:1px 5px;flex-shrink:0;border:1px solid}
+.feed3-tag.ok{color:#00cc80;border-color:rgba(0,204,128,0.25)}
+.feed3-tag.bad{color:#ff5064;border-color:rgba(255,80,100,0.25)}
+.feed3-tag.w{color:#f0a030;border-color:rgba(240,160,48,0.25)}
+
+/* BOTTOM NAV */
+.bottom-nav2{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:400px;background:#0a0e16;border-top:1px solid #111c28;display:grid;grid-template-columns:repeat(5,1fr);z-index:20}
+.bn2{display:flex;flex-direction:column;align-items:center;padding:10px 4px 8px;cursor:pointer;color:#1a3860;font-size:8px;letter-spacing:1px;font-family:'IBM Plex Mono',monospace;position:relative;transition:color 0.15s}
+.bn2.active{color:#00cc80}
+.bn2 i{font-size:20px;margin-bottom:3px}
+.bn2 .bd{position:absolute;top:6px;right:calc(50% - 18px);font-size:7px;background:#ff5064;color:#fff;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="app">
+  <h2 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Sentinel mobile layout 2 — minimal recon with tabbed navigation</h2>
+
+  <div class="topbar-m">
+    <div class="tb-left">
+      <div class="tb-brand">SENTINEL</div>
+      <div class="tb-sub">NET MONITOR · LIVE</div>
+    </div>
+    <div class="tb-right">
+      <button class="tb-icon-btn" aria-label="Notifications"><i class="ti ti-bell" aria-hidden="true"></i></button>
+      <button class="tb-icon-btn alert-active" aria-label="Alerts — 2 unread">
+        <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+        <div class="badge-dot" aria-hidden="true"></div>
+      </button>
+    </div>
+  </div>
+
+  <div class="status-row">
+    <div class="st-pill g"><div class="st-dot2 g"></div>XMO LIVE</div>
+    <div class="st-pill r"><div class="st-dot2 r"></div>2 ALERTS</div>
+    <div class="st-pill a"><div class="st-dot2 a"></div>RISK 47</div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <div class="tab active" role="tab" aria-selected="true">OVERVIEW</div>
+    <div class="tab" role="tab">DEVICES</div>
+    <div class="tab" role="tab">ALERTS</div>
+    <div class="tab" role="tab">THREATS</div>
+    <div class="tab" role="tab">RULES</div>
+  </div>
+
+  <div class="content">
+
+    <!-- Metrics -->
+    <div class="metric-strip">
+      <div class="metric-tile">
+        <div class="mt-val">13</div>
+        <div class="mt-lbl">DEVICES ONLINE</div>
+        <div class="mt-sub">+1 new today</div>
+      </div>
+      <div class="metric-tile r">
+        <div class="mt-val r">2</div>
+        <div class="mt-lbl">OPEN ALERTS</div>
+        <div class="mt-sub">1 critical</div>
+      </div>
+      <div class="metric-tile b">
+        <div class="mt-val b">847</div>
+        <div class="mt-lbl">DNS BLOCKED</div>
+        <div class="mt-sub">today</div>
+      </div>
+      <div class="metric-tile a">
+        <div class="mt-val a">47</div>
+        <div class="mt-lbl">THREAT SCORE</div>
+        <div class="mt-sub">moderate</div>
+      </div>
+    </div>
+
+    <!-- Critical alert -->
+    <div class="alert-card">
+      <div class="alert-card-label">CRITICAL ALERT · ANOMALY DETECTED</div>
+      <div class="alert-card-device">chuangmi_camera_ipc019</div>
+      <div class="alert-card-detail">Sustained upload spike 1.4 MB/s<br>3× above baseline · 5 min duration<br>10.100.102.20 · WiFi · –71 dBm</div>
+      <div class="alert-card-row">
+        <button class="btn-primary" onclick="alert('Block command sent to Sagemcom XMO API')">⊘ BLOCK</button>
+        <button class="btn-sec">ANALYSE</button>
+      </div>
+    </div>
+
+    <!-- Device list -->
+    <div>
+      <div class="sec-title">CONNECTED DEVICES</div>
+      <div class="dev-item">
+        <div class="dev-icon"><i class="ti ti-device-mobile" aria-hidden="true"></i><div class="ind2 g"></div></div>
+        <div class="dev-body"><div class="dev-name2">Redmi-Note-13-Pro-5G</div><div class="dev-meta">10.100.102.10 · –59 dBm</div></div>
+        <div class="dev-right2"><div class="dev-bw2 hi">8.4 MB/s</div><div class="dev-tag2">WiFi</div></div>
+      </div>
+      <div class="dev-item">
+        <div class="dev-icon"><i class="ti ti-device-desktop" aria-hidden="true"></i><div class="ind2 g"></div></div>
+        <div class="dev-body"><div class="dev-name2">DESKTOP-OFNIM7N</div><div class="dev-meta">10.100.102.23 · –72 dBm</div></div>
+        <div class="dev-right2"><div class="dev-bw2">5.1 MB/s</div><div class="dev-tag2">WiFi</div></div>
+      </div>
+      <div class="dev-item">
+        <div class="dev-icon"><i class="ti ti-router" aria-hidden="true"></i><div class="ind2 a"></div></div>
+        <div class="dev-body"><div class="dev-name2">MiWiFi-RA67</div><div class="dev-meta">10.100.102.17 · eth4 · DNS flagged</div></div>
+        <div class="dev-right2"><div class="dev-bw2">4.0 MB/s</div><div class="dev-tag2 s">WARN</div></div>
+      </div>
+      <div class="dev-item">
+        <div class="dev-icon"><i class="ti ti-camera" aria-hidden="true"></i><div class="ind2 r"></div></div>
+        <div class="dev-body"><div class="dev-name2">chuangmi_camera_ipc019</div><div class="dev-meta">10.100.102.20 · –71 dBm</div></div>
+        <div class="dev-right2"><div class="dev-bw2 crit">1.4 MB/s!</div><div class="dev-tag2 c">SUSP</div></div>
+      </div>
+      <div class="dev-item">
+        <div class="dev-icon"><i class="ti ti-device-laptop" aria-hidden="true"></i><div class="ind2 g"></div></div>
+        <div class="dev-body"><div class="dev-name2">daniel-Lenovo-V15-G4</div><div class="dev-meta">10.100.102.22 · –61 dBm</div></div>
+        <div class="dev-right2"><div class="dev-bw2">2.7 MB/s</div><div class="dev-tag2">WiFi</div></div>
+      </div>
+    </div>
+
+    <!-- Bandwidth -->
+    <div>
+      <div class="sec-title">BANDWIDTH USAGE</div>
+      <div class="brow2"><span class="bl2">Redmi-Note-13</span><div class="bt2"><div class="bf2" style="width:85%"></div></div><span class="bv2">8.4M</span></div>
+      <div class="brow2"><span class="bl2">DESKTOP-OFNIM7N</span><div class="bt2"><div class="bf2" style="width:52%"></div></div><span class="bv2">5.1M</span></div>
+      <div class="brow2"><span class="bl2">MiWiFi-RA67</span><div class="bt2"><div class="bf2 a" style="width:41%"></div></div><span class="bv2">4.0M</span></div>
+      <div class="brow2"><span class="bl2">daniel-Lenovo</span><div class="bt2"><div class="bf2" style="width:28%"></div></div><span class="bv2">2.7M</span></div>
+      <div class="brow2"><span class="bl2">chuangmi_cam</span><div class="bt2"><div class="bf2 r" style="width:14%"></div></div><span class="bv2" style="color:#ff5064">1.4M!</span></div>
+    </div>
+
+    <!-- Services -->
+    <div>
+      <div class="sec-title">SECURITY SERVICES</div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-wifi" aria-hidden="true"></i>XMO Adapter</div><span class="svc3-s on">● POLLING</span></div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-shield" aria-hidden="true"></i>Suricata IDS</div><span class="svc3-s on">● ACTIVE</span></div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-world" aria-hidden="true"></i>Pi-hole DNS</div><span class="svc3-s on">● BLOCKING</span></div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-radar" aria-hidden="true"></i>Nmap Scanner</div><span class="svc3-s ok">✓ 11:21:44</span></div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-virus" aria-hidden="true"></i>ClamAV</div><span class="svc3-s ok">✓ DEFS CURRENT</span></div>
+      <div class="svc3"><div class="svc3-n"><i class="ti ti-database" aria-hidden="true"></i>Threat Intel</div><span class="svc3-s sc">⊙ REFRESH 23m</span></div>
+    </div>
+
+    <!-- Feed -->
+    <div>
+      <div class="sec-title">EVENT LOG</div>
+      <div class="feed3"><span class="feed3-ts">11:24</span><span class="feed3-tag bad">CRIT</span><span>chuangmi upload spike — 1.4 MB/s</span></div>
+      <div class="feed3"><span class="feed3-ts">11:23</span><span class="feed3-tag w">WARN</span><span>MiWiFi DNS hit — urlhaus flagged</span></div>
+      <div class="feed3"><span class="feed3-ts">11:22</span><span class="feed3-tag ok">INFO</span><span>New device joined — f8:17:2d</span></div>
+      <div class="feed3"><span class="feed3-ts">11:21</span><span class="feed3-tag ok">OK</span><span>Nmap scan complete — 13 hosts</span></div>
+      <div class="feed3"><span class="feed3-ts">11:20</span><span class="feed3-tag ok">OK</span><span>XMO session refreshed</span></div>
+    </div>
+  </div>
+
+  <nav class="bottom-nav2" aria-label="Primary navigation">
+    <div class="bn2 active"><i class="ti ti-layout-dashboard" aria-hidden="true"></i>HOME</div>
+    <div class="bn2"><i class="ti ti-device-laptop" aria-hidden="true"></i>DEVICES</div>
+    <div class="bn2"><i class="ti ti-bell" aria-hidden="true"></i>ALERTS<div class="bd" aria-hidden="true">2</div></div>
+    <div class="bn2"><i class="ti ti-shield" aria-hidden="true"></i>THREATS</div>
+    <div class="bn2"><i class="ti ti-settings" aria-hidden="true"></i>CONFIG</div>
+  </nav>
+</div>
+</body>
+</html>
