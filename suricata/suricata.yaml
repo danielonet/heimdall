@@ -1,0 +1,86 @@
+%YAML 1.1
+---
+# Minimal Suricata config for Heimdall.
+# Captures alerts, DNS, HTTP, and TLS into EVE JSON for ingestion by sentinel-backend.
+
+vars:
+  address-groups:
+    HOME_NET: "[10.100.102.0/24]"
+    EXTERNAL_NET: "!$HOME_NET"
+
+# EVE JSON output — sentinel-backend reads /var/log/suricata/eve.json
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      types:
+        - alert:
+            payload: yes
+            payload-buffer-size: 4kb
+            http-body: yes
+            metadata: yes
+        - dns:
+            query: yes
+            answer: yes
+        - http:
+            extended: yes
+        - tls:
+            extended: yes
+        - flow
+        - stats:
+            totals: yes
+            threads: no
+            deltas: no
+
+  - fast:
+      enabled: yes
+      filename: /var/log/suricata/fast.log
+      append: yes
+
+# Packet capture — uses AF_PACKET for zero-copy capture on the LAN interface
+af-packet:
+  - interface: eth0
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+
+# Rule sources
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - suricata.rules
+
+# Rule management (run suricata-update in container to fetch ET rules)
+# suricata-update
+
+# Threading
+threading:
+  set-cpu-affinity: no
+  detect-thread-ratio: 1.0
+
+# Logging
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: no
+    - file:
+        enabled: yes
+        level: info
+        filename: /var/log/suricata/suricata.log
+
+# App-layer protocol detection
+app-layer:
+  protocols:
+    dns:
+      enabled: yes
+      detection-ports:
+        dp: 53
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: 443

@@ -1,0 +1,60 @@
+# ── Secrets (NEVER commit) ────────────────────────────────────────────────────
+secrets/
+*.txt
+
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.install_stamp
+*.coverage
+.coverage
+htmlcov/
+
+# ── ML models ─────────────────────────────────────────────────────────────────
+/data/models/
+*.joblib
+*.pkl
+
+# ── Node / React ──────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+frontend/dist/
+frontend/.vite/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+.logs/
+*.log
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+.docker/
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

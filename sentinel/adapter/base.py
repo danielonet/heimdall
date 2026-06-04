@@ -1,0 +1,36 @@
+from abc import ABC, abstractmethod
+from typing import List
+
+from .models import DeviceSnapshot, PortStats, RouterInfo, TrafficSample
+
+
+class RouterAdapter(ABC):
+    """Abstract interface for all router integrations.
+
+    All router communication goes through a concrete subclass of this class.
+    No other module may import from xmo_client.py or call the XMO API directly.
+    """
+
+    @abstractmethod
+    async def get_connected_devices(self) -> List[DeviceSnapshot]:
+        """Return all currently connected LAN devices."""
+
+    @abstractmethod
+    async def get_traffic_samples(self) -> List[TrafficSample]:
+        """Return per-device (WiFi) and per-port (wired) traffic deltas since last call."""
+
+    @abstractmethod
+    async def get_port_stats(self) -> List[PortStats]:
+        """Return per-physical-port Ethernet stats (PHY1–PHY5)."""
+
+    @abstractmethod
+    async def block_device(self, mac: str) -> bool:
+        """Issue a firewall DROP rule for this MAC. Returns True on success."""
+
+    @abstractmethod
+    async def unblock_device(self, mac: str) -> bool:
+        """Remove the firewall DROP rule for this MAC. Returns True on success."""
+
+    @abstractmethod
+    async def get_router_info(self) -> RouterInfo:
+        """Return router metadata: model, firmware, uptime, WAN status."""
