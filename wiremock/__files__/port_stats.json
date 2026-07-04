@@ -1,0 +1,30 @@
+{
+  "reply": {
+    "uid": 123456789,
+    "actions": [
+      {
+        "id": 0,
+        "callbacks": [
+          {
+            "result": {
+              "item": {
+                "Alias": "PHY1",
+                "Stats": {
+                  "BytesSent": "1000000000",
+                  "BytesReceived": "2500000000",
+                  "ErrorsSent": "0",
+                  "ErrorsReceived": "0",
+                  "DiscardPacketsReceived": "0",
+                  "BroadcastPacketsReceived": "5000"
+                },
+                "Status": "Up",
+                "CurrentBitRate": "1000",
+                "LastChange": "180000"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

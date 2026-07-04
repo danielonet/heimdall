@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi/json-req",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.request.id == 0"
+      },
+      {
+        "matchesJsonPath": "$.request.actions[0].method == 'getValue'"
+      },
+      {
+        "matchesJsonPath": "$.request.actions[0].xpath == 'Device/Hosts/Host'"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "bodyFileName": "device_list.json",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

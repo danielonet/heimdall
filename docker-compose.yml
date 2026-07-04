@@ -12,6 +12,7 @@ services:
       - ROUTER_PORT=80
       - ROUTER_USERNAME=admin
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
+      # - USE_MOCK_ROUTER=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
@@ -76,6 +77,21 @@ services:
   unbound:
     image: mvance/unbound:latest
     network_mode: host
+    restart: unless-stopped
+
+  # WireMock: Mock Sagemcom router XMO API (optional, for testing with recorded responses)
+  # Enable this only if you want to test against actual XMO API response formats
+  # from a real router (recorded traffic). See docs/architecture/10-mock-router.md
+  wiremock:
+    image: wiremock/wiremock:3.x-alpine
+    ports:
+      - "8080:8080"             # Admin API + stub responses
+    volumes:
+      - ./wiremock:/home/wiremock  # stubs, mappings, recordings
+    command:
+      - --root-dir=/home/wiremock
+      - --port=8080
+      - --disable-request-logging
     restart: unless-stopped
 
   suricata:

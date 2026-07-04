@@ -51,6 +51,19 @@ docker compose up -d
 Dashboard: `http://localhost:3000`
 API docs: `http://localhost:5000/api/docs`
 
+## Offline Development
+
+When your router is unavailable, use **mock mode** to test Heimdall offline:
+
+```bash
+# Enable the mock adapter (synthetic test data)
+USE_MOCK_ROUTER=true docker compose up -d
+
+# Dashboard works normally with synthetic traffic
+```
+
+See [`docs/architecture/10-mock-router.md`](docs/architecture/10-mock-router.md) for details.
+
 ## Documentation
 
 Full architecture and design documents are in [`docs/`](docs/).

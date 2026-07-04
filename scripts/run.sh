@@ -6,10 +6,11 @@
 # you can see logs, set breakpoints, and restart quickly.
 #
 # Usage:
-#   ./scripts/run.sh              # core infra + backend + frontend
-#   ./scripts/run.sh --no-backend # infra + frontend only; attach VS Code debugger to backend
-#   ./scripts/run.sh --full       # all Docker services including pihole, suricata, etc.
-#   ./scripts/run.sh --stop       # stop all Docker infra services and exit
+#   ./scripts/run.sh                      # core infra + backend + frontend
+#   ./scripts/run.sh --no-backend         # infra + frontend only; attach VS Code debugger to backend
+#   ./scripts/run.sh --full               # all Docker services including pihole, suricata, etc.
+#   ./scripts/run.sh --full-with-wiremock # same as --full plus the WireMock router stub service
+#   ./scripts/run.sh --stop               # stop all Docker infra services and exit
 #
 # Prerequisites: run scripts/install.sh once first.
 
@@ -19,21 +20,34 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/utils.sh
 source "${REPO_ROOT}/scripts/lib/utils.sh"
 
+VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
+if [ -x "$VENV_PYTHON" ]; then
+    PYTHON_BIN="$VENV_PYTHON"
+else
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+
 # ── Parse flags ──────────────────────────────────────────────────────────────
 FULL_STACK=false
 STOP_ONLY=false
 NO_BACKEND=false
+WITH_WIREMOCK=false
 for arg in "$@"; do
     case "$arg" in
-        --full)       FULL_STACK=true  ;;
-        --stop)       STOP_ONLY=true   ;;
-        --no-backend) NO_BACKEND=true  ;;
+        --full)               FULL_STACK=true  ;;
+        --full-with-wiremock|--with-wiremock|--wiremock)
+                              FULL_STACK=true
+                              WITH_WIREMOCK=true
+                              ;;
+        --stop)               STOP_ONLY=true   ;;
+        --no-backend)         NO_BACKEND=true  ;;
         --help|-h)
-            echo "Usage: $0 [--full] [--no-backend] [--stop]"
-            echo "  --full        Start all Docker services (pihole, suricata, opencanary, unbound)"
-            echo "  --no-backend  Start infra + frontend only; launch the Python backend yourself"
-            echo "                (use this when attaching the VS Code debugger)"
-            echo "  --stop        Stop all Docker infra services and exit"
+            echo "Usage: $0 [--full] [--full-with-wiremock] [--no-backend] [--stop]"
+            echo "  --full                 Start all Docker services (pihole, suricata, opencanary, unbound)"
+            echo "  --full-with-wiremock   Start --full plus the WireMock router stub service"
+            echo "  --no-backend           Start infra + frontend only; launch the Python backend yourself"
+            echo "                         (use this when attaching the VS Code debugger)"
+            echo "  --stop                 Stop all Docker infra services and exit"
             exit 0
             ;;
         *) log_error "Unknown argument: $arg"; exit 1 ;;
@@ -76,12 +90,12 @@ for secret in router_password jwt_secret db_pass; do
 done
 log_success "Secrets present"
 
-# .env
+# .env (optional here; backend can still start using secrets and defaults)
 if [ ! -f "${REPO_ROOT}/.env" ]; then
-    log_error ".env file missing — run scripts/install.sh first"
-    exit 1
+    log_warn ".env file missing — continuing with secrets/defaults"
+else
+    log_success ".env present"
 fi
-log_success ".env present"
 
 # Warn if router password is still placeholder
 ROUTER_PASS=$(read_secret "${REPO_ROOT}/secrets/router_password.txt")
@@ -97,11 +111,13 @@ JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
 
-# Source .env for non-secret settings (ROUTER_IP, SNIFF_IFACE, etc.)
-# shellcheck disable=SC1090
-set -o allexport
-source "${REPO_ROOT}/.env"
-set +o allexport
+# Source .env for non-secret settings (ROUTER_IP, SNIFF_IFACE, etc.) when available
+if [ -f "${REPO_ROOT}/.env" ]; then
+    # shellcheck disable=SC1090
+    set -o allexport
+    source "${REPO_ROOT}/.env"
+    set +o allexport
+fi
 
 # Construct DATABASE_URL for the console backend (postgres runs on host network)
 export DATABASE_URL="postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel"
@@ -121,6 +137,9 @@ cd "$REPO_ROOT"
 
 if $FULL_STACK; then
     SERVICES_TO_START=("${CORE_SERVICES[@]}" "${EXTRA_SERVICES[@]}")
+    if $WITH_WIREMOCK; then
+        SERVICES_TO_START+=("wiremock")
+    fi
     log_warn "Full stack mode — pihole needs port 53; disable systemd-resolved if it conflicts"
     log_warn "  sudo systemctl stop systemd-resolved"
 else
@@ -222,7 +241,7 @@ else
     log_info "Logs also at  → ${BACKEND_LOG}"
 
     # Stream with a coloured [BACKEND] prefix so output is identifiable in the console
-    python3 -m flask --app "$FLASK_APP" run \
+    "$PYTHON_BIN" -m flask --app "$FLASK_APP" run \
         --host 127.0.0.1 --port 5000 --debug \
         2>&1 | tee "$BACKEND_LOG" | sed "s/^/${GREEN}[BACKEND]${NC} /" &
     BACKEND_PID=$!
