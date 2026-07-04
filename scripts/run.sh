@@ -8,7 +8,7 @@
 # Usage:
 #   ./scripts/run.sh                      # core infra + backend + frontend
 #   ./scripts/run.sh --no-backend         # infra + frontend only; attach VS Code debugger to backend
-#   ./scripts/run.sh --full               # all Docker services including pihole, suricata, etc.
+#   ./scripts/run.sh --full               # all Docker services including suricata, opencanary, etc.
 #   ./scripts/run.sh --full-with-wiremock # same as --full plus the WireMock router stub service
 #   ./scripts/run.sh --stop               # stop all Docker infra services and exit
 #
@@ -43,7 +43,7 @@ for arg in "$@"; do
         --no-backend)         NO_BACKEND=true  ;;
         --help|-h)
             echo "Usage: $0 [--full] [--full-with-wiremock] [--no-backend] [--stop]"
-            echo "  --full                 Start all Docker services (pihole, suricata, opencanary, unbound)"
+            echo "  --full                 Start all Docker services (suricata, opencanary)"
             echo "  --full-with-wiremock   Start --full plus the WireMock router stub service"
             echo "  --no-backend           Start infra + frontend only; launch the Python backend yourself"
             echo "                         (use this when attaching the VS Code debugger)"
@@ -58,7 +58,7 @@ done
 CORE_SERVICES=(postgres redis clamav)
 
 # Additional services started only with --full
-EXTRA_SERVICES=(pihole unbound suricata opencanary)
+EXTRA_SERVICES=(suricata opencanary)
 
 # ── Stop mode ────────────────────────────────────────────────────────────────
 if $STOP_ONLY; then
@@ -140,8 +140,6 @@ if $FULL_STACK; then
     if $WITH_WIREMOCK; then
         SERVICES_TO_START+=("wiremock")
     fi
-    log_warn "Full stack mode — pihole needs port 53; disable systemd-resolved if it conflicts"
-    log_warn "  sudo systemctl stop systemd-resolved"
 else
     SERVICES_TO_START=("${CORE_SERVICES[@]}")
 fi

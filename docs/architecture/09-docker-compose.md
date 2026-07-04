@@ -62,27 +62,6 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     restart: unless-stopped
 
-  pihole:
-    image: pihole/pihole:latest
-    network_mode: host
-    ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      - "8053:80/tcp"           # Pi-hole admin UI
-    environment:
-      WEBPASSWORD_FILE: /run/secrets/pihole_password
-      DNSMASQ_LISTENING: all
-    secrets:
-      - pihole_password
-    volumes:
-      - pihole-data:/etc/pihole
-    restart: unless-stopped
-
-  unbound:
-    image: mvance/unbound:latest
-    network_mode: host
-    restart: unless-stopped
-
   suricata:
     image: jasonish/suricata:latest
     network_mode: host
@@ -90,7 +69,7 @@ services:
       - NET_ADMIN
       - SYS_NICE
     volumes:
-      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
       - suricata-logs:/var/log/suricata
     restart: unless-stopped
 
@@ -103,10 +82,10 @@ services:
     restart: unless-stopped
 
   opencanary:
-    image: opencanary/opencanary:latest
+    image: thinkst/opencanary:latest
     network_mode: host          # must appear as a real LAN device
     volumes:
-      - ./opencanary/opencanary.conf:/etc/opencanary/opencanary.conf:ro
+      - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
@@ -115,12 +94,10 @@ secrets:
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
-  pihole_password: { file: ./secrets/pihole_password.txt }
 
 volumes:
   pgdata:
   ml-models:
-  pihole-data:
   suricata-logs:
   clamav-db:
   opencanary-logs:
@@ -139,7 +116,6 @@ echo "your_router_admin_password" > secrets/router_password.txt
 openssl rand -base64 64 > secrets/jwt_secret.txt
 echo "your_otx_api_key"           > secrets/otx_api_key.txt
 openssl rand -base64 32            > secrets/db_pass.txt
-echo "your_pihole_webpassword"    > secrets/pihole_password.txt
 chmod 600 secrets/*.txt
 
 # 3. Configure LAN interface (find yours with: ip link show)
@@ -150,9 +126,6 @@ docker compose up -d
 
 # 5. Run database migrations
 docker compose exec sentinel-backend alembic upgrade head
-
-# 6. Set Pi-hole as your LAN DNS server
-# In router admin UI: DHCP -> DNS server -> set to monitoring machine IP
 ```
 
 ## Suricata configuration

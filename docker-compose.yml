@@ -17,7 +17,7 @@ services:
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
-      - SNIFF_IFACE=eth0        # LAN-facing interface on monitoring machine
+      - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
     secrets:
       - router_password
@@ -58,27 +58,6 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     restart: unless-stopped
 
-  pihole:
-    image: pihole/pihole:latest
-    network_mode: host
-    ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      - "8053:80/tcp"           # Pi-hole admin UI
-    environment:
-      WEBPASSWORD_FILE: /run/secrets/pihole_password
-      DNSMASQ_LISTENING: all
-    secrets:
-      - pihole_password
-    volumes:
-      - pihole-data:/etc/pihole
-    restart: unless-stopped
-
-  unbound:
-    image: mvance/unbound:latest
-    network_mode: host
-    restart: unless-stopped
-
   # WireMock: Mock Sagemcom router XMO API (optional, for testing with recorded responses)
   # Enable this only if you want to test against actual XMO API response formats
   # from a real router (recorded traffic). See docs/architecture/10-mock-router.md
@@ -101,8 +80,9 @@ services:
       - NET_ADMIN
       - SYS_NICE
     volumes:
-      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
       - suricata-logs:/var/log/suricata
+    command: ["--af-packet=${SNIFF_IFACE:-eth0}"]
     restart: unless-stopped
 
   clamav:
@@ -114,10 +94,10 @@ services:
     restart: unless-stopped
 
   opencanary:
-    image: opencanary/opencanary:latest
+    image: thinkst/opencanary:latest
     network_mode: host          # must appear as a real LAN device
     volumes:
-      - ./opencanary/opencanary.conf:/etc/opencanary/opencanary.conf:ro
+      - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
@@ -126,12 +106,10 @@ secrets:
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
-  pihole_password: { file: ./secrets/pihole_password.txt }
 
 volumes:
   pgdata:
   ml-models:
-  pihole-data:
   suricata-logs:
   clamav-db:
   opencanary-logs:

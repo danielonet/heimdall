@@ -140,16 +140,23 @@ fi
 # ── 4. Python packages ────────────────────────────────────────────────────────
 log_section "Python Packages"
 
-REQUIREMENTS="${REPO_ROOT}/requirements.txt"
+REQUIREMENTS="${REPO_ROOT}/sentinel/requirements.txt"
 STAMP_FILE="${REPO_ROOT}/.install_stamp"
+VENV_DIR="${REPO_ROOT}/.venv"
+
+# Debian/Ubuntu system Python is externally-managed (PEP 668) — use a venv,
+# which is also where run.sh looks for its interpreter.
+if [ ! -d "$VENV_DIR" ]; then
+    log_info "Creating Python virtual environment..."
+    sudo -u "$REAL_USER" python3 -m venv "$VENV_DIR"
+fi
 
 # Reinstall if requirements.txt is newer than the stamp file
 if [ -f "$STAMP_FILE" ] && [ "$REQUIREMENTS" -ot "$STAMP_FILE" ]; then
     log_skip "Python packages (requirements.txt unchanged since last install)"
 else
     log_info "Installing Python packages from requirements.txt..."
-    # Run as the real user so packages land in the right place
-    sudo -u "$REAL_USER" pip3 install --user -r "$REQUIREMENTS" -q
+    sudo -u "$REAL_USER" "${VENV_DIR}/bin/pip" install -q -r "$REQUIREMENTS"
     touch "$STAMP_FILE"
     log_success "Python packages installed"
 fi
@@ -213,14 +220,6 @@ if [ ! -f "${SECRETS_DIR}/otx_api_key.txt" ]; then
     log_warn "secrets/otx_api_key.txt contains placeholder — set your AlienVault OTX API key"
 else
     log_skip "secrets/otx_api_key.txt"
-fi
-
-if [ ! -f "${SECRETS_DIR}/pihole_password.txt" ]; then
-    gen_secret > "${SECRETS_DIR}/pihole_password.txt"
-    chmod 600 "${SECRETS_DIR}/pihole_password.txt"
-    log_success "Generated secrets/pihole_password.txt"
-else
-    log_skip "secrets/pihole_password.txt"
 fi
 
 chown -R "$REAL_USER:$REAL_USER" "$SECRETS_DIR"

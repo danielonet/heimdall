@@ -38,9 +38,11 @@ outputs:
       filename: /var/log/suricata/fast.log
       append: yes
 
-# Packet capture — uses AF_PACKET for zero-copy capture on the LAN interface
+# Packet capture — uses AF_PACKET for zero-copy capture on the LAN interface.
+# interface: default applies these settings to whatever device is passed via
+# --af-packet=<dev> on the command line (see SNIFF_IFACE in docker-compose.yml).
 af-packet:
-  - interface: eth0
+  - interface: default
     cluster-id: 99
     cluster-type: cluster_flow
     defrag: yes
