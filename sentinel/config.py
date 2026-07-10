@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = '.env'
         env_file_encoding = 'utf-8'
+        extra = 'ignore'  # .env carries Docker/shell-only vars (e.g. DB_PASS,
+                          # ROUTER_PASSWORD_FILE) that aren't Settings fields
 
     def model_post_init(self, __context: object) -> None:
         """Load secrets from Docker secret files when the plain value is empty."""
@@ -77,3 +79,6 @@ class Settings(BaseSettings):
             path = os.environ.get('OTX_API_KEY_FILE', '')
             if path:
                 object.__setattr__(self, 'OTX_API_KEY', _read_secret_file(path))
+
+
+settings = Settings()

@@ -53,7 +53,9 @@ heimdall/
 
 2. **All backend I/O is async.**
    Use `async def` and `await` throughout. The XMO client uses `httpx.AsyncClient`.
-   SQLAlchemy uses the async engine. Redis uses `aioredis`.
+   SQLAlchemy uses the async engine. Redis uses `redis.asyncio` (the `aioredis`
+   package is archived upstream and cannot even be imported on Python 3.11+;
+   its functionality was folded into `redis-py`'s `redis.asyncio` module).
 
 3. **Detectors must subclass `BaseDetector`.**
    Never add detection logic to the adapter, API routes, or scheduler.

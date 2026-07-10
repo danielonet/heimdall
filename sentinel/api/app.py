@@ -4,6 +4,7 @@ from flask import Flask
 from flask_jwt_extended import JWTManager
 from flask_socketio import SocketIO
 
+from sentinel.config import settings
 from sentinel.db.session import init_db
 
 from sentinel.api.routes import alerts, auth, devices, ports, rules, threats
@@ -22,7 +23,7 @@ def create_app(config: dict | None = None) -> Flask:
         config: Optional dict of config overrides (useful for testing).
     """
     app = Flask(__name__)
-    app.config.from_object('sentinel.config.Settings')
+    app.config.from_object(settings)
     if config:
         app.config.update(config)
 

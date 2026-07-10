@@ -25,12 +25,12 @@ tenacity>=8.2               # retry with exponential back-off
 # ── Database ──────────────────────────────────────────────────────────────
 sqlalchemy>=2.0
 asyncpg>=0.29               # async PostgreSQL driver
-alembic>=1.13               # migrations
-psycopg2-binary>=2.9        # sync driver for Alembic
+alembic>=1.13               # migrations; env.py runs migrations through the
+                             # same async engine/driver, no sync driver needed
 
 # ── Cache / message bus ───────────────────────────────────────────────────
-redis>=5.0
-aioredis>=2.0
+redis>=5.0                  # redis.asyncio covers async pub/sub; aioredis is
+                             # archived upstream and unusable on Python 3.11+
 
 # ── Machine learning ──────────────────────────────────────────────────────
 scikit-learn>=1.4           # IsolationForest
