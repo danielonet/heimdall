@@ -1,19 +1,17 @@
 import logging
+import os
 
 from flask import Flask
 from flask_jwt_extended import JWTManager
-from flask_socketio import SocketIO
 
+from sentinel.api.extensions import socketio
 from sentinel.config import settings
 from sentinel.db.session import init_db
+from sentinel.scheduler.scheduler import init_scheduler
 
 from sentinel.api.routes import alerts, auth, devices, ports, rules, threats
 
 logger = logging.getLogger(__name__)
-
-# Module-level SocketIO instance so websocket.py can import it without a
-# circular import. init_app() is called inside create_app().
-socketio = SocketIO(cors_allowed_origins='*', async_mode='threading')
 
 
 def create_app(config: dict | None = None) -> Flask:
@@ -32,6 +30,13 @@ def create_app(config: dict | None = None) -> Flask:
     JWTManager(app)
     socketio.init_app(app)
     init_db(app)
+
+    # Under the Werkzeug reloader (--debug), the parent "monitor" process
+    # doesn't set WERKZEUG_RUN_MAIN — only the actual reloaded worker does.
+    # Without this guard the scheduler would start twice.
+    reloader_worker = not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    if app.config.get('SCHEDULER_ENABLED', True) and reloader_worker:
+        init_scheduler(app)
 
     app.register_blueprint(auth.bp,    url_prefix='/api')
     app.register_blueprint(devices.bp, url_prefix='/api/devices')

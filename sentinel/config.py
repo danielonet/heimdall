@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     ROUTER_PASSWORD: str = ''      # populated from ROUTER_PASSWORD_FILE if blank
     POLL_INTERVAL_SECONDS: int = 15
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router
+    SCHEDULER_ENABLED: bool = True  # set False in tests to avoid starting the poll loop
 
     # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str = 'postgresql+asyncpg://sentinel:pass@postgres/sentinel'

@@ -1,5 +1,5 @@
 """WebSocket emit helpers for the /sentinel namespace."""
-from sentinel.api.app import socketio
+from sentinel.api.extensions import socketio
 
 
 def emit_alert(alert: dict) -> None:
