@@ -4,6 +4,7 @@ from __future__ import annotations
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample
 from sentinel.db.models import Alert
 from sentinel.detection.detectors.base import BaseDetector
+from sentinel.ml.anomaly_engine import AnomalyEngine
 
 
 class DetectionPipeline:
@@ -31,13 +32,18 @@ class DetectionPipeline:
         return alerts
 
 
-def create_default_pipeline() -> DetectionPipeline:
+def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
     """Build the pipeline with the detectors that are ready to run today.
 
-    ML-dependent (AnomalousVolumeDetector) and port/WAN-level detectors are
-    intentionally left out for now — see docs/architecture/04-detection-pipeline.md.
+    anomaly_engine must be the same instance the scheduler uses to score
+    traffic_samples.anomaly_score — AnomalousVolumeDetector reads its buffered
+    state/trained models, so a separate engine would never fire.
+
+    Port/WAN-level detectors are intentionally left out for now — see
+    docs/architecture/04-detection-pipeline.md.
     """
     from sentinel.db.repositories import DeviceRepository
+    from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
     from sentinel.detection.detectors.high_upload import HighUploadDetector
     from sentinel.detection.detectors.new_device import NewDeviceDetector
     from sentinel.detection.detectors.signal_anomaly import SignalAnomalyDetector
@@ -48,4 +54,5 @@ def create_default_pipeline() -> DetectionPipeline:
         HighUploadDetector(),
         VendorMismatchDetector(),
         SignalAnomalyDetector(),
+        AnomalousVolumeDetector(anomaly_engine),
     ])

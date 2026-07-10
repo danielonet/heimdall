@@ -17,6 +17,8 @@ from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.pipeline import create_default_pipeline
+from sentinel.ml.anomaly_engine import AnomalyEngine
+from sentinel.ml.model_store import ModelStore
 from sentinel.scheduler.jobs import poll_cycle
 
 pytestmark = pytest.mark.asyncio
@@ -64,10 +66,16 @@ async def redis_client():
 
 
 @pytest.fixture
-def pipeline():
-    """A fresh pipeline per test — HighUploadDetector/SignalAnomalyDetector hold
-    in-memory state across calls, so tests must not share one."""
-    return create_default_pipeline()
+def anomaly_engine(tmp_path):
+    """A fresh engine per test, backed by a throwaway model dir."""
+    return AnomalyEngine(ModelStore(str(tmp_path)), min_samples=100, contamination=0.05)
+
+
+@pytest.fixture
+def pipeline(anomaly_engine):
+    """A fresh pipeline per test — HighUploadDetector/SignalAnomalyDetector/
+    AnomalyEngine hold in-memory state across calls, so tests must not share one."""
+    return create_default_pipeline(anomaly_engine)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -83,9 +91,9 @@ async def _cleanup_mock_rows():
 
 
 class TestPollCycle:
-    async def test_persists_devices(self, redis_client, pipeline):
+    async def test_persists_devices(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
@@ -93,18 +101,18 @@ class TestPollCycle:
             assert device.hostname == 'daniel-laptop'
             assert device.traffic_granularity == 'per_device'  # WiFi
 
-    async def test_wired_device_marked_per_port(self, redis_client, pipeline):
+    async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
 
         async with get_session() as session:
             device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
             assert device is not None
             assert device.traffic_granularity == 'per_port'
 
-    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline):
+    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -118,10 +126,33 @@ class TestPollCycle:
             assert port.status == 'UP'
             assert port.link_speed_mbps == 1000
 
-    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline):
+    async def test_per_device_sample_gets_bootstrap_anomaly_score(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)
-        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrafficSample).where(TrafficSample.mac_address == 'a8:5e:60:f1:2c:3d')
+            )
+            sample = result.scalars().first()
+            assert sample.anomaly_score == 0.0  # bootstrap: no trained model yet
+
+    async def test_per_port_sample_has_no_anomaly_score(self, redis_client, pipeline, anomaly_engine):
+        adapter = MockSagemcomAdapter()
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrafficSample).where(TrafficSample.mac_address == 'PHY1')
+            )
+            sample = result.scalars().first()
+            assert sample is not None
+            assert sample.anomaly_score is None
+
+    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline, anomaly_engine):
+        adapter = MockSagemcomAdapter()
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -131,9 +162,9 @@ class TestPollCycle:
 
 
 class TestDetectionIntegration:
-    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline):
+    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -145,10 +176,10 @@ class TestDetectionIntegration:
             assert {a.device_mac for a in alerts} == set(_MOCK_MACS)
             assert all(a.severity == 'CRITICAL' for a in alerts)
 
-    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline):
+    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline, anomaly_engine):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline)  # devices become known here
-        await poll_cycle(adapter, redis_client, pipeline)  # should raise nothing new
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)  # devices become known here
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)  # should raise nothing new
 
         async with get_session() as session:
             result = await session.execute(

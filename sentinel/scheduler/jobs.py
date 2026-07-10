@@ -31,18 +31,28 @@ from sentinel.api.websocket import (
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
+from sentinel.ml.anomaly_engine import AnomalyEngine
 
 logger = logging.getLogger(__name__)
 
 REDIS_EVENTS_CHANNEL = 'sentinel:events'
 
 
-async def poll_cycle(adapter: RouterAdapter, redis_client: Redis, pipeline: DetectionPipeline) -> None:
-    """Run one full poll cycle: fetch, detect, persist, publish, broadcast.
+async def poll_cycle(
+    adapter: RouterAdapter,
+    redis_client: Redis,
+    pipeline: DetectionPipeline,
+    anomaly_engine: AnomalyEngine,
+) -> None:
+    """Run one full poll cycle: fetch, detect, score, persist, publish, broadcast.
 
     Detection runs against the devices/traffic just fetched, before they're
     persisted — detectors like NewDeviceDetector read the *pre-poll* database
     state (via their own repositories) to decide what changed this cycle.
+    AnomalousVolumeDetector (inside the pipeline) reads whatever model state
+    anomaly_engine already has; scoring (which can trigger bootstrap training)
+    happens right after, so this poll's own samples never train against
+    themselves before being evaluated by the pipeline.
     """
     devices = await adapter.get_connected_devices()
     traffic_samples = await adapter.get_traffic_samples()
@@ -50,10 +60,11 @@ async def poll_cycle(adapter: RouterAdapter, redis_client: Redis, pipeline: Dete
     router_info = await adapter.get_router_info()
 
     alerts = await _run_detection(pipeline, devices, traffic_samples)
+    scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
 
     async with get_session() as session:
         newly_seen_macs = await _upsert_devices(session, devices)
-        await _insert_traffic_samples(session, traffic_samples)
+        await _insert_traffic_samples(session, traffic_samples, scores_by_mac)
         await _insert_port_stats(session, port_stats)
         wan_changed = await _record_wan_status(session, router_info)
         for alert in alerts:
@@ -99,6 +110,19 @@ async def _run_detection(
     return alerts
 
 
+def _score_traffic_samples(
+    engine: AnomalyEngine, samples: list[TrafficSampleSnapshot]
+) -> dict[str, float]:
+    """Score every PER_DEVICE sample. PER_PORT samples are skipped — port-level
+    counters are too noisy for the anomaly models (see docs/architecture/05)."""
+    scores: dict[str, float] = {}
+    for sample in samples:
+        if sample.granularity != TrafficGranularity.PER_DEVICE:
+            continue
+        scores[sample.mac_address] = engine.score(sample)
+    return scores
+
+
 async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) -> set[str]:
     """Insert new devices / refresh known ones. Returns the set of newly-seen MACs."""
     now = datetime.now(timezone.utc)
@@ -131,8 +155,16 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
     return newly_seen
 
 
-async def _insert_traffic_samples(session: AsyncSession, samples: list[TrafficSampleSnapshot]) -> None:
-    """Insert one traffic_samples row per sample. anomaly_score stays NULL until the ML engine exists."""
+async def _insert_traffic_samples(
+    session: AsyncSession,
+    samples: list[TrafficSampleSnapshot],
+    scores_by_mac: dict[str, float],
+) -> None:
+    """Insert one traffic_samples row per sample.
+
+    anomaly_score is 0.0 during ML bootstrap (no model yet) and NULL for
+    PER_PORT samples, which the ML engine never scores — see _score_traffic_samples.
+    """
     for sample in samples:
         session.add(TrafficSample(
             time=sample.timestamp,
@@ -141,6 +173,7 @@ async def _insert_traffic_samples(session: AsyncSession, samples: list[TrafficSa
             bytes_recv_delta=sample.bytes_recv_delta,
             throughput_up_kbps=sample.throughput_up_kbps,
             throughput_dn_kbps=sample.throughput_dn_kbps,
+            anomaly_score=scores_by_mac.get(sample.mac_address),
             granularity=sample.granularity.value,
             poll_interval_s=sample.poll_interval_s,
         ))

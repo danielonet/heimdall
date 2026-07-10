@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     ML_MIN_SAMPLES_TO_TRAIN: int = 100
     ML_CONTAMINATION: float = 0.05
     ML_RETRAIN_CRON: str = '0 3 * * *'       # 03:00 daily
+    ML_MODEL_DIR: str = '/data/models'       # matches the ml-models Docker volume;
+                                              # override in .env for host/console dev
 
     # ── Security services ─────────────────────────────────────────────────────
     OTX_API_KEY: str = ''          # populated from OTX_API_KEY_FILE if blank
