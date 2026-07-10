@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from flask import Flask
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,13 @@ def init_db(app: Flask) -> None:
     global _engine, _session_factory
 
     database_url = app.config['DATABASE_URL']
-    _engine = create_async_engine(database_url, pool_pre_ping=True)
+    # NullPool: no connections are cached between checkouts. asyncpg connections
+    # are bound to the event loop they were created on, and Flask's async view
+    # support (via asgiref) may run different requests on different loops/threads
+    # — a pooled connection handed to the wrong loop crashes. The scheduler's
+    # own DB usage doesn't hit this (it stays on one dedicated loop for the
+    # process lifetime), but anything reached through Flask routes can.
+    _engine = create_async_engine(database_url, poolclass=NullPool)
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
     logger.info('Database engine initialised: %s', _engine.url.render_as_string(hide_password=True))

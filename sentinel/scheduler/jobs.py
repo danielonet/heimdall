@@ -21,6 +21,7 @@ from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import DeviceSnapshot, PortStats as PortStatsSnapshot
 from sentinel.adapter.models import RouterInfo, TrafficGranularity
 from sentinel.adapter.models import TrafficSample as TrafficSampleSnapshot
+from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import (
     emit_alert,
     emit_device_joined,
@@ -73,7 +74,7 @@ async def poll_cycle(
     await _publish_events(redis_client, devices, traffic_samples, port_stats, router_info)
     _broadcast_updates(devices, newly_seen_macs, port_stats)
     for alert in alerts:
-        emit_alert(_alert_to_dict(alert))
+        emit_alert(alert_to_dict(alert))
     if wan_changed:
         emit_wan_status(router_info.wan_status)
 
@@ -251,19 +252,6 @@ def _broadcast_updates(
         emit_port_update(_to_json_safe(port))
 
 
-def _alert_to_dict(alert: Alert) -> dict[str, Any]:
-    """Convert a persisted Alert ORM row into a JSON-safe dict for the Socket.IO emit."""
-    return {
-        'id': alert.id,
-        'device_mac': alert.device_mac,
-        'alert_type': alert.alert_type,
-        'severity': alert.severity,
-        'description': alert.description,
-        'raw_data': alert.raw_data,
-        'acknowledged': alert.acknowledged,
-        'resolved': alert.resolved,
-        'created_at': alert.created_at.isoformat() if alert.created_at else None,
-    }
 
 
 def _to_json_safe(dc: Any) -> dict[str, Any]:

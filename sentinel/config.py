@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRES: int = 900       # 15 minutes
     JWT_REFRESH_TOKEN_EXPIRES: int = 604800   # 7 days
 
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    ADMIN_USERNAME: str = 'admin'
+    ADMIN_PASSWORD: str = ''       # populated from ADMIN_PASSWORD_FILE if blank
+
     # ── ML ────────────────────────────────────────────────────────────────────
     ML_MIN_SAMPLES_TO_TRAIN: int = 100
     ML_CONTAMINATION: float = 0.05
@@ -82,6 +86,11 @@ class Settings(BaseSettings):
             path = os.environ.get('OTX_API_KEY_FILE', '')
             if path:
                 object.__setattr__(self, 'OTX_API_KEY', _read_secret_file(path))
+
+        if not self.ADMIN_PASSWORD:
+            path = os.environ.get('ADMIN_PASSWORD_FILE', '')
+            if path:
+                object.__setattr__(self, 'ADMIN_PASSWORD', _read_secret_file(path))
 
 
 settings = Settings()

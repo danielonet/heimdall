@@ -2,14 +2,13 @@ import logging
 import os
 
 from flask import Flask
-from flask_jwt_extended import JWTManager
 
-from sentinel.api.extensions import socketio
+from sentinel.api.extensions import jwt_manager, socketio
 from sentinel.config import settings
 from sentinel.db.session import init_db
 from sentinel.scheduler.scheduler import init_scheduler
 
-from sentinel.api.routes import alerts, auth, devices, ports, rules, threats
+from sentinel.api.routes import alerts, auth, devices, ports, rules, system, threats
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +21,14 @@ def create_app(config: dict | None = None) -> Flask:
     """
     app = Flask(__name__)
     app.config.from_object(settings)
+    app.config['JWT_BLOCKLIST_ENABLED'] = True
+    app.config['JWT_BLOCKLIST_TOKEN_CHECKS'] = ['access', 'refresh']
     if config:
         app.config.update(config)
 
     _configure_logging(app)
 
-    JWTManager(app)
+    jwt_manager.init_app(app)
     socketio.init_app(app)
     init_db(app)
 
@@ -44,6 +45,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(rules.bp,   url_prefix='/api/rules')
     app.register_blueprint(ports.bp,   url_prefix='/api/ports')
     app.register_blueprint(threats.bp, url_prefix='/api/threats')
+    app.register_blueprint(system.bp,  url_prefix='/api')
 
     logger.info('Heimdall sentinel API ready')
     return app

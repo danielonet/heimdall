@@ -82,7 +82,7 @@ fi
 log_success "Docker daemon is running"
 
 # Secrets
-for secret in router_password jwt_secret db_pass; do
+for secret in router_password jwt_secret db_pass admin_password; do
     if [ ! -f "${REPO_ROOT}/secrets/${secret}.txt" ]; then
         log_error "Missing secret: secrets/${secret}.txt — run scripts/install.sh first"
         exit 1
@@ -110,6 +110,7 @@ DB_PASS=$(read_secret "${REPO_ROOT}/secrets/db_pass.txt")
 JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
+ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
 
 # Source .env for non-secret settings (ROUTER_IP, SNIFF_IFACE, etc.) when available
 if [ -f "${REPO_ROOT}/.env" ]; then
@@ -125,6 +126,7 @@ export REDIS_URL="redis://localhost:6379"
 export ROUTER_PASSWORD_FILE
 export JWT_SECRET_FILE
 export OTX_API_KEY_FILE
+export ADMIN_PASSWORD_FILE
 # DB_PASS exported so docker compose can interpolate ${DB_PASS} in compose file
 export DB_PASS
 
@@ -230,7 +232,8 @@ if $NO_BACKEND; then
     echo "      \"REDIS_URL\": \"${REDIS_URL}\","
     echo "      \"ROUTER_PASSWORD_FILE\": \"${ROUTER_PASSWORD_FILE}\","
     echo "      \"JWT_SECRET_FILE\": \"${JWT_SECRET_FILE}\","
-    echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\""
+    echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\","
+    echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\""
     echo '    }'
     echo '  }'
     echo ""

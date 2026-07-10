@@ -54,7 +54,7 @@ done
 # ── Pre-flight checks ─────────────────────────────────────────────────────────
 log_section "Pre-flight Checks"
 
-for secret in router_password jwt_secret db_pass; do
+for secret in router_password jwt_secret db_pass admin_password; do
     if [ ! -f "${REPO_ROOT}/secrets/${secret}.txt" ]; then
         log_error "Missing secret: secrets/${secret}.txt — run scripts/install.sh first"
         exit 1
@@ -75,6 +75,7 @@ DB_PASS=$(read_secret "${REPO_ROOT}/secrets/db_pass.txt")
 JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
+ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
 
 if [ -f "${REPO_ROOT}/.env" ]; then
     # shellcheck disable=SC1090
@@ -88,6 +89,7 @@ export REDIS_URL="redis://localhost:6379"
 export ROUTER_PASSWORD_FILE
 export JWT_SECRET_FILE
 export OTX_API_KEY_FILE
+export ADMIN_PASSWORD_FILE
 
 log_success "Config loaded"
 
@@ -164,7 +166,8 @@ if $NO_BACKEND; then
     echo "      \"REDIS_URL\": \"${REDIS_URL}\","
     echo "      \"ROUTER_PASSWORD_FILE\": \"${ROUTER_PASSWORD_FILE}\","
     echo "      \"JWT_SECRET_FILE\": \"${JWT_SECRET_FILE}\","
-    echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\""
+    echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\","
+    echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\""
     echo '    }'
     echo '  }'
     echo ""

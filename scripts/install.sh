@@ -215,6 +215,15 @@ else
     log_skip "secrets/db_pass.txt"
 fi
 
+if [ ! -f "${SECRETS_DIR}/admin_password.txt" ]; then
+    gen_secret > "${SECRETS_DIR}/admin_password.txt"
+    chmod 600 "${SECRETS_DIR}/admin_password.txt"
+    log_success "Generated secrets/admin_password.txt"
+    log_warn "Dashboard login is username 'admin' — password is in secrets/admin_password.txt"
+else
+    log_skip "secrets/admin_password.txt"
+fi
+
 if [ ! -f "${SECRETS_DIR}/otx_api_key.txt" ]; then
     ensure_secret "${SECRETS_DIR}/otx_api_key.txt" "CHANGE_ME_otx_api_key"
     log_warn "secrets/otx_api_key.txt contains placeholder — set your AlienVault OTX API key"

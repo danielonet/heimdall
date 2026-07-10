@@ -17,6 +17,7 @@ services:
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
+      - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
     secrets:
@@ -24,6 +25,7 @@ services:
       - jwt_secret
       - otx_api_key
       - db_pass
+      - admin_password
     depends_on:
       - postgres
       - redis
@@ -106,6 +108,7 @@ secrets:
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
+  admin_password:  { file: ./secrets/admin_password.txt }
 
 volumes:
   pgdata:
