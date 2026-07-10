@@ -1,58 +1,52 @@
-#!/bin/bash
-# Quick start script for mock router offline development
+#!/usr/bin/env bash
+# mock-router-start.sh — Quick start for offline dev using the synthetic mock
+# router adapter (USE_MOCK_ROUTER=true) — no real router or WireMock needed.
+#
+# This flips USE_MOCK_ROUTER on in .env, brings up Postgres/Redis in Docker,
+# and hands off to dev.sh for the actual backend/frontend processes. See
+# dev.sh for what "app tier only" means and its prerequisites.
 
 set -euo pipefail
 
-echo "🛡️  Heimdall Mock Router Setup"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/utils.sh
+source "${REPO_ROOT}/scripts/lib/utils.sh"
 
-# Check if we're in the right directory
-if [ ! -f "docker-compose.yml" ]; then
-  echo "❌ Error: docker-compose.yml not found"
-  echo "Run this script from the heimdall/ directory"
-  exit 1
+cd "$REPO_ROOT"
+
+log_section "Heimdall Mock Router Quick Start"
+
+if [ ! -f secrets/db_pass.txt ] || [ ! -f secrets/router_password.txt ] || [ ! -f secrets/jwt_secret.txt ]; then
+    log_error "Secrets missing — run scripts/install.sh first"
+    exit 1
 fi
 
-# Create secrets directory if needed
-mkdir -p secrets
-
-# Generate placeholder secrets if missing
-if [ ! -f "secrets/router_password.txt" ]; then
-  echo "📝 Creating placeholder secrets..."
-  echo "mock-password" > secrets/router_password.txt
-  echo "mock-jwt-secret-" > secrets/jwt_secret.txt
-  echo "mock-db-password" > secrets/db_pass.txt
+if [ ! -f .env ]; then
+    log_info "Creating .env from .env.example..."
+    cp .env.example .env
 fi
 
-# Check if .env exists
-if [ ! -f ".env" ]; then
-  echo "📝 Creating .env from .env.example..."
-  cp .env.example .env
-  echo "ℹ️  Edit .env if needed (USE_MOCK_ROUTER should be true)"
+if grep -q '^USE_MOCK_ROUTER=' .env; then
+    sed -i 's/^USE_MOCK_ROUTER=.*/USE_MOCK_ROUTER=true/' .env
+else
+    echo 'USE_MOCK_ROUTER=true' >> .env
+fi
+log_success "USE_MOCK_ROUTER=true in .env"
+
+if ! docker_running; then
+    log_error "Docker daemon is not running. Start it with: sudo systemctl start docker"
+    exit 1
 fi
 
+export DB_PASS
+DB_PASS=$(read_secret "${REPO_ROOT}/secrets/db_pass.txt")
+log_info "Starting Postgres + Redis..."
+docker_compose up -d postgres redis
+
 echo ""
-echo "✅ Setup complete!"
-echo ""
-echo "Starting Heimdall in mock mode..."
-echo ""
-echo "📊 Dashboard:    http://localhost:3000"
+echo "📊 Dashboard:    http://localhost:5173"
 echo "🔌 API:          http://localhost:5000"
 echo "📚 Docs:         docs/architecture/10-mock-router.md"
 echo ""
 
-# Enable mock mode
-export USE_MOCK_ROUTER=true
-
-# Start the stack
-docker-compose up -d
-
-echo ""
-echo "⏳ Waiting for services to start..."
-sleep 5
-
-# Show logs
-echo ""
-echo "📋 Backend logs:"
-docker-compose logs -f sentinel-backend --tail=20
+exec "${REPO_ROOT}/scripts/dev.sh"

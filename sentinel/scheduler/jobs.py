@@ -1,8 +1,8 @@
-"""The core poll-cycle job: pull from the router adapter, persist, publish, broadcast.
+"""The core poll-cycle job: pull from the router adapter, detect, persist, publish, broadcast.
 
 Fires on POLL_INTERVAL_SECONDS per docs/architecture/01-system-overview.md's data
-flow: adapter poll -> normalise -> Redis sentinel:events -> (future) detection
-pipeline, plus direct persistence to PostgreSQL and a live WebSocket broadcast.
+flow: adapter poll -> normalise -> detection pipeline -> Redis sentinel:events,
+PostgreSQL, and a live WebSocket broadcast.
 """
 from __future__ import annotations
 
@@ -19,43 +19,84 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import DeviceSnapshot, PortStats as PortStatsSnapshot
-from sentinel.adapter.models import RouterInfo, TrafficSample as TrafficSampleSnapshot
+from sentinel.adapter.models import RouterInfo, TrafficGranularity
+from sentinel.adapter.models import TrafficSample as TrafficSampleSnapshot
 from sentinel.api.websocket import (
+    emit_alert,
     emit_device_joined,
     emit_device_update,
     emit_port_update,
     emit_wan_status,
 )
-from sentinel.db.models import Device, PortStats, TrafficSample, WanStatusHistory
+from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
 from sentinel.db.session import get_session
+from sentinel.detection.pipeline import DetectionPipeline
 
 logger = logging.getLogger(__name__)
 
 REDIS_EVENTS_CHANNEL = 'sentinel:events'
 
 
-async def poll_cycle(adapter: RouterAdapter, redis_client: Redis) -> None:
-    """Run one full poll cycle: fetch from the adapter, persist, publish, broadcast."""
+async def poll_cycle(adapter: RouterAdapter, redis_client: Redis, pipeline: DetectionPipeline) -> None:
+    """Run one full poll cycle: fetch, detect, persist, publish, broadcast.
+
+    Detection runs against the devices/traffic just fetched, before they're
+    persisted — detectors like NewDeviceDetector read the *pre-poll* database
+    state (via their own repositories) to decide what changed this cycle.
+    """
     devices = await adapter.get_connected_devices()
     traffic_samples = await adapter.get_traffic_samples()
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
+
+    alerts = await _run_detection(pipeline, devices, traffic_samples)
 
     async with get_session() as session:
         newly_seen_macs = await _upsert_devices(session, devices)
         await _insert_traffic_samples(session, traffic_samples)
         await _insert_port_stats(session, port_stats)
         wan_changed = await _record_wan_status(session, router_info)
+        for alert in alerts:
+            session.add(alert)
 
     await _publish_events(redis_client, devices, traffic_samples, port_stats, router_info)
     _broadcast_updates(devices, newly_seen_macs, port_stats)
+    for alert in alerts:
+        emit_alert(_alert_to_dict(alert))
     if wan_changed:
         emit_wan_status(router_info.wan_status)
 
     logger.info(
-        'Poll cycle complete: %d devices, %d traffic samples, %d port stats',
-        len(devices), len(traffic_samples), len(port_stats),
+        'Poll cycle complete: %d devices, %d traffic samples, %d port stats, %d alerts',
+        len(devices), len(traffic_samples), len(port_stats), len(alerts),
     )
+
+
+async def _run_detection(
+    pipeline: DetectionPipeline,
+    devices: list[DeviceSnapshot],
+    traffic_samples: list[TrafficSampleSnapshot],
+) -> list[Alert]:
+    """Run every device through inspect_device(), and every matched PER_DEVICE
+    traffic sample through inspect_traffic(). Wired PER_PORT samples carry a
+    port alias as mac_address, not a device MAC, so they have no matching
+    DeviceSnapshot and are skipped — see BaseDetector.inspect_traffic.
+    """
+    alerts: list[Alert] = []
+    snapshots_by_mac = {d.mac_address: d for d in devices}
+
+    for snapshot in devices:
+        alerts.extend(await pipeline.process_device(snapshot))
+
+    for sample in traffic_samples:
+        if sample.granularity != TrafficGranularity.PER_DEVICE:
+            continue
+        snapshot = snapshots_by_mac.get(sample.mac_address)
+        if snapshot is None:
+            continue
+        alerts.extend(await pipeline.process_traffic(sample, snapshot))
+
+    return alerts
 
 
 async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) -> set[str]:
@@ -175,6 +216,21 @@ def _broadcast_updates(
 
     for port in port_stats:
         emit_port_update(_to_json_safe(port))
+
+
+def _alert_to_dict(alert: Alert) -> dict[str, Any]:
+    """Convert a persisted Alert ORM row into a JSON-safe dict for the Socket.IO emit."""
+    return {
+        'id': alert.id,
+        'device_mac': alert.device_mac,
+        'alert_type': alert.alert_type,
+        'severity': alert.severity,
+        'description': alert.description,
+        'raw_data': alert.raw_data,
+        'acknowledged': alert.acknowledged,
+        'resolved': alert.resolved,
+        'created_at': alert.created_at.isoformat() if alert.created_at else None,
+    }
 
 
 def _to_json_safe(dc: Any) -> dict[str, Any]:

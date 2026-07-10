@@ -14,8 +14,9 @@ from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Device, PortStats, TrafficSample
+from sentinel.db.models import Alert, Device, PortStats, TrafficSample
 from sentinel.db.session import get_engine, get_session, init_db
+from sentinel.detection.pipeline import create_default_pipeline
 from sentinel.scheduler.jobs import poll_cycle
 
 pytestmark = pytest.mark.asyncio
@@ -62,6 +63,13 @@ async def redis_client():
     await client.aclose()
 
 
+@pytest.fixture
+def pipeline():
+    """A fresh pipeline per test — HighUploadDetector/SignalAnomalyDetector hold
+    in-memory state across calls, so tests must not share one."""
+    return create_default_pipeline()
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _cleanup_mock_rows():
     yield
@@ -70,13 +78,14 @@ async def _cleanup_mock_rows():
             delete(TrafficSample).where(TrafficSample.mac_address.in_(_MOCK_MACS + _MOCK_PORTS))
         )
         await session.execute(delete(PortStats).where(PortStats.port_alias.in_(_MOCK_PORTS)))
+        await session.execute(delete(Alert).where(Alert.device_mac.in_(_MOCK_MACS)))
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
 
 
 class TestPollCycle:
-    async def test_persists_devices(self, redis_client):
+    async def test_persists_devices(self, redis_client, pipeline):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client)
+        await poll_cycle(adapter, redis_client, pipeline)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
@@ -84,18 +93,18 @@ class TestPollCycle:
             assert device.hostname == 'daniel-laptop'
             assert device.traffic_granularity == 'per_device'  # WiFi
 
-    async def test_wired_device_marked_per_port(self, redis_client):
+    async def test_wired_device_marked_per_port(self, redis_client, pipeline):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client)
+        await poll_cycle(adapter, redis_client, pipeline)
 
         async with get_session() as session:
             device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
             assert device is not None
             assert device.traffic_granularity == 'per_port'
 
-    async def test_persists_traffic_samples_and_port_stats(self, redis_client):
+    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client)
+        await poll_cycle(adapter, redis_client, pipeline)
 
         async with get_session() as session:
             result = await session.execute(
@@ -109,13 +118,43 @@ class TestPollCycle:
             assert port.status == 'UP'
             assert port.link_speed_mbps == 1000
 
-    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client):
+    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline):
         adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client)
-        await poll_cycle(adapter, redis_client)
+        await poll_cycle(adapter, redis_client, pipeline)
+        await poll_cycle(adapter, redis_client, pipeline)
 
         async with get_session() as session:
             result = await session.execute(
                 select(Device).where(Device.mac_address == 'a8:5e:60:f1:2c:3d')
             )
             assert len(result.scalars().all()) == 1
+
+
+class TestDetectionIntegration:
+    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline):
+        adapter = MockSagemcomAdapter()
+        await poll_cycle(adapter, redis_client, pipeline)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(
+                    Alert.device_mac.in_(_MOCK_MACS), Alert.alert_type == 'NEW_DEVICE'
+                )
+            )
+            alerts = result.scalars().all()
+            assert {a.device_mac for a in alerts} == set(_MOCK_MACS)
+            assert all(a.severity == 'CRITICAL' for a in alerts)
+
+    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline):
+        adapter = MockSagemcomAdapter()
+        await poll_cycle(adapter, redis_client, pipeline)  # devices become known here
+        await poll_cycle(adapter, redis_client, pipeline)  # should raise nothing new
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(
+                    Alert.device_mac.in_(_MOCK_MACS), Alert.alert_type == 'NEW_DEVICE'
+                )
+            )
+            alerts = result.scalars().all()
+            assert len(alerts) == len(_MOCK_MACS)  # exactly one per device, not two

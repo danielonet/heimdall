@@ -16,6 +16,7 @@ from redis.asyncio import Redis, from_url
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.factory import create_router_adapter
+from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.scheduler.jobs import poll_cycle
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ class SentinelScheduler:
         self._scheduler: AsyncIOScheduler | None = None
         self._adapter: RouterAdapter | None = None
         self._redis_client: Redis | None = None
+        # Built once and reused across polls: HighUploadDetector and
+        # SignalAnomalyDetector track state (rolling counts, last RSSI) in
+        # memory across calls, so a fresh pipeline per poll would break them.
+        self._pipeline: DetectionPipeline | None = None
 
     def start(self) -> None:
         """Start the background thread and begin polling. Safe to call once."""
@@ -73,8 +78,10 @@ class SentinelScheduler:
     async def _poll_job(self) -> None:
         if self._adapter is None:
             self._adapter = await create_router_adapter()
+        if self._pipeline is None:
+            self._pipeline = create_default_pipeline()
         try:
-            await poll_cycle(self._adapter, self._redis_client)
+            await poll_cycle(self._adapter, self._redis_client, self._pipeline)
         except Exception:
             logger.exception('Poll cycle failed')
 
