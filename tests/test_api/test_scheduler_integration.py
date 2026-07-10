@@ -88,7 +88,7 @@ async def _truncate_all() -> None:
         async with engine.begin() as conn:
             await conn.execute(text(
                 'TRUNCATE devices, traffic_samples, port_stats, wan_status_history, '
-                'alerts, rules RESTART IDENTITY'
+                'alerts, rules, threat_intel_cache RESTART IDENTITY'
             ))
     finally:
         await engine.dispose()
@@ -128,6 +128,26 @@ class TestRouterInfoWithScheduler:
         status, body = _request('GET', '/api/router')
         assert status == 200
         assert 'Mock' in body['model']
+
+
+class TestThreatsWithScheduler:
+    def test_feed_status_reports_all_feeds(self, live_server):
+        # The startup job kicks off a real feed refresh in the background;
+        # give it a little room without hard-depending on external uptime.
+        deadline = time.monotonic() + 15.0
+        body = {}
+        while time.monotonic() < deadline:
+            _, body = _request('GET', '/api/threats/feeds')
+            if any(f['refreshed_at'] for f in body['feeds'].values()):
+                break
+            time.sleep(0.5)
+        assert set(body['feeds']) == {'feodo', 'tor_exits', 'spamhaus', 'urlhaus'}
+
+    def test_lookup_ip_returns_a_verdict(self, live_server):
+        status, body = _request('GET', '/api/threats/lookup/198.51.100.77')
+        assert status == 200
+        assert body['ip'] == '198.51.100.77'
+        assert isinstance(body['is_malicious'], bool)
 
 
 class TestBlockUnblockWithScheduler:

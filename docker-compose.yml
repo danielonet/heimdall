@@ -31,7 +31,8 @@ services:
       - redis
     restart: unless-stopped
     volumes:
-      - ml-models:/data/models  # persist trained ML models across restarts
+      - ml-models:/data/models        # persist trained ML models across restarts
+      - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
 
   frontend:
     build: ./frontend

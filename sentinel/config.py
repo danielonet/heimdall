@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     # ── Security services ─────────────────────────────────────────────────────
     OTX_API_KEY: str = ''          # populated from OTX_API_KEY_FILE if blank
     SNIFF_IFACE: str = 'eth0'
-    NMAP_SCAN_CRON: str = '0 2 * * *'        # 02:00 daily
+    NMAP_SCAN_CRON: str = '0 2 * * *'          # 02:00 daily
+    THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
+    OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'
 
     # ── Notifications ─────────────────────────────────────────────────────────
     NTFY_URL: str = ''             # e.g. https://ntfy.sh/heimdall-alerts

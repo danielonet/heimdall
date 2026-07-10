@@ -6,6 +6,7 @@ event loop, so the scheduler gets its own thread + loop rather than sharing Flas
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import threading
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -16,15 +17,24 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import Flask
 from redis.asyncio import Redis, from_url
+from sqlalchemy import select
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.factory import create_router_adapter
 from sentinel.adapter.models import RouterInfo
+from sentinel.api.serializers import alert_to_dict
+from sentinel.api.websocket import emit_alert
+from sentinel.db.models import Alert, Device
+from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
 from sentinel.scheduler.jobs import poll_cycle
+from sentinel.security.arp_watch import ArpWatcher
+from sentinel.security.fingerprint import PassiveFingerprinter
+from sentinel.security.scanner import NetworkScanner
+from sentinel.security.threat_intel import ThreatIntelService
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +52,10 @@ class SentinelScheduler:
         ml_min_samples: int,
         ml_contamination: float,
         ml_retrain_cron: str,
+        sniff_iface: str,
+        otx_api_key: str,
+        nmap_scan_cron: str,
+        threat_feed_refresh_cron: str,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
@@ -49,6 +63,10 @@ class SentinelScheduler:
         self._ml_min_samples = ml_min_samples
         self._ml_contamination = ml_contamination
         self._ml_retrain_cron = ml_retrain_cron
+        self._sniff_iface = sniff_iface
+        self._otx_api_key = otx_api_key
+        self._nmap_scan_cron = nmap_scan_cron
+        self._threat_feed_refresh_cron = threat_feed_refresh_cron
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -60,6 +78,11 @@ class SentinelScheduler:
         # would throw that state away every 15 seconds.
         self._pipeline: DetectionPipeline | None = None
         self._anomaly_engine: AnomalyEngine | None = None
+        # Security services — also built once per process, same reasoning.
+        self._threat_intel: ThreatIntelService | None = None
+        self._scanner: NetworkScanner | None = None
+        self._arp_watcher: ArpWatcher | None = None
+        self._fingerprinter: PassiveFingerprinter | None = None
         # Health tracking, read synchronously by Flask's /api/health route.
         self._last_poll_at: datetime | None = None
         self._last_poll_error: str | None = None
@@ -96,6 +119,10 @@ class SentinelScheduler:
             contamination=self._ml_contamination,
         )
         self._pipeline = create_default_pipeline(self._anomaly_engine)
+        self._threat_intel = ThreatIntelService(self._otx_api_key)
+        self._scanner = NetworkScanner()
+        self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
+        self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
 
         self._scheduler = AsyncIOScheduler(event_loop=self._loop)
         self._scheduler.add_job(
@@ -111,6 +138,24 @@ class SentinelScheduler:
             id='ml_retrain',
             replace_existing=True,
         )
+        self._scheduler.add_job(
+            self._nmap_scan_job,
+            CronTrigger.from_crontab(self._nmap_scan_cron),
+            id='nmap_scan',
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._threat_feed_refresh_job,
+            CronTrigger.from_crontab(self._threat_feed_refresh_cron),
+            id='threat_feed_refresh',
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._startup_job,
+            'date',
+            run_date=datetime.now(),
+            id='startup',
+        )
         self._scheduler.start()
         self._loop.run_forever()
 
@@ -123,6 +168,87 @@ class SentinelScheduler:
         except Exception as exc:
             logger.exception('Poll cycle failed')
             self._last_poll_error = str(exc)
+
+    async def _startup_job(self) -> None:
+        """Runs once at boot: seed + start the packet-sniffing watchers, and
+        do an initial threat feed refresh so /api/threats/feeds isn't empty
+        until the first nightly cron fires."""
+        try:
+            async with get_session() as session:
+                result = await session.execute(select(Device.ip_address, Device.mac_address))
+                pairs = [(ip, mac) for ip, mac in result.all() if ip]
+            self._arp_watcher.seed(pairs)
+            self._arp_watcher.start()
+            self._fingerprinter.start()
+        except Exception:
+            logger.exception('Failed to start ARP watcher / passive fingerprinter')
+
+        try:
+            await self._threat_intel.refresh_feeds()
+        except Exception:
+            logger.exception('Initial threat feed refresh failed')
+
+    async def _nmap_scan_job(self) -> None:
+        """Nightly OS/service scan of every known device, stored in devices.nmap_profile."""
+        try:
+            async with get_session() as session:
+                result = await session.execute(select(Device.mac_address, Device.ip_address))
+                devices = [(mac, ip) for mac, ip in result.all() if ip]
+        except Exception:
+            logger.exception('Failed to load device list for nmap scan')
+            return
+
+        for mac, ip in devices:
+            try:
+                scan = await self._scanner.scan_device(ip)
+                profile = {
+                    'os': scan.os,
+                    'ports': [dataclasses.asdict(p) for p in scan.ports],
+                    'scanned_at': datetime.now(timezone.utc).isoformat(),
+                }
+                async with get_session() as session:
+                    device = await session.get(Device, mac)
+                    if device is not None:
+                        device.nmap_profile = profile
+                        if scan.os != 'Unknown':
+                            device.os_fingerprint = scan.os
+            except Exception:
+                logger.exception('nmap scan failed for %s (%s)', mac, ip)
+
+    async def _threat_feed_refresh_job(self) -> None:
+        try:
+            await self._threat_intel.refresh_feeds()
+        except Exception:
+            logger.exception('Threat feed refresh failed')
+
+    def _on_arp_alert(self, event: dict) -> None:
+        """Sync callback invoked from ArpWatcher's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_arp_alert(event), self._loop)
+
+    async def _persist_arp_alert(self, event: dict) -> None:
+        async with get_session() as session:
+            alert = Alert(
+                device_mac=None,
+                alert_type=event['type'],
+                severity=event['severity'],
+                description=event['description'],
+                raw_data=event,
+            )
+            session.add(alert)
+        emit_alert(alert_to_dict(alert))
+
+    def _on_fingerprint(self, ip: str, os_guess: str) -> None:
+        """Sync callback invoked from PassiveFingerprinter's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_fingerprint(ip, os_guess), self._loop)
+
+    async def _persist_fingerprint(self, ip: str, os_guess: str) -> None:
+        async with get_session() as session:
+            result = await session.execute(select(Device).where(Device.ip_address == ip))
+            device = result.scalars().first()
+            if device is not None:
+                device.os_fingerprint = os_guess
 
     async def _retrain_job(self) -> None:
         try:
@@ -188,6 +314,12 @@ class SentinelScheduler:
             'last_poll_error': self._last_poll_error,
         }
 
+    def get_threat_intel_service(self) -> ThreatIntelService:
+        """Return the shared ThreatIntelService instance, for /api/threats routes."""
+        if self._threat_intel is None:
+            raise RuntimeError('Scheduler not running')
+        return self._threat_intel
+
 
 _scheduler: SentinelScheduler | None = None
 
@@ -211,6 +343,10 @@ def init_scheduler(app: Flask) -> None:
         ml_min_samples=app.config['ML_MIN_SAMPLES_TO_TRAIN'],
         ml_contamination=app.config['ML_CONTAMINATION'],
         ml_retrain_cron=app.config['ML_RETRAIN_CRON'],
+        sniff_iface=app.config['SNIFF_IFACE'],
+        otx_api_key=app.config['OTX_API_KEY'],
+        nmap_scan_cron=app.config['NMAP_SCAN_CRON'],
+        threat_feed_refresh_cron=app.config['THREAT_FEED_REFRESH_CRON'],
     )
     _scheduler.start()
 
