@@ -41,7 +41,7 @@ export function LoginPage() {
           <div className="mt-1 text-[9px] tracking-widest text-text-muted">HOME NET MONITOR</div>
         </div>
 
-        <p className="mb-6 border-l-2 border-border-active pl-3 text-[11px] italic leading-relaxed text-text-secondary">
+        <p className="mb-6 border-l-2 border-border-active pl-3 font-nordic text-[15px] leading-relaxed tracking-wide text-text-secondary">
           {wisdom}
         </p>
 

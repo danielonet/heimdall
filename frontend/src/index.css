@@ -20,6 +20,7 @@
 
   --font-mono: 'JetBrains Mono', 'Share Tech Mono', ui-monospace, monospace;
   --font-heading: 'Rajdhani', 'Exo 2', sans-serif;
+  --font-nordic: 'MedievalSharp', 'Rajdhani', serif;
 }
 
 @layer base {
