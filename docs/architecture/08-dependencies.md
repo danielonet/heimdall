@@ -11,8 +11,12 @@ flask-socketio>=5.3
 flask-jwt-extended>=4.6
 flask-cors>=4.0
 flask-limiter>=3.5          # rate-limit /api/login
-gunicorn>=21.2              # production WSGI server
-gevent>=23.9                # async worker for gunicorn + SocketIO
+gunicorn>=21.2              # production WSGI server, --worker-class gthread
+                             # (not gevent — flask-socketio here uses
+                             # async_mode='threading', which needs a real
+                             # OS-thread worker; gevent's monkey-patched
+                             # threads are greenlets on one OS thread, which
+                             # broke SentinelScheduler's dedicated event loop)
 
 # ── Configuration ──────────────────────────────────────────────────────────
 python-dotenv>=1.0
@@ -89,7 +93,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-CMD ["gunicorn", "--worker-class", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker",
+CMD ["gunicorn", "--worker-class", "gthread", "--threads", "4",
      "--workers", "1", "--bind", "0.0.0.0:5000", "sentinel.api.app:create_app()"]
 ```
 

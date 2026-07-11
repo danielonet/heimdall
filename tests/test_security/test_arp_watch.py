@@ -1,5 +1,6 @@
 from scapy.all import ARP
 
+from sentinel.security import arp_watch
 from sentinel.security.arp_watch import ArpWatcher
 
 
@@ -14,6 +15,17 @@ def _arp_request(ip: str, mac: str) -> ARP:
 class TestIsActive:
     def test_defaults_false(self):
         watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        assert watcher.is_active is False
+
+    def test_resets_false_when_interface_not_found(self, monkeypatch):
+        """Scapy raises ValueError (not OSError) for a bad iface name — a
+        misconfigured SNIFF_IFACE must still be reported as inactive."""
+        def _raise(*args, **kwargs):
+            raise ValueError("Interface 'eth0' not found !")
+
+        monkeypatch.setattr(arp_watch, 'sniff', _raise)
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        watcher._run()
         assert watcher.is_active is False
 
 

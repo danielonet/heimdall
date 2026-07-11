@@ -1,6 +1,9 @@
 # ── Secrets (NEVER commit) ────────────────────────────────────────────────────
+# The whole directory, not a blanket `*.txt` — that project-wide rule used to
+# also silently exclude sentinel/requirements.txt from every commit in this
+# project's history (a fresh clone couldn't have built the backend image:
+# `COPY requirements.txt .` would fail outright).
 secrets/
-*.txt
 
 # ── Environment ───────────────────────────────────────────────────────────────
 .env

@@ -53,7 +53,10 @@ class PassiveFingerprinter:
                 'needs the NET_RAW capability (or root). Passive fingerprinting is disabled.',
                 self._iface,
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError covers Scapy's own "interface not found" (e.g. a
+            # misconfigured SNIFF_IFACE) — not an OSError subclass, but just
+            # as much a reason sniffing never actually started.
             self._active = False
             logger.warning('PassiveFingerprinter: failed to sniff on %s: %s', self._iface, exc)
 

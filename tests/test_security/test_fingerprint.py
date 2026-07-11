@@ -1,5 +1,6 @@
 from scapy.all import IP, TCP, UDP
 
+from sentinel.security import fingerprint
 from sentinel.security.fingerprint import PassiveFingerprinter
 
 
@@ -10,6 +11,17 @@ def _syn(src: str, ttl: int, window: int) -> IP:
 class TestIsActive:
     def test_defaults_false(self):
         fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        assert fp.is_active is False
+
+    def test_resets_false_when_interface_not_found(self, monkeypatch):
+        """Scapy raises ValueError (not OSError) for a bad iface name — a
+        misconfigured SNIFF_IFACE must still be reported as inactive."""
+        def _raise(*args, **kwargs):
+            raise ValueError("Interface 'eth0' not found !")
+
+        monkeypatch.setattr(fingerprint, 'sniff', _raise)
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        fp._run()
         assert fp.is_active is False
 
 
