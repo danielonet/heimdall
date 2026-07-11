@@ -7,6 +7,7 @@ import { PlaceholderPage } from './pages/PlaceholderPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { DevicesPage } from './pages/DevicesPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
+import { AlertsPage } from './pages/AlertsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -23,7 +24,7 @@ function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/devices" element={<DevicesPage />} />
               <Route path="/devices/:mac" element={<DeviceDetailPage />} />
-              <Route path="/alerts" element={<PlaceholderPage title="Alerts" />} />
+              <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/ports" element={<PlaceholderPage title="Ports" />} />
               <Route path="/threats" element={<PlaceholderPage title="Threat Intel" />} />
               <Route path="/rules" element={<PlaceholderPage title="Rules" />} />
