@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Sentinel emblem">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#glow)" fill="none" stroke="#00dc8c" stroke-width="2.2">
+    <!-- watch-post ticks, one at each compass point -->
+    <line x1="60" y1="4" x2="60" y2="16"/>
+    <line x1="116" y1="60" x2="104" y2="60"/>
+    <line x1="60" y1="116" x2="60" y2="104"/>
+    <line x1="4" y1="60" x2="16" y2="60"/>
+    <!-- shield -->
+    <polygon points="60,20 100,60 60,100 20,60"/>
+    <!-- watchful eye -->
+    <path d="M35,60 Q60,44 85,60 Q60,76 35,60 Z"/>
+    <circle cx="60" cy="60" r="7" fill="#00dc8c" stroke="none"/>
+  </g>
+</svg>
