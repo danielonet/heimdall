@@ -1,9 +1,4 @@
-"""Detection rule routes: CRUD + dry-run test.
-
-The dry-run test endpoint (POST /<id>/test) needs sentinel/detection/rules_engine.py
-to actually evaluate a rule against recent traffic — that engine doesn't exist
-yet (see docs/architecture/04-detection-pipeline.md), so it returns 501 for now.
-"""
+"""Detection rule routes: CRUD + dry-run test."""
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
@@ -11,10 +6,14 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import select
 
 from sentinel.api.serializers import rule_to_dict
-from sentinel.db.models import Rule
+from sentinel.db.models import Device, Rule, TrafficSample
 from sentinel.db.session import get_session
+from sentinel.detection.rules_engine import evaluate_condition
 
 bp = Blueprint('rules', __name__)
+
+_DRY_RUN_SAMPLE_SIZE = 100
+_DRY_RUN_MAX_MATCHES_RETURNED = 20
 
 
 @bp.route('', methods=['GET'])
@@ -89,10 +88,47 @@ async def delete_rule(rule_id: int):
 @bp.route('/<int:rule_id>/test', methods=['POST'])
 @jwt_required()
 async def test_rule(rule_id: int):
-    """Dry-run a rule against recent traffic. Not implemented — needs the rules engine."""
+    """Dry-run a rule's condition against recent traffic/device data.
+
+    Read-only: evaluates the condition only, never executes the rule's
+    action, persists nothing. Field names in condition_json map directly to
+    ORM column names, so rows can be passed straight into evaluate_condition().
+    """
     async with get_session() as session:
         rule = await session.get(Rule, rule_id)
         if rule is None:
             return jsonify(error='Rule not found'), 404
 
-    return jsonify(error='Rule dry-run testing is not implemented yet'), 501
+        trigger = rule.condition_json.get('trigger', 'TRAFFIC_SAMPLE')
+        if trigger == 'DEVICE_SNAPSHOT':
+            rows = (await session.execute(
+                select(Device).order_by(Device.last_seen.desc()).limit(_DRY_RUN_SAMPLE_SIZE)
+            )).scalars().all()
+        else:
+            # PER_PORT rows aren't attributable to one device — the live RuleEngine
+            # skips them for TRAFFIC_SAMPLE rules (see rules_engine.process_traffic),
+            # so the dry run must match that or it'll "find" matches on port aliases.
+            rows = (await session.execute(
+                select(TrafficSample)
+                .where(TrafficSample.granularity == 'per_device')
+                .order_by(TrafficSample.time.desc())
+                .limit(_DRY_RUN_SAMPLE_SIZE)
+            )).scalars().all()
+
+    matches = []
+    for row in rows:
+        matched, actual = evaluate_condition(rule.condition_json, row)
+        if matched:
+            matches.append({
+                'mac_address': row.mac_address,
+                'actual_value': actual,
+                'time': row.time.isoformat() if trigger != 'DEVICE_SNAPSHOT' else None,
+            })
+
+    return jsonify(
+        rule_id=rule_id,
+        trigger=trigger,
+        evaluated=len(rows),
+        matched=len(matches),
+        matches=matches[:_DRY_RUN_MAX_MATCHES_RETURNED],
+    )

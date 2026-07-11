@@ -64,7 +64,12 @@ class Settings(BaseSettings):
     # ── Notifications ─────────────────────────────────────────────────────────
     NTFY_URL: str = ''             # e.g. https://ntfy.sh/heimdall-alerts
     SMTP_HOST: str = ''
+    SMTP_PORT: int = 587
     SMTP_FROM: str = ''
+    SMTP_TO: str = ''               # falls back to SMTP_FROM if blank (notify yourself)
+    SMTP_USERNAME: str = ''
+    SMTP_PASSWORD: str = ''
+    SMTP_USE_TLS: bool = True
 
     class Config:
         env_file = '.env'

@@ -32,6 +32,7 @@ from sentinel.api.websocket import (
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
+from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ async def poll_cycle(
     redis_client: Redis,
     pipeline: DetectionPipeline,
     anomaly_engine: AnomalyEngine,
+    rule_engine: RuleEngine,
 ) -> None:
     """Run one full poll cycle: fetch, detect, score, persist, publish, broadcast.
 
@@ -70,6 +72,8 @@ async def poll_cycle(
         wan_changed = await _record_wan_status(session, router_info)
         for alert in alerts:
             session.add(alert)
+
+    await _run_rules(rule_engine, devices, traffic_samples)
 
     await _publish_events(redis_client, devices, traffic_samples, port_stats, router_info)
     _broadcast_updates(devices, newly_seen_macs, port_stats)
@@ -109,6 +113,33 @@ async def _run_detection(
         alerts.extend(await pipeline.process_traffic(sample, snapshot))
 
     return alerts
+
+
+async def _run_rules(
+    rule_engine: RuleEngine,
+    devices: list[DeviceSnapshot],
+    traffic_samples: list[TrafficSampleSnapshot],
+) -> None:
+    """Evaluate user-defined rules against this poll's devices/traffic.
+
+    Runs after the main persist step (unlike detection, rules have no need to
+    see pre-poll state) — each matched rule persists/emits its own action
+    (alert, block, tag, notify) independently, so there's nothing to collect here.
+    """
+    await rule_engine.load_active_rules()
+
+    snapshots_by_mac = {d.mac_address: d for d in devices}
+
+    for snapshot in devices:
+        await rule_engine.process_device(snapshot)
+
+    for sample in traffic_samples:
+        if sample.granularity != TrafficGranularity.PER_DEVICE:
+            continue
+        snapshot = snapshots_by_mac.get(sample.mac_address)
+        if snapshot is None:
+            continue
+        await rule_engine.process_traffic(sample, snapshot)
 
 
 def _score_traffic_samples(

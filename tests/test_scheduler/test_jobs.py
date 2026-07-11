@@ -17,8 +17,10 @@ from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.pipeline import create_default_pipeline
+from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
+from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
 
 pytestmark = pytest.mark.asyncio
@@ -78,6 +80,19 @@ def pipeline(anomaly_engine):
     return create_default_pipeline(anomaly_engine)
 
 
+@pytest.fixture
+def adapter():
+    return MockSagemcomAdapter()
+
+
+@pytest.fixture
+def rule_engine(adapter):
+    """No rules exist in the DB during these tests, so this just needs to be
+    a harmless, functioning RuleEngine — NotificationConfig() is all blank,
+    so notify() is a safe no-op if a test somehow does add a NOTIFY rule."""
+    return RuleEngine(adapter, NotificationService(NotificationConfig()))
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _cleanup_mock_rows():
     yield
@@ -91,9 +106,8 @@ async def _cleanup_mock_rows():
 
 
 class TestPollCycle:
-    async def test_persists_devices(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_persists_devices(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
@@ -101,18 +115,16 @@ class TestPollCycle:
             assert device.hostname == 'daniel-laptop'
             assert device.traffic_granularity == 'per_device'  # WiFi
 
-    async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
             assert device is not None
             assert device.traffic_granularity == 'per_port'
 
-    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -126,9 +138,8 @@ class TestPollCycle:
             assert port.status == 'UP'
             assert port.link_speed_mbps == 1000
 
-    async def test_per_device_sample_gets_bootstrap_anomaly_score(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_per_device_sample_gets_bootstrap_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -137,9 +148,8 @@ class TestPollCycle:
             sample = result.scalars().first()
             assert sample.anomaly_score == 0.0  # bootstrap: no trained model yet
 
-    async def test_per_port_sample_has_no_anomaly_score(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_per_port_sample_has_no_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -149,10 +159,9 @@ class TestPollCycle:
             assert sample is not None
             assert sample.anomaly_score is None
 
-    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -162,9 +171,8 @@ class TestPollCycle:
 
 
 class TestDetectionIntegration:
-    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)
+    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
             result = await session.execute(
@@ -176,10 +184,9 @@ class TestDetectionIntegration:
             assert {a.device_mac for a in alerts} == set(_MOCK_MACS)
             assert all(a.severity == 'CRITICAL' for a in alerts)
 
-    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline, anomaly_engine):
-        adapter = MockSagemcomAdapter()
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)  # devices become known here
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine)  # should raise nothing new
+    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # devices become known here
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # should raise nothing new
 
         async with get_session() as session:
             result = await session.execute(

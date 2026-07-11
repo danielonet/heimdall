@@ -27,9 +27,11 @@ from sentinel.api.websocket import emit_alert
 from sentinel.db.models import Alert, Device
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
+from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
+from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
@@ -56,6 +58,7 @@ class SentinelScheduler:
         otx_api_key: str,
         nmap_scan_cron: str,
         threat_feed_refresh_cron: str,
+        notification_config: NotificationConfig,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
@@ -67,6 +70,7 @@ class SentinelScheduler:
         self._otx_api_key = otx_api_key
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
+        self._notification_config = notification_config
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -83,6 +87,10 @@ class SentinelScheduler:
         self._scanner: NetworkScanner | None = None
         self._arp_watcher: ArpWatcher | None = None
         self._fingerprinter: PassiveFingerprinter | None = None
+        # Rules/notifications — RuleEngine tracks per-(rule, device) streak and
+        # rate-limit state across polls, so it's built once too.
+        self._notifier: NotificationService | None = None
+        self._rule_engine: RuleEngine | None = None
         # Health tracking, read synchronously by Flask's /api/health route.
         self._last_poll_at: datetime | None = None
         self._last_poll_error: str | None = None
@@ -123,6 +131,9 @@ class SentinelScheduler:
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
+        self._notifier = NotificationService(self._notification_config)
+        # _rule_engine is constructed lazily in _poll_job, once the adapter
+        # exists (BLOCK_DEVICE actions need it) — see _ensure_adapter().
 
         self._scheduler = AsyncIOScheduler(event_loop=self._loop)
         self._scheduler.add_job(
@@ -162,7 +173,11 @@ class SentinelScheduler:
     async def _poll_job(self) -> None:
         try:
             adapter = await self._ensure_adapter()
-            await poll_cycle(adapter, self._redis_client, self._pipeline, self._anomaly_engine)
+            if self._rule_engine is None:
+                self._rule_engine = RuleEngine(adapter, self._notifier)
+            await poll_cycle(
+                adapter, self._redis_client, self._pipeline, self._anomaly_engine, self._rule_engine
+            )
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
         except Exception as exc:
@@ -336,6 +351,16 @@ def init_scheduler(app: Flask) -> None:
         logger.warning('init_scheduler() called more than once — ignoring')
         return
 
+    notification_config = NotificationConfig(
+        ntfy_url=app.config['NTFY_URL'],
+        smtp_host=app.config['SMTP_HOST'],
+        smtp_port=app.config['SMTP_PORT'],
+        smtp_from=app.config['SMTP_FROM'],
+        smtp_to=app.config['SMTP_TO'],
+        smtp_username=app.config['SMTP_USERNAME'],
+        smtp_password=app.config['SMTP_PASSWORD'],
+        smtp_use_tls=app.config['SMTP_USE_TLS'],
+    )
     _scheduler = SentinelScheduler(
         poll_interval_s=app.config['POLL_INTERVAL_SECONDS'],
         redis_url=app.config['REDIS_URL'],
@@ -347,6 +372,7 @@ def init_scheduler(app: Flask) -> None:
         otx_api_key=app.config['OTX_API_KEY'],
         nmap_scan_cron=app.config['NMAP_SCAN_CRON'],
         threat_feed_refresh_cron=app.config['THREAT_FEED_REFRESH_CRON'],
+        notification_config=notification_config,
     )
     _scheduler.start()
 
