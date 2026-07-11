@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { DevicesPage } from './pages/DevicesPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
 import { AlertsPage } from './pages/AlertsPage'
+import { PortsPage } from './pages/PortsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -25,7 +26,7 @@ function App() {
               <Route path="/devices" element={<DevicesPage />} />
               <Route path="/devices/:mac" element={<DeviceDetailPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
-              <Route path="/ports" element={<PlaceholderPage title="Ports" />} />
+              <Route path="/ports" element={<PortsPage />} />
               <Route path="/threats" element={<PlaceholderPage title="Threat Intel" />} />
               <Route path="/rules" element={<PlaceholderPage title="Rules" />} />
               <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
