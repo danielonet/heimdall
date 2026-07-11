@@ -24,6 +24,12 @@ class ArpWatcher:
         self._callback = alert_callback
         self._iface = iface
         self._table: dict[str, str] = {}  # ip -> mac, seeded from the device registry
+        self._active = False
+
+    @property
+    def is_active(self) -> bool:
+        """True once sniff() is actually running — false if raw sockets aren't permitted."""
+        return self._active
 
     def seed(self, ip_mac_pairs: list[tuple[str, str]]) -> None:
         """Pre-populate the table from the device registry on startup."""
@@ -39,14 +45,17 @@ class ArpWatcher:
 
     def _run(self) -> None:
         try:
+            self._active = True
             sniff(filter='arp', prn=self._process, iface=self._iface, store=False)
         except PermissionError:
+            self._active = False
             logger.warning(
                 'ArpWatcher: permission denied opening a raw socket on %s — '
                 'needs the NET_RAW capability (or root). ARP spoof detection is disabled.',
                 self._iface,
             )
         except OSError as exc:
+            self._active = False
             logger.warning('ArpWatcher: failed to sniff on %s: %s', self._iface, exc)
 
     def _process(self, pkt) -> None:

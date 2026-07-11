@@ -31,6 +31,12 @@ class PassiveFingerprinter:
         self._callback = on_fingerprint
         self._iface = iface
         self._seen: set[str] = set()
+        self._active = False
+
+    @property
+    def is_active(self) -> bool:
+        """True once sniff() is actually running — false if raw sockets aren't permitted."""
+        return self._active
 
     def start(self) -> None:
         thread = threading.Thread(target=self._run, name='passive-fingerprinter', daemon=True)
@@ -38,14 +44,17 @@ class PassiveFingerprinter:
 
     def _run(self) -> None:
         try:
+            self._active = True
             sniff(filter='tcp[tcpflags] & tcp-syn != 0', prn=self._process, iface=self._iface, store=False)
         except PermissionError:
+            self._active = False
             logger.warning(
                 'PassiveFingerprinter: permission denied opening a raw socket on %s — '
                 'needs the NET_RAW capability (or root). Passive fingerprinting is disabled.',
                 self._iface,
             )
         except OSError as exc:
+            self._active = False
             logger.warning('PassiveFingerprinter: failed to sniff on %s: %s', self._iface, exc)
 
     def _process(self, pkt) -> None:

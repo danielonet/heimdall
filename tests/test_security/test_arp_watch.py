@@ -11,6 +11,12 @@ def _arp_request(ip: str, mac: str) -> ARP:
     return ARP(op=1, psrc=ip, hwsrc=mac)
 
 
+class TestIsActive:
+    def test_defaults_false(self):
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        assert watcher.is_active is False
+
+
 class TestSeed:
     def test_seed_populates_table_lowercased(self):
         watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')

@@ -7,6 +7,12 @@ def _syn(src: str, ttl: int, window: int) -> IP:
     return IP(src=src, ttl=ttl) / TCP(sport=1234, dport=80, flags='S', window=window)
 
 
+class TestIsActive:
+    def test_defaults_false(self):
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        assert fp.is_active is False
+
+
 class TestProcess:
     def test_known_signature_linux(self):
         results = []

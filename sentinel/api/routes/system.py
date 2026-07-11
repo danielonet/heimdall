@@ -39,8 +39,16 @@ async def health():
     redis_ok = await _check_redis()
 
     scheduler_status = {'scheduler_running': False, 'last_poll_at': None, 'last_poll_error': None}
+    security_services = {
+        'arp_watch_active': False, 'fingerprint_active': False,
+        'nmap_last_scan_at': None, 'canary_last_check_at': None,
+    }
+    threat_intel_feeds: dict = {}
     try:
-        scheduler_status = get_scheduler().health_snapshot()
+        scheduler = get_scheduler()
+        scheduler_status = scheduler.health_snapshot()
+        security_services = scheduler.security_services_snapshot()
+        threat_intel_feeds = scheduler.threat_intel_feeds_snapshot()
     except RuntimeError:
         pass  # scheduler not initialised (e.g. SCHEDULER_ENABLED=false) — reported as not running
 
@@ -56,6 +64,8 @@ async def health():
         postgres={'reachable': postgres_ok},
         redis={'reachable': redis_ok},
         scheduler=scheduler_status,
+        security_services=security_services,
+        threat_intel_feeds=threat_intel_feeds,
     ), (200 if healthy else 503)
 
 

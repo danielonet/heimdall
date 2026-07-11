@@ -101,6 +101,8 @@ class SentinelScheduler:
         # Health tracking, read synchronously by Flask's /api/health route.
         self._last_poll_at: datetime | None = None
         self._last_poll_error: str | None = None
+        self._last_nmap_scan_at: datetime | None = None
+        self._last_canary_check_at: datetime | None = None
 
     def start(self) -> None:
         """Start the background thread and begin polling. Safe to call once."""
@@ -245,6 +247,8 @@ class SentinelScheduler:
             except Exception:
                 logger.exception('nmap scan failed for %s (%s)', mac, ip)
 
+        self._last_nmap_scan_at = datetime.now(timezone.utc)
+
     async def _threat_feed_refresh_job(self) -> None:
         try:
             await self._threat_intel.refresh_feeds()
@@ -253,6 +257,7 @@ class SentinelScheduler:
 
     async def _canary_poll_job(self) -> None:
         """Tail the OpenCanary log and persist any new honeypot-interaction alerts."""
+        self._last_canary_check_at = datetime.now(timezone.utc)
         lines = self._canary_reader.read_new_lines()
         for line in lines:
             alert = self._canary_ingester.parse_event(line)
@@ -366,6 +371,24 @@ class SentinelScheduler:
             'last_poll_at': self._last_poll_at.isoformat() if self._last_poll_at else None,
             'last_poll_error': self._last_poll_error,
         }
+
+    def security_services_snapshot(self) -> dict[str, Any]:
+        """Real status for the security services that are actually wired — no
+        fabricated rows for services (Suricata/Pi-hole/Zeek/ClamAV) that don't
+        have a live signal to report."""
+        return {
+            'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
+            'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
+            'nmap_last_scan_at': (
+                self._last_nmap_scan_at.isoformat() if self._last_nmap_scan_at else None
+            ),
+            'canary_last_check_at': (
+                self._last_canary_check_at.isoformat() if self._last_canary_check_at else None
+            ),
+        }
+
+    def threat_intel_feeds_snapshot(self) -> dict[str, Any]:
+        return self._threat_intel.feed_status() if self._threat_intel else {}
 
     def get_threat_intel_service(self) -> ThreatIntelService:
         """Return the shared ThreatIntelService instance, for /api/threats routes."""
