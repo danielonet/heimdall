@@ -1,0 +1,98 @@
+import { useEffect, useState } from 'react'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { logout } from '../../lib/api'
+import { useHealth } from '../../hooks/useHealth'
+import { StatusDot } from '../../components/StatusDot'
+
+const NAV_ITEMS = [
+  { to: '/', label: 'DASHBOARD', end: true },
+  { to: '/devices', label: 'DEVICES' },
+  { to: '/alerts', label: 'ALERTS' },
+  { to: '/ports', label: 'PORTS' },
+  { to: '/threats', label: 'THREATS' },
+  { to: '/rules', label: 'RULES' },
+  { to: '/settings', label: 'SETTINGS' },
+]
+
+function useClock() {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return now.toLocaleTimeString('en-GB')
+}
+
+export function DesktopShell() {
+  const clock = useClock()
+  const navigate = useNavigate()
+  const { data: health } = useHealth()
+  const schedulerOk = health?.scheduler?.scheduler_running && !health?.scheduler?.last_poll_error
+
+  async function handleLogout() {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-bg text-[11px] text-text-secondary">
+      <header className="flex h-[52px] flex-shrink-0 items-stretch border-b border-border bg-surface-elevated">
+        <div className="flex min-w-[200px] items-center gap-3 border-r border-border px-6">
+          <div className="flex h-[26px] w-[26px] rotate-45 items-center justify-center border-2 border-accent-green">
+            <div className="h-2 w-2 -rotate-45 bg-accent-green" />
+          </div>
+          <div>
+            <div className="font-heading text-lg font-bold tracking-[4px] text-accent-green">SENTINEL</div>
+            <div className="mt-0.5 text-[8px] tracking-wide text-text-muted">HOME NET MONITOR</div>
+          </div>
+        </div>
+
+        <nav className="flex items-stretch">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `flex items-center border-r border-border px-4 text-[10px] tracking-[2px] transition-colors ${
+                  isActive
+                    ? 'border-b-2 border-b-accent-green text-accent-green'
+                    : 'text-text-muted hover:text-text-primary'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="ml-auto flex items-center gap-5 border-l border-border px-5">
+          <div className="flex items-center gap-2">
+            <StatusDot variant={schedulerOk ? 'green' : 'red'} pulse={schedulerOk} />
+            <span className="text-[9px] tracking-wide text-text-muted">XMO</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="text-[9px] tracking-wide text-text-muted hover:text-accent-red"
+          >
+            LOGOUT
+          </button>
+          <div className="min-w-[90px] text-right font-heading text-xl font-semibold tracking-wide text-accent-green">
+            {clock}
+          </div>
+        </div>
+      </header>
+
+      <div className="flex h-9 flex-shrink-0 items-center border-b border-border bg-surface-elevated px-6">
+        <div className="text-[9px] tracking-wide text-text-muted">
+          SENTINEL / <em className="not-italic text-accent-green">LIVE VIEW</em>
+        </div>
+      </div>
+
+      <main className="flex-1 overflow-auto">
+        <Outlet />
+      </main>
+    </div>
+  )
+}

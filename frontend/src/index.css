@@ -1,0 +1,46 @@
+@import 'tailwindcss';
+
+/* Palette + type scale from docs/frontend/ui-design-brief.md — the same
+   tokens across both shells so desktop/mobile stay visually consistent. */
+@theme {
+  --color-bg: #070b10;
+  --color-surface: #0a0f18;
+  --color-surface-elevated: #0f1526;
+  --color-border: rgba(0, 220, 140, 0.12);
+  --color-border-active: rgba(0, 220, 140, 0.3);
+
+  --color-accent-green: #00dc8c;
+  --color-accent-blue: #00aaff;
+  --color-accent-amber: #f0a030;
+  --color-accent-red: #ff3a5c;
+
+  --color-text-primary: #c8d8e8;
+  --color-text-secondary: #5a7090;
+  --color-text-muted: #1a4050;
+
+  --font-mono: 'JetBrains Mono', 'Share Tech Mono', ui-monospace, monospace;
+  --font-heading: 'Rajdhani', 'Exo 2', sans-serif;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

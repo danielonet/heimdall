@@ -36,8 +36,11 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "3000:80"               # React app via Nginx
+    network_mode: host          # so nginx can proxy /api + /socket.io to
+                                 # sentinel-backend at 127.0.0.1:5000 without
+                                 # CORS (see frontend/nginx.conf) — nginx
+                                 # listens on :3000 directly, no port mapping
+                                 # needed/possible under host networking
     depends_on:
       - sentinel-backend
     restart: unless-stopped
