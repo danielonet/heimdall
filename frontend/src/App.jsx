@@ -5,6 +5,8 @@ import { Shell } from './Shell'
 import { LoginPage } from './pages/LoginPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { DevicesPage } from './pages/DevicesPage'
+import { DeviceDetailPage } from './pages/DeviceDetailPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -19,8 +21,8 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route element={<Shell />}>
               <Route path="/" element={<DashboardPage />} />
-              <Route path="/devices" element={<PlaceholderPage title="Devices" />} />
-              <Route path="/devices/:mac" element={<PlaceholderPage title="Device Detail" />} />
+              <Route path="/devices" element={<DevicesPage />} />
+              <Route path="/devices/:mac" element={<DeviceDetailPage />} />
               <Route path="/alerts" element={<PlaceholderPage title="Alerts" />} />
               <Route path="/ports" element={<PlaceholderPage title="Ports" />} />
               <Route path="/threats" element={<PlaceholderPage title="Threat Intel" />} />
