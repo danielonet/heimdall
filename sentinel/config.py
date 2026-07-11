@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     NMAP_SCAN_CRON: str = '0 2 * * *'          # 02:00 daily
     THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
     OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'
+    CANARY_POLL_INTERVAL_SECONDS: int = 10
 
     # ── Notifications ─────────────────────────────────────────────────────────
     NTFY_URL: str = ''             # e.g. https://ntfy.sh/heimdall-alerts

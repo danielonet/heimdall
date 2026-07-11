@@ -34,6 +34,7 @@ from sentinel.ml.trainer import ModelTrainer
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
+from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.scanner import NetworkScanner
 from sentinel.security.threat_intel import ThreatIntelService
@@ -59,6 +60,8 @@ class SentinelScheduler:
         nmap_scan_cron: str,
         threat_feed_refresh_cron: str,
         notification_config: NotificationConfig,
+        opencanary_log_path: str,
+        canary_poll_interval_s: int,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
@@ -71,6 +74,8 @@ class SentinelScheduler:
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
         self._notification_config = notification_config
+        self._opencanary_log_path = opencanary_log_path
+        self._canary_poll_interval_s = canary_poll_interval_s
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -87,6 +92,8 @@ class SentinelScheduler:
         self._scanner: NetworkScanner | None = None
         self._arp_watcher: ArpWatcher | None = None
         self._fingerprinter: PassiveFingerprinter | None = None
+        self._canary_reader: OpenCanaryLogReader | None = None
+        self._canary_ingester: OpenCanaryIngester | None = None
         # Rules/notifications — RuleEngine tracks per-(rule, device) streak and
         # rate-limit state across polls, so it's built once too.
         self._notifier: NotificationService | None = None
@@ -131,6 +138,8 @@ class SentinelScheduler:
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
+        self._canary_reader = OpenCanaryLogReader(self._opencanary_log_path)
+        self._canary_ingester = OpenCanaryIngester()
         self._notifier = NotificationService(self._notification_config)
         # _rule_engine is constructed lazily in _poll_job, once the adapter
         # exists (BLOCK_DEVICE actions need it) — see _ensure_adapter().
@@ -160,6 +169,12 @@ class SentinelScheduler:
             CronTrigger.from_crontab(self._threat_feed_refresh_cron),
             id='threat_feed_refresh',
             replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._canary_poll_job,
+            'interval',
+            seconds=self._canary_poll_interval_s,
+            id='canary_poll',
         )
         self._scheduler.add_job(
             self._startup_job,
@@ -235,6 +250,29 @@ class SentinelScheduler:
             await self._threat_intel.refresh_feeds()
         except Exception:
             logger.exception('Threat feed refresh failed')
+
+    async def _canary_poll_job(self) -> None:
+        """Tail the OpenCanary log and persist any new honeypot-interaction alerts."""
+        lines = self._canary_reader.read_new_lines()
+        for line in lines:
+            alert = self._canary_ingester.parse_event(line)
+            if alert is None:
+                continue
+            try:
+                await self._persist_canary_alert(alert)
+            except Exception:
+                logger.exception('Failed to persist OpenCanary alert')
+
+    async def _persist_canary_alert(self, alert: Alert) -> None:
+        src_host = alert.raw_data.get('src_host')
+        async with get_session() as session:
+            if src_host:
+                result = await session.execute(
+                    select(Device.mac_address).where(Device.ip_address == src_host)
+                )
+                alert.device_mac = result.scalars().first()
+            session.add(alert)
+        emit_alert(alert_to_dict(alert))
 
     def _on_arp_alert(self, event: dict) -> None:
         """Sync callback invoked from ArpWatcher's own daemon thread."""
@@ -373,6 +411,8 @@ def init_scheduler(app: Flask) -> None:
         nmap_scan_cron=app.config['NMAP_SCAN_CRON'],
         threat_feed_refresh_cron=app.config['THREAT_FEED_REFRESH_CRON'],
         notification_config=notification_config,
+        opencanary_log_path=app.config['OPENCANARY_LOG_PATH'],
+        canary_poll_interval_s=app.config['CANARY_POLL_INTERVAL_SECONDS'],
     )
     _scheduler.start()
 
