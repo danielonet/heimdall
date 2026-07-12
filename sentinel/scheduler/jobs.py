@@ -34,6 +34,7 @@ from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
+from sentinel.security.mac_vendor import lookup_vendor
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ async def poll_cycle(
     themselves before being evaluated by the pipeline.
     """
     devices = await adapter.get_connected_devices()
+    _enrich_vendor_names(devices)
     traffic_samples = await adapter.get_traffic_samples()
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
@@ -86,6 +88,19 @@ async def poll_cycle(
         'Poll cycle complete: %d devices, %d traffic samples, %d port stats, %d alerts',
         len(devices), len(traffic_samples), len(port_stats), len(alerts),
     )
+
+
+def _enrich_vendor_names(devices: list[DeviceSnapshot]) -> None:
+    """Fill in vendor_name via local MAC OUI lookup, in place.
+
+    Router adapters never populate this themselves — it's not router data,
+    just a static lookup from the MAC — so it's done once here rather than
+    duplicated in every adapter. Skips devices that already have a vendor_name
+    (e.g. a future adapter that sources it from the router directly).
+    """
+    for device in devices:
+        if not device.vendor_name:
+            device.vendor_name = lookup_vendor(device.mac_address)
 
 
 async def _run_detection(

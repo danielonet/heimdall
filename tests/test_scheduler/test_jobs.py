@@ -123,6 +123,17 @@ class TestPollCycle:
             assert device is not None
             assert device.traffic_granularity == 'per_port'
 
+    async def test_vendor_name_gets_populated_from_mac_lookup(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        """Adapters never set vendor_name themselves — poll_cycle enriches it via
+        a local MAC OUI lookup (sentinel.security.mac_vendor), so it should end up
+        a string (possibly '' for an unrecognized/randomized MAC), never left NULL."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
+            assert device is not None
+            assert device.vendor_name is not None
+
     async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
