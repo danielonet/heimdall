@@ -1,13 +1,21 @@
 # Sagemcom XMO API Reference
 
-Router: **Sagemcom F@st 5670**
+Router: **Sagemcom F@st 5670 (model ST5670V2IL)**
 Firmware: **SGFg12000116**
 GUI Version: **5.146.1**
+ISP: **Cellcom** (Israel) — this is an ISP-customized data model, not stock
+Sagemcom; several xpaths from generic XMO references don't apply here (see
+"Remaining captures needed" below).
 Admin URL: **http://10.100.102.1** (discovered from default route at runtime)
 
-All xpaths marked ✅ have been directly observed in browser DevTools XHR.
+All xpaths marked ✅ have been directly observed in browser DevTools XHR
+**and confirmed against a live authenticated call** (see Authentication
+section — this doc previously marked xpaths ✅ off unverified assumptions,
+which turned out wrong for the Hosts table; don't trust a ✅ here that
+predates that fix without re-checking the git history of this file).
 Xpaths marked ✅* have confirmed parent nodes but sub-paths need one more capture.
-Xpaths marked ⬜ are expected to exist based on firmware conventions.
+Xpaths marked ⬜ are expected to exist based on firmware conventions but are unverified.
+Xpaths marked ❌ were checked live and do not exist on this firmware.
 
 ---
 
@@ -22,30 +30,82 @@ Body:  req=<URL-encoded JSON envelope>
 
 ## Authentication
 
-1. Send request with `session-id: 0` and `auth-key: ""`
-2. Router returns `session-id` in response `reply.uid`
-3. For all subsequent requests:
-   - `cnonce` = random integer
-   - `auth-key` = `MD5( MD5(password) + ":" + cnonce )`
-4. On error code `16777219` (XMO_REQUEST_AUTHENTICATION_ERR) → re-login
+**The section below as previously written was wrong** — a bare
+`session-id: 0, auth-key: ""` handshake with no actions does not work
+against this router; it always replies with `XMO_INVALID_SESSION_ERR`
+regardless of credentials. This was reverse-engineered from the router's own
+`js/gui-api.js` (fetched from `http://{router_ip}/2.0/gui/js/gui-api.js`,
+served unauthenticated) and confirmed against a live login + authenticated
+`getValue` call. See `sentinel/adapter/sagemcom/xmo_auth.py` for the
+implementation.
 
-Error code `16777239` = `XMO_NO_ERR` (success).
+1. `HA1 = MD5( f"{username}:{nonce}:{MD5(password)}" )` — `nonce` is `""`
+   until a session has been established.
+2. `auth-key = MD5( f"{HA1}:{request_id}:{cnonce}:JSON:/cgi/json-req" )`
+3. **Login**: `session-id: 0`, `priority: true`, HA1 computed with
+   `nonce=""`, and a single action:
+   ```json
+   {
+     "id": 0,
+     "method": "logIn",
+     "parameters": {
+       "user": "home",
+       "persistent": "true",
+       "session-options": {
+         "nss": [{ "name": "gtw", "uri": "http://sagemcom.com/gateway-data" }],
+         "context-flags": { "get-content-name": true, "local-time": true },
+         "capability-depth": 2,
+         "capability-flags": { "name": true, "default-value": false, "restriction": true, "description": false },
+         "time-format": "ISO_8601",
+         "jwt-auth": "true"
+       }
+     }
+   }
+   ```
+   Note: the plaintext password is **never sent** — it's only ever expressed
+   through the `auth-key` hash. Sending a literal `"password"` parameter
+   here (as this doc previously showed) gets the action accepted structurally
+   but the login rejected with `XMO_AUTHENTICATION_ERR` (16777224).
+4. On success, the response carries the new session-id **and** a fresh
+   server nonce in `reply.actions[0].callbacks[0].parameters` — **not**
+   `reply.uid`, which stays `0` even on a successful login:
+   ```json
+   {"reply":{"uid":0,"error":{"code":16777216,"description":"XMO_REQUEST_NO_ERR"},
+     "actions":[{"error":{"code":16777239,"description":"XMO_NO_ERR"},
+       "callbacks":[{"parameters":{"id":1037387852,"nonce":"2021791795"}}]}]}}
+   ```
+5. Recompute HA1 with that nonce for **every** request for the rest of the
+   session (not just once) — `session-id` becomes the returned `id`.
+6. On error code `16777219` (`XMO_INVALID_SESSION_ERR`) → re-login (resets
+   nonce to `""` and starts over).
+
+Other error codes hit while reverse-engineering this: `16777224`
+`XMO_AUTHENTICATION_ERR` (wrong credentials), `16777225`
+`XMO_LOGIN_RETRY_ERR` (temporary brute-force lockout after repeated failed
+logins — clears on a router power-cycle, or after some cooldown that resets
+on every further attempt while it's active, so stop retrying immediately if
+you see this).
+
+Error code `16777239` = `XMO_NO_ERR` (per-action success). Error code
+`16777216` = `XMO_REQUEST_NO_ERR` (per-request success, top level).
 
 ## Request envelope
+
+Response values live at `reply.actions[].callbacks[0].parameters.value`, not
+`callbacks[0].result` (`result` only carries a status code/description).
+Object-returning xpaths additionally wrap the value one level deeper, keyed
+by the xpath's own last segment — e.g. `Device/DeviceInfo` returns
+`{"DeviceInfo": {...}}`. `sentinel/adapter/sagemcom/xmo_client.py:_extract_result`
+peels that wrapper off automatically.
 
 ```json
 {
   "request": {
-    "id": 863,
-    "session-id": 1084566263,
+    "id": 1,
+    "session-id": 1037387852,
     "priority": false,
     "actions": [
-      {
-        "id": 0,
-        "method": "getValue",
-        "xpath": "Device/Hosts/Host",
-        "options": { "capability-flags": { "interface": true } }
-      }
+      { "id": 0, "method": "getValue", "xpath": "Device/DeviceInfo" }
     ],
     "cnonce": 583156031,
     "auth-key": "d1fa311771f1f1cbd61ea913cc6236af"
@@ -68,9 +128,10 @@ Error code `16777239` = `XMO_NO_ERR` (success).
 
 | XPath | Status | Data |
 |-------|--------|------|
-| `Device/Hosts/Host` | ✅ | All LAN clients: MAC (`PhysAddress`), IP (`IPAddress`), hostname (`HostName`), `InterfaceType` (WiFi/Ethernet), `Active`, `X_SAGEMCOM_SignalStrength`, `X_SAGEMCOM_RxRate`, `BytesSent`, `BytesReceived` |
+| `Device/Hosts/Host` | ❌ | **Does not exist on this firmware** — `XMO_UNKNOWN_PATH_ERR` (16777243), confirmed live despite this doc previously marking it ✅. Use `Device/Hosts` instead. |
+| `Device/Hosts` | ✅ | Returns a container: `{"GlobalBlackAndWhitelistSwitch", "MasterBlacklistEnable", "SweepARP", "Hosts": [...]}` — the actual host list is the nested `Hosts` array, one level below what `_extract_result`'s xpath-leaf unwrap gives you. Each entry has MAC (`PhysAddress`), IP (`IPAddress`), hostname (`HostName`), `InterfaceType` (WiFi/Ethernet), `Active`. Confirmed **absent** on this firmware: `X_SAGEMCOM_SignalStrength`, `X_SAGEMCOM_RxRate`, `BytesSent`, `BytesReceived` (present instead: `SignalSgtrength` [sic — real firmware typo] as an enum string like `WL_SIGNAL_NONE`, not dBm). Per-device WiFi signal/traffic still needs the right xpath — see "Remaining captures needed" below. |
 | `Device/DHCPv4/Server/Pool/Client` | ✅ | DHCP leases: MAC, IP, hostname, lease expiry |
-| `Device/DeviceInfo` | ✅ | Model "F@st 5670", firmware "SGFg12000116", serial "N7223428X0026...", hardware version "2.00", uptime (seconds), WAN MAC "C4:EB:42:F1:26:85" |
+| `Device/DeviceInfo` | ✅ | Confirmed live. Model "Fast5670_GPON", firmware "SGFg12000116", serial "N7223428X002678", hardware version "2.00" |
 
 ---
 
@@ -170,8 +231,16 @@ Sub-path pattern: `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/{sub-pat
 
 ## Remaining captures needed
 
+Given `Device/Hosts/Host` turned out not to exist despite being marked ✅,
+**every xpath below that hasn't been re-confirmed against a live login on
+this specific firmware should be treated as unverified**, not just the
+"CRITICAL" row — the generic XMO docs this file was originally built from
+don't reliably match this ISP's customized data model.
+
 | Priority | Navigate to | Reveals |
 |----------|-------------|---------|
-| **CRITICAL** | Access Control → Parental Control → add temp block → capture XHR | Exact Firewall chain name and Rule xpath for `block_device()` |
-| Important | WAN → Statistics | `IP_DATA/Stats/*` sub-paths for total household bandwidth |
-| Useful | WiFi → Stats (DevTools open) | Confirms Radio alias (`wl0`/`wl1`) vs SSID alias |
+| **CRITICAL** | Access Control → Parental Control → add temp block → capture XHR | Exact Firewall chain name and Rule xpath for `block_device()` — `Device/Firewall/Chain[Name="LAN_IN"]/Rule` is unverified |
+| **CRITICAL** | WiFi client list / Connected devices page (DevTools open) | Correct xpath for per-client WiFi signal strength and byte counters — `Device/Hosts` entries have neither (see Device & Host Layer above) |
+| Important | Ethernet ports page (DevTools open) | Confirm `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/Stats` still resolves — untested against this firmware since the Hosts xpath mismatch was found |
+| Important | WAN → Statistics | `IP_DATA/Stats/*` sub-paths for total household bandwidth — untested |
+| Useful | WiFi → Stats (DevTools open) | Confirms Radio alias (`wl0`/`wl1`) vs SSID alias — untested |

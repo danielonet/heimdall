@@ -6,8 +6,8 @@
   --color-bg: #070b10;
   --color-surface: #0a0f18;
   --color-surface-elevated: #0f1526;
-  --color-border: rgba(0, 220, 140, 0.12);
-  --color-border-active: rgba(0, 220, 140, 0.3);
+  --color-border: rgba(0, 220, 140, 0.32);
+  --color-border-active: rgba(0, 220, 140, 0.55);
 
   --color-accent-green: #00dc8c;
   --color-accent-blue: #00aaff;
@@ -15,8 +15,8 @@
   --color-accent-red: #ff3a5c;
 
   --color-text-primary: #c8d8e8;
-  --color-text-secondary: #5a7090;
-  --color-text-muted: #1a4050;
+  --color-text-secondary: #93aed4;
+  --color-text-muted: #4d82a3;
 
   --font-mono: 'JetBrains Mono', 'Share Tech Mono', ui-monospace, monospace;
   --font-heading: 'Rajdhani', 'Exo 2', sans-serif;
@@ -26,6 +26,14 @@
 @layer base {
   * {
     box-sizing: border-box;
+  }
+
+  :root {
+    /* Tells the browser this page is already intentionally dark-themed, so
+       Android Chrome's "force dark" heuristic doesn't try to auto-invert our
+       custom palette (it otherwise mangles colors like the CriticalAlertBanner's
+       translucent red tint into stray solid colors). */
+    color-scheme: dark;
   }
 
   body {

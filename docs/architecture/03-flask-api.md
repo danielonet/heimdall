@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     ROUTER_ADAPTER: str = 'sagemcom'
     ROUTER_IP: str = ''              # blank = auto-discover
     ROUTER_PORT: int = 80
-    ROUTER_USERNAME: str = 'admin'
+    ROUTER_USERNAME: str = 'home'
     ROUTER_PASSWORD: str = ''        # loaded from Docker secret
     POLL_INTERVAL_SECONDS: int = 15
 

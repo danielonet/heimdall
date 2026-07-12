@@ -253,7 +253,7 @@ else
 ROUTER_ADAPTER=sagemcom
 ROUTER_IP=           # leave blank to auto-discover from default route
 ROUTER_PORT=80
-ROUTER_USERNAME=admin
+ROUTER_USERNAME=home
 POLL_INTERVAL_SECONDS=15
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
@@ -270,6 +270,7 @@ REDIS_URL=redis://localhost:6379
 # ── ML ────────────────────────────────────────────────────────────────────────
 ML_MIN_SAMPLES_TO_TRAIN=100
 ML_CONTAMINATION=0.05
+ML_MODEL_DIR=${REPO_ROOT}/data/models   # host/console dev override of the Docker default (/data/models)
 
 # ── Network ───────────────────────────────────────────────────────────────────
 SNIFF_IFACE=eth0     # LAN-facing interface — check with: ip link show
@@ -296,6 +297,21 @@ for dir in suricata opencanary; do
         log_success "Created ${dir}/"
     fi
 done
+
+# ── 9. ML model dir (host/console dev) ────────────────────────────────────────
+log_section "ML Model Directory"
+
+# sentinel/config.py defaults ML_MODEL_DIR to /data/models (the Docker volume
+# mount). run.sh runs the backend directly on the host, where that path
+# doesn't exist and can't be created without root, so provide a repo-local
+# fallback that the .env scaffold above points ML_MODEL_DIR at.
+if [ -d "${REPO_ROOT}/data/models" ]; then
+    log_skip "data/models/ directory"
+else
+    mkdir -p "${REPO_ROOT}/data/models"
+    chown -R "$REAL_USER:$REAL_USER" "${REPO_ROOT}/data"
+    log_success "Created data/models/"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 log_section "Install Complete"

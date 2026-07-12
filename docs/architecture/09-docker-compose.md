@@ -15,7 +15,7 @@ services:
       - ROUTER_ADAPTER=sagemcom
       - ROUTER_IP=              # blank = auto-discover from default route
       - ROUTER_PORT=80
-      - ROUTER_USERNAME=admin
+      - ROUTER_USERNAME=home
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379

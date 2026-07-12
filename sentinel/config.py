@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     ROUTER_ADAPTER: str = 'sagemcom'
     ROUTER_IP: str = ''            # blank = auto-discover from default route
     ROUTER_PORT: int = 80
-    ROUTER_USERNAME: str = 'admin'
+    ROUTER_USERNAME: str = 'home'
     ROUTER_PASSWORD: str = ''      # populated from ROUTER_PASSWORD_FILE if blank
     POLL_INTERVAL_SECONDS: int = 15
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router

@@ -28,10 +28,16 @@ class XmoClient:
         self._http = httpx.AsyncClient(timeout=10.0)
 
     async def login(self) -> None:
-        """Establish a new XMO session.
+        """Establish a new XMO session via the `logIn` action.
 
-        Sends session-id=0 with an empty auth-key. The router responds with a
-        new session-id in reply.uid which is stored in self._auth.session_id.
+        On success, the router returns a new session-id *and* a fresh nonce
+        in actions[0].callbacks[0].parameters — not reply.uid, which stays 0
+        even on a successful login. The nonce must be stored and used to
+        recompute HA1 for every subsequent request this session (see
+        XmoAuth.update_nonce). Raises RuntimeError if the router rejects the
+        credentials, instead of silently leaving the session unauthenticated,
+        which would otherwise send every caller into an infinite re-login loop
+        against XMO_INVALID_SESSION_ERR.
         """
         envelope = self._auth.build_login_envelope()
         payload = urllib.parse.urlencode({'req': json.dumps(envelope)})
@@ -42,7 +48,17 @@ class XmoClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        self._auth.session_id = data.get('reply', {}).get('uid', 0)
+        action = (data.get('reply', {}).get('actions') or [{}])[0]
+        if action.get('error', {}).get('code') != _XMO_NO_ERR:
+            error = action.get('error', {})
+            raise RuntimeError(
+                f'XMO login rejected: '
+                f'{error.get("description", "unknown error")} '
+                f'(code {error.get("code")})'
+            )
+        result_params = action['callbacks'][0]['parameters']
+        self._auth.session_id = int(result_params['id'])
+        self._auth.update_nonce(result_params['nonce'])
         logger.debug('XMO login complete, session_id=%s', self._auth.session_id)
 
     @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=1, max=30))
@@ -102,14 +118,27 @@ class XmoClient:
         await self._http.aclose()
 
     def _extract_result(self, resp: dict, action_id: int) -> Any:
-        """Extract the callback result for a given action id from an XMO reply."""
+        """Extract the callback value for a given action id from an XMO reply.
+
+        The value lives at callbacks[0].parameters.value, not callbacks[0].result
+        (result only carries a status code/description) — confirmed against a
+        live router. Object-returning xpaths additionally wrap the value one
+        level deeper, keyed by the xpath's own last segment (e.g. `Device/
+        DeviceInfo` returns {"DeviceInfo": {...}}); that wrapper is peeled off
+        here so callers can treat the return value as the flat object/list they
+        asked for.
+        """
         actions = resp.get('reply', {}).get('actions', [])
         for action in actions:
-            if action.get('id') == action_id:
-                callbacks = action.get('callbacks', [])
-                if callbacks:
-                    result = callbacks[0].get('result', {})
-                    if isinstance(result, dict) and 'item' in result:
-                        return result['item']
-                    return result
+            if action.get('id') != action_id:
+                continue
+            callbacks = action.get('callbacks', [])
+            if not callbacks:
+                return None
+            value = callbacks[0].get('parameters', {}).get('value')
+            xpath = callbacks[0].get('xpath', '')
+            leaf = xpath.rsplit('/', 1)[-1] if xpath else ''
+            if isinstance(value, dict) and leaf in value:
+                return value[leaf]
+            return value
         return None

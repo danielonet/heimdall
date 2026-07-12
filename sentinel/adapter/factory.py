@@ -43,4 +43,5 @@ async def create_router_adapter() -> RouterAdapter:
         password=settings.ROUTER_PASSWORD,
         router_port=settings.ROUTER_PORT,
         poll_interval_s=settings.POLL_INTERVAL_SECONDS,
+        username=settings.ROUTER_USERNAME,
     )

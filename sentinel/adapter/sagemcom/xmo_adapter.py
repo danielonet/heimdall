@@ -37,9 +37,10 @@ class SagemcomXmoAdapter(RouterAdapter):
         password: str,
         router_port: int = 80,
         poll_interval_s: int = 15,
+        username: str = 'admin',
     ) -> None:
         base_url = f'http://{router_ip}:{router_port}'
-        self._auth = XmoAuth(password)
+        self._auth = XmoAuth(password, username=username)
         self._client = XmoClient(base_url, self._auth)
         self._device_delta = TrafficDeltaCalculator()
         # port alias -> (bytes_sent_total, bytes_recv_total)
@@ -54,10 +55,7 @@ class SagemcomXmoAdapter(RouterAdapter):
 
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
         """Return all currently connected LAN devices."""
-        resp = await self._client.get_value('Device/Hosts/Host')
-        hosts = self._client._extract_result(resp, 0) or []
-        if isinstance(hosts, dict):
-            hosts = [hosts]
+        hosts = await self._get_hosts()
         return [self._to_device_snapshot(h) for h in hosts if isinstance(h, dict)]
 
     async def get_traffic_samples(self) -> List[TrafficSample]:
@@ -69,10 +67,7 @@ class SagemcomXmoAdapter(RouterAdapter):
         samples: List[TrafficSample] = []
 
         # WiFi: per-device bytes from Host table
-        resp = await self._client.get_value('Device/Hosts/Host')
-        hosts = self._client._extract_result(resp, 0) or []
-        if isinstance(hosts, dict):
-            hosts = [hosts]
+        hosts = await self._get_hosts()
 
         for h in hosts:
             if not isinstance(h, dict):
@@ -235,6 +230,26 @@ class SagemcomXmoAdapter(RouterAdapter):
             signal_rate_mbps=_int_field(host, 'X_SAGEMCOM_RxRate'),
             is_online=bool(is_active),
         )
+
+    async def _get_hosts(self) -> List[dict]:
+        """Return the raw Host dicts from the router's Hosts table.
+
+        `Device/Hosts/Host` (the xpath the XMO docs describe) does not exist
+        on this firmware — XMO_UNKNOWN_PATH_ERR. The real xpath is
+        `Device/Hosts`, which returns a container object with the host list
+        nested one level deeper under its own `Hosts` key. Confirmed live:
+        entries carry PhysAddress/IPAddress/HostName/InterfaceType/Active as
+        expected, but no X_SAGEMCOM_SignalStrength/X_SAGEMCOM_RxRate and no
+        BytesSent/BytesReceived — those read as 0 via _int_field's default
+        until the correct xpath for that data is found (see docs/router/
+        sagemcom-xmo-api.md "Remaining captures needed").
+        """
+        resp = await self._client.get_value('Device/Hosts')
+        container = self._client._extract_result(resp, 0) or {}
+        hosts = container.get('Hosts', []) if isinstance(container, dict) else []
+        if isinstance(hosts, dict):
+            hosts = [hosts]
+        return hosts
 
     async def _get_port_traffic_samples(self) -> List[TrafficSample]:
         """Return one PER_PORT TrafficSample per active port (based on Stats/BytesSent)."""
