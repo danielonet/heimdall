@@ -12,12 +12,17 @@ from pyod.models.lof import LOF
 from sklearn.ensemble import IsolationForest
 
 from sentinel.adapter.models import TrafficSample
-from sentinel.ml.feature_builder import build_feature_vector
+from sentinel.ml.feature_builder import FEATURE_NAMES, build_feature_vector
 from sentinel.ml.model_store import ModelStore
 
 logger = logging.getLogger(__name__)
 
 ANOMALY_THRESHOLD = -0.1  # IsolationForest: < 0 = anomaly, -1 = extreme
+
+# Indices of the throughput columns in FEATURE_NAMES — the only ones that
+# reflect actual traffic volume. hour_of_day/day_of_week/is_night are
+# expected to have little variance early in a bootstrap window; that's fine.
+_VOLUME_FEATURE_INDICES = [FEATURE_NAMES.index('throughput_up_kbps'), FEATURE_NAMES.index('throughput_dn_kbps')]
 
 
 class AnomalyEngine:
@@ -89,6 +94,22 @@ class AnomalyEngine:
             self.train(mac)
 
     def _fit_and_save(self, mac: str, X: np.ndarray) -> None:
+        volume_std = X[:, _VOLUME_FEATURE_INDICES].std(axis=0)
+        if np.allclose(volume_std, 0):
+            # A model fit on flat up/down throughput (e.g. a data source that
+            # always reads 0, or a genuinely idle device) has no real signal to
+            # learn from — IsolationForest/LOF trained on it end up flagging
+            # every future sample, including identical repeats, as an outlier.
+            # Skip training and retry once traffic actually varies, rather than
+            # persist a model that would flood alerts.
+            logger.warning(
+                'Skipping anomaly model training for %s — %d samples with no '
+                'throughput variance (up/down constant at %s/%s kbps)',
+                mac, len(X), X[0, _VOLUME_FEATURE_INDICES[0]], X[0, _VOLUME_FEATURE_INDICES[1]],
+            )
+            self._buffers.pop(mac, None)
+            return
+
         iso = IsolationForest(n_estimators=100, contamination=self._contamination, random_state=42)
         iso.fit(X)
 

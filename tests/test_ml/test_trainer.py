@@ -43,6 +43,9 @@ def engine(tmp_path):
 
 
 async def _seed_samples(count: int, granularity: str, days_ago: int = 0) -> None:
+    # Throughput must vary across rows — AnomalyEngine skips training on
+    # constant/flat volume data (see TestZeroVarianceGuard in
+    # test_anomaly_engine.py), so a fixed 100/200 every row would never train.
     now = datetime.now(timezone.utc) - timedelta(days=days_ago)
     async with get_session() as session:
         for i in range(count):
@@ -51,8 +54,8 @@ async def _seed_samples(count: int, granularity: str, days_ago: int = 0) -> None
                 mac_address=_MAC,
                 bytes_sent_delta=1000,
                 bytes_recv_delta=2000,
-                throughput_up_kbps=100,
-                throughput_dn_kbps=200,
+                throughput_up_kbps=95 + (i % 11),
+                throughput_dn_kbps=190 + (i % 23),
                 granularity=granularity,
                 poll_interval_s=15,
             ))
