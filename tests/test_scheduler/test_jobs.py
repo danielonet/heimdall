@@ -14,7 +14,8 @@ from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, Device, PortStats, TrafficSample
+from sentinel.db.models import Alert, Device, PortStats, TrafficSample, TrustedMac
+from sentinel.db.repositories import TrustedMacRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.pipeline import create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -103,6 +104,7 @@ async def _cleanup_mock_rows():
         await session.execute(delete(PortStats).where(PortStats.port_alias.in_(_MOCK_PORTS)))
         await session.execute(delete(Alert).where(Alert.device_mac.in_(_MOCK_MACS)))
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
+        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))
 
 
 class TestPollCycle:
@@ -114,6 +116,23 @@ class TestPollCycle:
             assert device is not None
             assert device.hostname == 'daniel-laptop'
             assert device.traffic_granularity == 'per_device'  # WiFi
+
+    async def test_is_online_persisted_true(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, 'a8:5e:60:f1:2c:3d')  # daniel-laptop, mock is_online=True
+            assert device.is_online is True
+
+    async def test_is_online_persisted_false(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        """Regression coverage: is_online must reflect the router's own Active
+        flag, not be silently dropped — see sentinel/scheduler/jobs.py:_upsert_devices
+        and frontend/src/lib/deviceFilters.js."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, 'd4:6e:0e:33:f2:1a')  # guest-phone, mock is_online=False
+            assert device.is_online is False
 
     async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
@@ -180,6 +199,26 @@ class TestPollCycle:
             )
             assert len(result.scalars().all()) == 1
 
+    async def test_last_seen_does_not_advance_for_a_device_that_stays_offline(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """Regression coverage: last_seen previously got bumped on every poll
+        for every device regardless of Active status, which is what made the
+        frontend's old last_seen-recency ONLINE guess always true. It must
+        only advance while the router reports the device as actually active."""
+        mac = 'd4:6e:0e:33:f2:1a'  # guest-phone, mock is_online=False on every poll
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            first_last_seen = (await session.get(Device, mac)).last_seen
+
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            second_last_seen = (await session.get(Device, mac)).last_seen
+
+        assert second_last_seen == first_last_seen
+
 
 class TestDetectionIntegration:
     async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
@@ -207,3 +246,34 @@ class TestDetectionIntegration:
             )
             alerts = result.scalars().all()
             assert len(alerts) == len(_MOCK_MACS)  # exactly one per device, not two
+
+    async def test_pretrusted_mac_raises_no_new_device_alert_even_with_no_devices_row(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """Regression coverage for re-baselining after a devices-table reset
+        (see scripts/seed_baseline.py) — a MAC in the persistent trusted_macs
+        registry must not flood a CRITICAL alert just because its devices row
+        is (still) missing."""
+        mac = 'a8:5e:60:f1:2c:3d'
+        await TrustedMacRepository().trust(mac)
+
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == mac, Alert.alert_type == 'NEW_DEVICE')
+            )
+            assert result.scalars().all() == []
+
+    async def test_pretrusted_mac_gets_is_trusted_carried_onto_new_devices_row(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        mac = 'a8:5e:60:f1:2c:3d'
+        await TrustedMacRepository().trust(mac)
+
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, mac)
+            assert device is not None
+            assert device.is_trusted is True

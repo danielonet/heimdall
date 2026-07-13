@@ -22,6 +22,7 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'tags': device.tags or [],
         'is_blocked': device.is_blocked,
         'is_trusted': device.is_trusted,
+        'is_online': device.is_online,
         'first_seen': device.first_seen.isoformat() if device.first_seen else None,
         'last_seen': device.last_seen.isoformat() if device.last_seen else None,
     }

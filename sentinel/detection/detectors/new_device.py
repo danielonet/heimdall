@@ -5,7 +5,7 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample
 from sentinel.db.models import Alert
-from sentinel.db.repositories import DeviceRepository
+from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
 from sentinel.detection.detectors.base import BaseDetector
 
 
@@ -14,16 +14,25 @@ class NewDeviceDetector(BaseDetector):
 
     Must run before the current poll's devices are upserted into PostgreSQL —
     otherwise device_repo.exists() would always be True by the time this runs.
+
+    Also skips MACs in the persistent trusted_macs registry, independent of
+    whether a devices row exists — that registry is meant to survive a
+    devices-table reset, so a previously-established baseline device doesn't
+    re-trigger a flood of CRITICAL alerts on the next poll after a reset (see
+    scripts/seed_baseline.py).
     """
 
     severity = 'CRITICAL'
 
-    def __init__(self, device_repo: DeviceRepository) -> None:
+    def __init__(self, device_repo: DeviceRepository, trusted_repo: TrustedMacRepository) -> None:
         self._repo = device_repo
+        self._trusted_repo = trusted_repo
 
     async def inspect_device(self, snapshot: DeviceSnapshot) -> Optional[Alert]:
         known = await self._repo.exists(snapshot.mac_address)
         if known:
+            return None
+        if await self._trusted_repo.is_trusted(snapshot.mac_address):
             return None
         return Alert(
             device_mac=snapshot.mac_address,

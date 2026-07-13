@@ -3,6 +3,8 @@
 The adapter is constructed with a mock password to avoid any real network calls.
 Only the pure conversion method _to_device_snapshot() is exercised here.
 """
+from unittest.mock import AsyncMock
+
 import pytest
 
 from sentinel.adapter.models import DeviceSnapshot
@@ -190,3 +192,101 @@ class TestToDeviceSnapshotDefaults:
         assert snap.signal_strength_dbm == -59
         assert snap.signal_rate_mbps == 130
         assert snap.is_online is True
+
+
+def _router_info_response(*, wan_lower_layers: str = 'Device/PPP/Interfaces/Interface[PPP_DATA]') -> dict:
+    """Shape confirmed against a live F@st 5670: DeviceInfo has no
+    WANMACAddress (just MACAddress); the WAN interface wraps as {"Interface":
+    {...}} (bracket qualifier stripped) with the IP nested under
+    IPv4Addresses[0].IPAddress; SSIDs return as a bare list, no wrapper."""
+    return {
+        'reply': {
+            'actions': [
+                {
+                    'id': 0,
+                    'callbacks': [{
+                        'xpath': 'Device/DeviceInfo',
+                        'parameters': {'value': {'DeviceInfo': {
+                            'ModelName': 'Fast5670_GPON',
+                            'SoftwareVersion': 'SGFg12000116',
+                            'SerialNumber': 'N7223428X002678',
+                            'MACAddress': 'C4:EB:42:F1:26:85',
+                            'UpTime': 84305,
+                        }}},
+                    }],
+                },
+                {
+                    'id': 1,
+                    'callbacks': [{
+                        'xpath': "Device/IP/Interfaces/Interface[Alias='IP_DATA']",
+                        'parameters': {'value': {'Interface': {
+                            'Status': 'UP',
+                            'LowerLayers': wan_lower_layers,
+                            'IPv4Addresses': [{'IPAddress': '89.139.25.209'}],
+                        }}},
+                    }],
+                },
+                {
+                    'id': 2,
+                    'callbacks': [{
+                        'xpath': 'Device/WiFi/SSIDs',
+                        'parameters': {'value': [
+                            {'SSID': 'MyHomeWiFi'},
+                            {'SSID': 'MyHomeWiFi'},  # same name, separate 2.4GHz/5GHz radio object
+                            {'SSID': ''},  # disabled/guest SSID slot — must be filtered out
+                        ]},
+                    }],
+                },
+            ],
+        }
+    }
+
+
+@pytest.mark.asyncio
+class TestGetRouterInfo:
+    async def test_parses_model_firmware_serial_uptime(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.model == 'Fast5670_GPON'
+        assert info.firmware == 'SGFg12000116'
+        assert info.serial == 'N7223428X002678'
+        assert info.uptime_seconds == 84305
+
+    async def test_wan_mac_comes_from_plain_macaddress_field(self, adapter):
+        """Regression: the old code looked for a WANMACAddress field that
+        doesn't exist on this firmware and always got ''."""
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.wan_mac == 'C4:EB:42:F1:26:85'
+
+    async def test_wan_ip_extracted_from_nested_ipv4_addresses(self, adapter):
+        """Regression: wan_ip was never fetched at all before."""
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.wan_ip == '89.139.25.209'
+
+    async def test_wan_status_from_interface_status(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.wan_status == 'UP'
+
+    async def test_ssids_extracted_deduped_and_blank_entries_filtered(self, adapter):
+        """Regression: ssids was never fetched at all before. Deduped because
+        the same SSID name is broadcast as a separate object per radio band."""
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.ssids == ['MyHomeWiFi']
+
+    async def test_wan_mode_inferred_pppoe_from_lower_layers(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response(
+            wan_lower_layers='Device/PPP/Interfaces/Interface[PPP_DATA]',
+        ))
+        info = await adapter.get_router_info()
+        assert info.wan_mode == 'PPPoE'
+
+    async def test_wan_mode_blank_when_lower_layers_has_no_ppp(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response(
+            wan_lower_layers='Device/Ethernet/VLANTerminations/VLANTermination[VLAN_DATA]',
+        ))
+        info = await adapter.get_router_info()
+        assert info.wan_mode == ''

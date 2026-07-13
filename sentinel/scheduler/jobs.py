@@ -30,6 +30,7 @@ from sentinel.api.websocket import (
     emit_wan_status,
 )
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
+from sentinel.db.repositories import TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -174,10 +175,17 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
     """Insert new devices / refresh known ones. Returns the set of newly-seen MACs."""
     now = datetime.now(timezone.utc)
     newly_seen: set[str] = set()
+    trusted_repo = TrustedMacRepository()
 
     for snapshot in devices:
         existing = await session.get(Device, snapshot.mac_address)
         if existing is None:
+            # A MAC in the persistent trusted_macs registry (see
+            # TrustedMacRepository) but with no devices row is one that was
+            # trusted before a devices-table reset — carry is_trusted forward
+            # so the UI reflects it immediately rather than looking newly
+            # untrusted until someone re-checks the box.
+            was_trusted = await trusted_repo.is_trusted(snapshot.mac_address)
             session.add(Device(
                 mac_address=snapshot.mac_address,
                 ip_address=snapshot.ip_address,
@@ -188,6 +196,8 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 # docs/router/wired-monitoring-caveat.md. port_alias is left
                 # unset here; it's assigned manually per docs/architecture/07.
                 traffic_granularity='per_port' if snapshot.interface_name == 'Ethernet' else 'per_device',
+                is_trusted=was_trusted,
+                is_online=snapshot.is_online,
                 first_seen=now,
                 last_seen=now,
             ))
@@ -197,7 +207,14 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             existing.hostname = snapshot.hostname
             existing.vendor_name = snapshot.vendor_name
             existing.interface_name = snapshot.interface_name
-            existing.last_seen = now
+            existing.is_online = snapshot.is_online
+            # Only advance last_seen while the router reports this device as
+            # actually active — otherwise every device's last_seen gets
+            # bumped on every poll regardless of connectivity, which is
+            # exactly the bug that made the frontend's ONLINE/OFFLINE filter
+            # (previously derived from last_seen recency) always say "online".
+            if snapshot.is_online:
+                existing.last_seen = now
 
     return newly_seen
 

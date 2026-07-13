@@ -42,7 +42,7 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
     Port/WAN-level detectors are intentionally left out for now — see
     docs/architecture/04-detection-pipeline.md.
     """
-    from sentinel.db.repositories import DeviceRepository
+    from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
     from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
     from sentinel.detection.detectors.high_upload import HighUploadDetector
     from sentinel.detection.detectors.new_device import NewDeviceDetector
@@ -50,7 +50,7 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
     from sentinel.detection.detectors.vendor_mismatch import VendorMismatchDetector
 
     return DetectionPipeline([
-        NewDeviceDetector(DeviceRepository()),
+        NewDeviceDetector(DeviceRepository(), TrustedMacRepository()),
         HighUploadDetector(),
         VendorMismatchDetector(),
         SignalAnomalyDetector(),

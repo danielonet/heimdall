@@ -187,11 +187,13 @@ Sub-path pattern: `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/{sub-pat
 
 | XPath | Status | Data |
 |-------|--------|------|
-| `Device/IP/Interfaces/Interface[Alias='IP_DATA']/Status` | ✅ | WAN state: `UP` \| `DOWN` |
-| `Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/*` | ✅* | Total household bytes — sub-paths to verify |
+| `Device/IP/Interfaces/Interface[Alias='IP_DATA']` | ✅ | Confirmed live — fetch the whole object, not just `/Status`: `Status` (`UP`\|`DOWN`), `LowerLayers` (references a `Device/PPP/Interfaces/...` path when the WAN mode is PPPoE — used to infer `wan_mode` since `CurrentWanMode` below doesn't exist), and `IPv4Addresses[0].IPAddress` for the actual WAN IP (**not** a top-level field — it's nested one level deeper than `/Status` was fetching). Response wraps as `{"Interface": {...}}` — note the `[Alias='IP_DATA']` qualifier is stripped from the wrapper key by the router, see `_extract_result`. |
+| `Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/*` | ⬜ | Total household bytes — sub-paths to verify |
 | `Device/IP/Interfaces/Interface[Alias='PPP_DATA']/Stats/*` | ⬜ | PPPoE stats |
-| `Device/IP/Interfaces/Interface[Alias='IP_IPTV']/Status` | ✅ | IPTV interface: UP, 278.1 KB received |
-| `Device/Services/NetworkCfg/CurrentWanMode` | ✅ | `PPPoE` \| `IPoE` \| `Bridge` |
+| `Device/IP/Interfaces/Interface[Alias='IP_IPTV']/Status` | ⬜ | IPTV interface — unverified since the Hosts xpath mismatch was found |
+| `Device/Services/NetworkCfg/CurrentWanMode` | ❌ | **Does not exist on this firmware** — `XMO_UNKNOWN_PATH_ERR`, confirmed live despite this doc previously marking it ✅. `wan_mode` is inferred instead from whether `IP_DATA`'s `LowerLayers` references a PPP interface. The real xpath for this, if one exists, hasn't been found yet. |
+| `Device/DeviceInfo` → `MACAddress` | ✅ | This is the WAN MAC — **not** a `WANMACAddress` field, which doesn't exist on this firmware (the adapter previously looked for it and always got `''`). |
+| `Device/WiFi/SSIDs` | ✅ | Confirmed live. Returns a **bare list** (no wrapper dict, unlike `Device/Hosts`) of SSID objects, each with an `SSID` field holding the actual broadcast name (e.g. `"MyHomeWiFi"`). The same name typically appears twice — once per radio band (2.4GHz/5GHz) — dedupe before display. |
 
 ---
 

@@ -186,27 +186,55 @@ class SagemcomXmoAdapter(RouterAdapter):
         return True
 
     async def get_router_info(self) -> RouterInfo:
-        """Return router metadata: model, firmware, uptime, WAN status."""
+        """Return router metadata: model, firmware, uptime, WAN status.
+
+        Several fields here were confirmed wrong against a live router and
+        fixed: `Device/DeviceInfo` has no `WANMACAddress` field (that's just
+        `MACAddress`); the WAN IP was never fetched at all (it lives at
+        `Device/IP/Interfaces/Interface[Alias='IP_DATA']/IPv4Addresses[0]/
+        IPAddress`, one level deeper than the `/Status` xpath previously
+        fetched); SSIDs were never fetched at all; and `Device/Services/
+        NetworkCfg/CurrentWanMode` doesn't exist on this firmware
+        (XMO_UNKNOWN_PATH_ERR) — wan_mode is inferred instead from whether the
+        WAN interface's LowerLayers reference a PPP interface, since no
+        working direct xpath for it has been found yet (see docs/router/
+        sagemcom-xmo-api.md "Remaining captures needed").
+        """
         resp = await self._client.get_values([
             'Device/DeviceInfo',
-            "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Status",
-            "Device/Services/NetworkCfg/CurrentWanMode",
+            "Device/IP/Interfaces/Interface[Alias='IP_DATA']",
+            'Device/WiFi/SSIDs',
         ])
 
         info = self._client._extract_result(resp, 0) or {}
         if isinstance(info, list) and info:
             info = info[0]
-        wan_status_raw = self._client._extract_result(resp, 1)
-        wan_mode_raw = self._client._extract_result(resp, 2)
+
+        wan_interface = self._client._extract_result(resp, 1) or {}
+        if isinstance(wan_interface, list) and wan_interface:
+            wan_interface = wan_interface[0]
+
+        ssids_raw = self._client._extract_result(resp, 2) or []
+        if isinstance(ssids_raw, dict):
+            ssids_raw = [ssids_raw]
+
+        wan_ipv4_addresses = wan_interface.get('IPv4Addresses') or []
+        wan_ip = wan_ipv4_addresses[0].get('IPAddress', '') if wan_ipv4_addresses else ''
+        wan_mode = 'PPPoE' if 'PPP' in (wan_interface.get('LowerLayers') or '') else ''
 
         return RouterInfo(
             model=_str_field(info, 'ModelName'),
             firmware=_str_field(info, 'SoftwareVersion'),
             serial=_str_field(info, 'SerialNumber'),
-            wan_mac=_str_field(info, 'WANMACAddress'),
-            wan_status=_scalar_str(wan_status_raw, 'UNKNOWN'),
-            wan_mode=_scalar_str(wan_mode_raw, ''),
+            wan_ip=wan_ip,
+            wan_mac=_str_field(info, 'MACAddress'),
+            wan_status=_scalar_str(wan_interface.get('Status'), 'UNKNOWN'),
+            wan_mode=wan_mode,
             uptime_seconds=_int_field(info, 'UpTime'),
+            # dict.fromkeys dedupes while preserving order — each SSID name is
+            # typically broadcast as a separate XMO object per radio band
+            # (2.4GHz/5GHz), so the same name appears more than once here.
+            ssids=list(dict.fromkeys(s['SSID'] for s in ssids_raw if isinstance(s, dict) and s.get('SSID'))),
         )
 
     # ──────────────────────────────────────────────────────────────────────────

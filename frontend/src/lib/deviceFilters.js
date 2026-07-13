@@ -1,12 +1,10 @@
-// "Online" isn't a field the REST API returns (only the live socket payload
-// has is_online, and only once a device has actually emitted an update) — so
-// it's derived here from last_seen recency instead. 60s is a generous multiple
-// of the default 15s poll interval, not a backend-declared threshold.
-const ONLINE_THRESHOLD_MS = 60_000
-
+// is_online reflects the router's own Active flag for this device as of the
+// most recent poll (see sentinel/scheduler/jobs.py:_upsert_devices) — not a
+// last_seen-recency guess. A device can sit in the registry indefinitely
+// without ever being active again (e.g. a reserved DHCP pool slot), so
+// recency alone was never a reliable proxy for "currently connected".
 export function isDeviceOnline(device) {
-  if (!device.last_seen) return false
-  return Date.now() - new Date(device.last_seen).getTime() < ONLINE_THRESHOLD_MS
+  return Boolean(device.is_online)
 }
 
 export function filterDevices(devices, { search, connectivity, network, trust }) {

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
-from sentinel.db.models import Alert, Device, TrafficSample
+from sentinel.db.models import Alert, Device, TrafficSample, TrustedMac
 from sentinel.db.session import get_session
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
@@ -54,6 +54,14 @@ class TestListDevices:
         assert len(body['devices']) == 1
         assert body['devices'][0]['mac_address'] == _MAC
         assert body['devices'][0]['hostname'] == 'test-device'
+
+    def test_is_online_is_exposed(self, client):
+        """Regression coverage: is_online was computed correctly by the router
+        adapter but silently dropped before reaching the API — see
+        sentinel/scheduler/jobs.py:_upsert_devices."""
+        _seed_device(is_online=True)
+        resp = client.get('/api/devices')
+        assert resp.get_json()['devices'][0]['is_online'] is True
 
     def test_includes_latest_traffic(self, client):
         _seed_device()
@@ -113,6 +121,27 @@ class TestPatchDevice:
         _seed_device()
         resp = client.patch(f'/api/devices/{_MAC}', json={'is_trusted': True})
         assert resp.get_json()['is_trusted'] is True
+
+    def test_setting_is_trusted_writes_through_to_trusted_macs(self, client):
+        """The persistent registry, unlike this devices row, must survive a
+        devices-table reset — see TrustedMacRepository."""
+        _seed_device()
+        client.patch(f'/api/devices/{_MAC}', json={'is_trusted': True})
+
+        async def _check():
+            async with get_session() as session:
+                return await session.get(TrustedMac, _MAC)
+        assert asyncio.run(_check()) is not None
+
+    def test_clearing_is_trusted_removes_it_from_trusted_macs(self, client):
+        _seed_device()
+        client.patch(f'/api/devices/{_MAC}', json={'is_trusted': True})
+        client.patch(f'/api/devices/{_MAC}', json={'is_trusted': False})
+
+        async def _check():
+            async with get_session() as session:
+                return await session.get(TrustedMac, _MAC)
+        assert asyncio.run(_check()) is None
 
     def test_ignores_unknown_fields(self, client):
         _seed_device()

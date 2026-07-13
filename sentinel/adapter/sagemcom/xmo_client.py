@@ -126,7 +126,9 @@ class XmoClient:
         level deeper, keyed by the xpath's own last segment (e.g. `Device/
         DeviceInfo` returns {"DeviceInfo": {...}}); that wrapper is peeled off
         here so callers can treat the return value as the flat object/list they
-        asked for.
+        asked for. A bracket qualifier on that last segment (e.g. `Interface[Alias=
+        'IP_DATA']`) is stripped before matching — the router echoes back just
+        `Interface` as the wrapper key, not the qualifier.
         """
         actions = resp.get('reply', {}).get('actions', [])
         for action in actions:
@@ -137,7 +139,7 @@ class XmoClient:
                 return None
             value = callbacks[0].get('parameters', {}).get('value')
             xpath = callbacks[0].get('xpath', '')
-            leaf = xpath.rsplit('/', 1)[-1] if xpath else ''
+            leaf = xpath.rsplit('/', 1)[-1].split('[')[0] if xpath else ''
             if isinstance(value, dict) and leaf in value:
                 return value[leaf]
             return value

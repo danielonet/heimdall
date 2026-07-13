@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from sentinel.api.serializers import alert_to_dict, device_to_dict, traffic_sample_to_dict
 from sentinel.db.models import Alert, Device, TrafficSample
+from sentinel.db.repositories import TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.scheduler.scheduler import get_scheduler
 
@@ -75,7 +76,13 @@ async def get_device(mac: str):
 
 @bp.route('/<mac>', methods=['PATCH'])
 async def patch_device(mac: str):
-    """Update device metadata: hostname alias, tags, trusted flag."""
+    """Update device metadata: hostname alias, tags, trusted flag.
+
+    Setting is_trusted also writes through to the persistent trusted_macs
+    registry (and clearing it removes the entry) — that registry, unlike this
+    row, survives a devices-table reset, so NewDeviceDetector won't re-flag
+    this MAC as CRITICAL if that ever happens. See TrustedMacRepository.
+    """
     body = request.get_json(silent=True) or {}
 
     async with get_session() as session:
@@ -91,6 +98,13 @@ async def patch_device(mac: str):
             device.is_trusted = bool(body['is_trusted'])
 
         payload = device_to_dict(device)
+
+    if 'is_trusted' in body:
+        trusted_repo = TrustedMacRepository()
+        if bool(body['is_trusted']):
+            await trusted_repo.trust(mac)
+        else:
+            await trusted_repo.untrust(mac)
 
     return jsonify(payload)
 

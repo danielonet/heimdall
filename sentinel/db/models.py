@@ -34,8 +34,21 @@ class Device(Base):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     is_blocked: Mapped[bool] = mapped_column(Boolean, server_default='false')
     is_trusted: Mapped[bool] = mapped_column(Boolean, server_default='false')
+    is_online: Mapped[bool] = mapped_column(Boolean, server_default='false')
     first_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class TrustedMac(Base):
+    """A permanently-trusted MAC address, independent of the devices table's
+    lifecycle — so a device already established as trusted doesn't re-trigger
+    NewDeviceDetector if `devices` is ever cleared/reset (see NewDeviceDetector
+    and scripts/seed_baseline.py)."""
+
+    __tablename__ = 'trusted_macs'
+
+    mac_address: Mapped[str] = mapped_column(String(17), primary_key=True)
+    trusted_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class TrafficSample(Base):
