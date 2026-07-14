@@ -9,12 +9,16 @@ import { AlertFeed } from '../../components/dashboard/AlertFeed'
 import { TrafficBarChart } from '../../components/dashboard/TrafficBarChart'
 import { ServiceStatusPanel } from '../../components/dashboard/ServiceStatusPanel'
 import { PortSummary } from '../../components/dashboard/PortSummary'
+import { isDeviceOnline } from '../../lib/deviceFilters'
 
 export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, health, ports, alertsTotal }) {
+  const onlineDevices = devices.filter(isDeviceOnline)
+  const onlineCount = onlineDevices.length
+
   return (
     <div className="space-y-px bg-border p-px">
       <div className="grid grid-cols-3 gap-px bg-border">
-        <MetricCard label="DEVICES ONLINE" tag="LIVE" value={devices.length} accent="green" />
+        <MetricCard label="DEVICES ONLINE" tag="LIVE" value={onlineCount} accent="green" />
         <MetricCard
           label="ACTIVE ALERTS"
           tag={alertsTotal > 0 ? 'REVIEW' : 'CLEAR'}
@@ -33,8 +37,8 @@ export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, 
         <div className="col-span-6 border border-border bg-surface p-4">
           <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">CONNECTED HOSTS</div>
           <div>
-            {devices.length === 0 && <div className="text-[10px] text-text-muted">No devices yet.</div>}
-            {devices.slice(0, 8).map((d) => (
+            {onlineDevices.length === 0 && <div className="text-[10px] text-text-muted">No devices online.</div>}
+            {onlineDevices.slice(0, 8).map((d) => (
               <div
                 key={d.mac_address}
                 className="flex items-center gap-3 border-b border-border/50 py-1.5 text-[10px] last:border-none"
@@ -53,7 +57,7 @@ export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, 
 
         <div className="col-span-3 border border-border bg-surface p-4">
           <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">BANDWIDTH USAGE</div>
-          <TrafficBarChart devices={devices} />
+          <TrafficBarChart devices={onlineDevices} />
         </div>
 
         <div className="col-span-3">

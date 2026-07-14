@@ -198,6 +198,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 traffic_granularity='per_port' if snapshot.interface_name == 'Ethernet' else 'per_device',
                 is_trusted=was_trusted,
                 is_online=snapshot.is_online,
+                ever_connected=snapshot.is_online,
                 first_seen=now,
                 last_seen=now,
             ))
@@ -208,6 +209,8 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             existing.vendor_name = snapshot.vendor_name
             existing.interface_name = snapshot.interface_name
             existing.is_online = snapshot.is_online
+            if snapshot.is_online:
+                existing.ever_connected = True
             # Only advance last_seen while the router reports this device as
             # actually active — otherwise every device's last_seen gets
             # bumped on every poll regardless of connectivity, which is

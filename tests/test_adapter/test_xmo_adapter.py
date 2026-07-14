@@ -126,6 +126,201 @@ class TestToDeviceSnapshotSignal:
         assert snap.signal_rate_mbps == 0
 
 
+def _associated_client(**kwargs) -> dict:
+    """A minimal AssociatedDevices entry, matching a live capture."""
+    defaults = {
+        'MACAddress': 'da:d4:19:31:c0:e9',
+        'Active': True,
+        'SignalStrength': -60,
+        'LastDataDownlinkRate': 72222,
+        'LastDataUplinkRate': 65000,
+        'Stats': {'BytesSent': '1000000', 'BytesReceived': '2000000'},
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+class TestToDeviceSnapshotWithAssociatedDevices:
+    """Device/Hosts entries have no usable signal data on this firmware —
+    AssociatedDevices (see _get_associated_devices) is the real source."""
+
+    def test_signal_strength_comes_from_associated_entry(self, adapter):
+        host = _wifi_host(X_SAGEMCOM_SignalStrength=-59)  # would be wrong/stale if used
+        associated = {'da:d4:19:31:c0:e9': _associated_client(SignalStrength=-71)}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.signal_strength_dbm == -71
+
+    def test_signal_rate_converted_from_kbps_to_mbps(self, adapter):
+        """Confirmed live: LastDataDownlinkRate 72222 ~= MaxBitRate 72200 for
+        an 802.11n client — the field is in kbps, not Mbps."""
+        host = _wifi_host()
+        associated = {'da:d4:19:31:c0:e9': _associated_client(LastDataDownlinkRate=864_000)}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.signal_rate_mbps == 864
+
+    def test_falls_back_to_host_fields_when_mac_not_in_associated(self, adapter):
+        host = _wifi_host(X_SAGEMCOM_SignalStrength=-59, X_SAGEMCOM_RxRate=130)
+        associated = {'11:22:33:44:55:66': _associated_client()}  # different MAC
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.signal_strength_dbm == -59
+        assert snap.signal_rate_mbps == 130
+
+    def test_none_associated_falls_back_to_host_fields(self, adapter):
+        """Backward compat: existing callers that don't pass associated at all."""
+        host = _wifi_host(X_SAGEMCOM_SignalStrength=-59, X_SAGEMCOM_RxRate=130)
+        snap = adapter._to_device_snapshot(host)
+        assert snap.signal_strength_dbm == -59
+        assert snap.signal_rate_mbps == 130
+
+
+@pytest.mark.asyncio
+class TestGetAssociatedDevices:
+    async def test_merges_clients_across_access_points(self, adapter):
+        def response_for(clients_by_ap):
+            return {
+                'reply': {
+                    'actions': [
+                        {
+                            'id': i,
+                            'callbacks': [{
+                                'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{alias}"]/AssociatedDevices',
+                                'parameters': {'value': clients},
+                            }],
+                        }
+                        for i, (alias, clients) in enumerate(clients_by_ap.items())
+                    ],
+                }
+            }
+
+        adapter._client.post = AsyncMock(return_value=response_for({
+            'PRIV0': [_associated_client(MACAddress='aa:aa:aa:aa:aa:aa')],
+            'VID1': [_associated_client(MACAddress='bb:bb:bb:bb:bb:bb')],
+            'GUEST2G': [],
+            'GUEST5G': [],
+            'AP_BACKHAUL': [],
+        }))
+        result = await adapter._get_associated_devices()
+        assert set(result.keys()) == {'aa:aa:aa:aa:aa:aa', 'bb:bb:bb:bb:bb:bb'}
+
+    async def test_prefers_the_active_entry_when_mac_appears_on_two_aps(self, adapter):
+        """A device mid-roam between bands can have a stale entry on one AP
+        and a live one on another — the Active entry must win."""
+        mac = 'aa:aa:aa:aa:aa:aa'
+        response = {
+            'reply': {
+                'actions': [
+                    {
+                        'id': 0,
+                        'callbacks': [{
+                            'xpath': 'Device/WiFi/AccessPoints/AccessPoint[Alias="PRIV0"]/AssociatedDevices',
+                            'parameters': {'value': [_associated_client(MACAddress=mac, Active=False, SignalStrength=-90)]},
+                        }],
+                    },
+                    {
+                        'id': 1,
+                        'callbacks': [{
+                            'xpath': 'Device/WiFi/AccessPoints/AccessPoint[Alias="VID1"]/AssociatedDevices',
+                            'parameters': {'value': [_associated_client(MACAddress=mac, Active=True, SignalStrength=-55)]},
+                        }],
+                    },
+                ] + [
+                    {'id': i, 'callbacks': [{'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{a}"]/AssociatedDevices', 'parameters': {'value': []}}]}
+                    for i, a in enumerate(['GUEST2G', 'GUEST5G', 'AP_BACKHAUL'], start=2)
+                ],
+            }
+        }
+        adapter._client.post = AsyncMock(return_value=response)
+        result = await adapter._get_associated_devices()
+        assert result[mac]['SignalStrength'] == -55
+
+    async def test_mac_addresses_normalized_to_lowercase(self, adapter):
+        response = {
+            'reply': {
+                'actions': [
+                    {
+                        'id': i,
+                        'callbacks': [{
+                            'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{a}"]/AssociatedDevices',
+                            'parameters': {'value': [_associated_client(MACAddress='AA:BB:CC:DD:EE:FF')] if a == 'PRIV0' else []},
+                        }],
+                    }
+                    for i, a in enumerate(['PRIV0', 'VID1', 'GUEST2G', 'GUEST5G', 'AP_BACKHAUL'])
+                ],
+            }
+        }
+        adapter._client.post = AsyncMock(return_value=response)
+        result = await adapter._get_associated_devices()
+        assert 'aa:bb:cc:dd:ee:ff' in result
+
+
+@pytest.mark.asyncio
+class TestGetTrafficSamplesWifiDirection:
+    """Regression coverage: from the AP's own perspective, Stats.BytesSent is
+    AP-to-device (download) and Stats.BytesReceived is device-to-AP (upload)
+    — confirmed empirically against live traffic (most devices accumulate far
+    more Sent than Received, matching typical download-heavy usage). This is
+    the opposite of the WAN interface's Sent/Received convention, so the
+    fields must be swapped when feeding TrafficDeltaCalculator.compute(),
+    whose sent_now parameter always maps to throughput_up_kbps."""
+
+    async def test_ap_sent_becomes_throughput_down_not_up(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        hosts_response = {
+            'reply': {'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': 'Device/Hosts',
+                    # Real shape has two nesting levels: the outer "Hosts" key
+                    # is peeled off by _extract_result's leaf-unwrap, then
+                    # _get_hosts() itself pulls the actual list from the inner
+                    # "Hosts" key of what's left — see _get_hosts()'s docstring.
+                    'parameters': {'value': {'Hosts': {'Hosts': [_wifi_host(PhysAddress=mac.upper())]}}},
+                }],
+            }]},
+        }
+        port_stats_response = {'reply': {'actions': [
+            {'id': i, 'callbacks': [{'xpath': f'Device/Ethernet/Interfaces/Interface[Alias="PHY{i+1}"]/Stats', 'parameters': {'value': {}}}]}
+            for i in range(5)
+        ]}}
+
+        def associated_response(bytes_sent: int, bytes_received: int) -> dict:
+            return {
+                'reply': {
+                    'actions': [
+                        {
+                            'id': 0,
+                            'callbacks': [{
+                                'xpath': 'Device/WiFi/AccessPoints/AccessPoint[Alias="PRIV0"]/AssociatedDevices',
+                                'parameters': {'value': [_associated_client(
+                                    MACAddress=mac,
+                                    Stats={'BytesSent': str(bytes_sent), 'BytesReceived': str(bytes_received)},
+                                )]},
+                            }],
+                        },
+                    ] + [
+                        {'id': i, 'callbacks': [{'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{a}"]/AssociatedDevices', 'parameters': {'value': []}}]}
+                        for i, a in enumerate(['VID1', 'GUEST2G', 'GUEST5G', 'AP_BACKHAUL'], start=1)
+                    ],
+                }
+            }
+
+        adapter._client.get_value = AsyncMock(return_value=hosts_response)
+        adapter._client.post = AsyncMock(side_effect=[
+            associated_response(9_000_000, 1_000_000), port_stats_response,
+        ])
+        await adapter.get_traffic_samples()  # first poll establishes the baseline
+
+        # Second poll: BytesSent (AP->device) grew by 900KB, BytesReceived (device->AP) unchanged.
+        adapter._client.post = AsyncMock(side_effect=[
+            associated_response(9_900_000, 1_000_000), port_stats_response,
+        ])
+        samples = await adapter.get_traffic_samples()
+
+        wifi_sample = next(s for s in samples if s.mac_address == mac)
+        assert wifi_sample.throughput_dn_kbps > 0  # the AP-Sent growth must land in download
+        assert wifi_sample.throughput_up_kbps == 0  # AP-Received didn't change
+
+
 class TestToDeviceSnapshotActive:
     def test_active_true_boolean(self, adapter):
         snap = adapter._to_device_snapshot(_wifi_host(Active=True))

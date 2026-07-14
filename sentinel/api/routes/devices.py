@@ -20,7 +20,9 @@ bp = Blueprint('devices', __name__)
 async def list_devices():
     """All connected devices with latest snapshot, traffic, and threat score."""
     async with get_session() as session:
-        devices = (await session.execute(select(Device))).scalars().all()
+        devices = (await session.execute(
+            select(Device).order_by(Device.is_online.desc(), Device.last_seen.desc())
+        )).scalars().all()
 
         latest_samples = (await session.execute(
             select(TrafficSample)

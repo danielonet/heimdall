@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 _PORT_ALIASES = ['PHY1', 'PHY2', 'PHY3', 'PHY4', 'PHY5']
 
+# WiFi access point aliases (2.4GHz/5GHz main, 2.4GHz/5GHz guest, mesh backhaul)
+# confirmed live via Device/WiFi/AccessPoints/AccessPoint[@uid=N]/Alias — this
+# firmware has a fixed set of AP slots, not user-configurable in count.
+_ACCESS_POINT_ALIASES = ['PRIV0', 'VID1', 'GUEST2G', 'GUEST5G', 'AP_BACKHAUL']
+
 # Firewall chain used for MAC-based device blocking
 _BLOCK_CHAIN = 'Device/Firewall/Chain[Name="LAN_IN"]/Rule'
 
@@ -56,7 +61,8 @@ class SagemcomXmoAdapter(RouterAdapter):
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
         """Return all currently connected LAN devices."""
         hosts = await self._get_hosts()
-        return [self._to_device_snapshot(h) for h in hosts if isinstance(h, dict)]
+        associated = await self._get_associated_devices()
+        return [self._to_device_snapshot(h, associated) for h in hosts if isinstance(h, dict)]
 
     async def get_traffic_samples(self) -> List[TrafficSample]:
         """Return per-device (WiFi) and per-port (wired) traffic deltas.
@@ -66,8 +72,11 @@ class SagemcomXmoAdapter(RouterAdapter):
         """
         samples: List[TrafficSample] = []
 
-        # WiFi: per-device bytes from Host table
+        # WiFi: per-device bytes from the WiFi AssociatedDevices stats, not the
+        # Host table (Device/Hosts entries have no byte counters on this
+        # firmware — see _get_hosts).
         hosts = await self._get_hosts()
+        associated = await self._get_associated_devices()
 
         for h in hosts:
             if not isinstance(h, dict):
@@ -77,10 +86,17 @@ class SagemcomXmoAdapter(RouterAdapter):
             mac = _norm_mac(h.get('PhysAddress', ''))
             if not mac:
                 continue
-            sent = _int_field(h, 'BytesSent')
-            recv = _int_field(h, 'BytesReceived')
+            ap_stats = associated.get(mac, {}).get('Stats', {})
+            # Confirmed empirically against live traffic: from the AP's own
+            # perspective, "Sent" is AP-to-device (the device's download) and
+            # "Received" is device-to-AP (the device's upload) — the reverse
+            # of the WAN interface's Sent/Received convention. compute()'s
+            # sent_now always maps to throughput_up, so the AP fields are
+            # passed in swapped here.
+            device_download = _int_field(ap_stats, 'BytesSent')
+            device_upload = _int_field(ap_stats, 'BytesReceived')
             sample = self._device_delta.compute(
-                mac, sent, recv, TrafficGranularity.PER_DEVICE, self._poll_interval_s
+                mac, device_upload, device_download, TrafficGranularity.PER_DEVICE, self._poll_interval_s
             )
             samples.append(sample)
 
@@ -241,21 +257,41 @@ class SagemcomXmoAdapter(RouterAdapter):
     # Internal helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _to_device_snapshot(self, host: dict) -> DeviceSnapshot:
-        """Convert a raw XMO Host dict to a canonical DeviceSnapshot."""
+    def _to_device_snapshot(self, host: dict, associated: Optional[dict] = None) -> DeviceSnapshot:
+        """Convert a raw XMO Host dict to a canonical DeviceSnapshot.
+
+        `associated` is the mac -> AssociatedDevices-entry map from
+        _get_associated_devices() (optional so existing callers/tests that
+        only have a Host dict still work). Host entries have no usable signal
+        fields on this firmware (X_SAGEMCOM_SignalStrength/RxRate don't
+        exist); AssociatedDevices carries real SignalStrength (dBm) and
+        LastDataDownlinkRate (kbps) for WiFi clients instead.
+        """
         iface_type = host.get('InterfaceType', '')
         interface_name = 'WiFi' if iface_type == 'WiFi' else 'Ethernet'
         is_active = host.get('Active', False)
         if isinstance(is_active, str):
             is_active = is_active.lower() == 'true'
 
+        mac = _norm_mac(host.get('PhysAddress', ''))
+        client = (associated or {}).get(mac, {})
+
+        signal_strength_dbm = _int_field(client, 'SignalStrength') if client else _int_field(host, 'X_SAGEMCOM_SignalStrength')
+        # LastDataDownlinkRate is in kbps (confirmed live: 72222 ~= MaxBitRate
+        # 72200 for an 802.11n client) — divide down to the Mbps this field
+        # has always reported.
+        signal_rate_mbps = (
+            _int_field(client, 'LastDataDownlinkRate') // 1000
+            if client else _int_field(host, 'X_SAGEMCOM_RxRate')
+        )
+
         return DeviceSnapshot(
-            mac_address=_norm_mac(host.get('PhysAddress', '')),
+            mac_address=mac,
             ip_address=host.get('IPAddress', ''),
             hostname=host.get('HostName', ''),
             interface_name=interface_name,
-            signal_strength_dbm=_int_field(host, 'X_SAGEMCOM_SignalStrength'),
-            signal_rate_mbps=_int_field(host, 'X_SAGEMCOM_RxRate'),
+            signal_strength_dbm=signal_strength_dbm,
+            signal_rate_mbps=signal_rate_mbps,
             is_online=bool(is_active),
         )
 
@@ -268,9 +304,9 @@ class SagemcomXmoAdapter(RouterAdapter):
         nested one level deeper under its own `Hosts` key. Confirmed live:
         entries carry PhysAddress/IPAddress/HostName/InterfaceType/Active as
         expected, but no X_SAGEMCOM_SignalStrength/X_SAGEMCOM_RxRate and no
-        BytesSent/BytesReceived — those read as 0 via _int_field's default
-        until the correct xpath for that data is found (see docs/router/
-        sagemcom-xmo-api.md "Remaining captures needed").
+        BytesSent/BytesReceived — those always read as 0/empty here for WiFi
+        clients on this firmware. See _get_associated_devices() for the real
+        source of that data.
         """
         resp = await self._client.get_value('Device/Hosts')
         container = self._client._extract_result(resp, 0) or {}
@@ -278,6 +314,46 @@ class SagemcomXmoAdapter(RouterAdapter):
         if isinstance(hosts, dict):
             hosts = [hosts]
         return hosts
+
+    async def _get_associated_devices(self) -> dict[str, dict]:
+        """Return per-client WiFi stats keyed by normalized MAC address,
+        merged across every access point (2.4GHz/5GHz, main/guest/backhaul).
+
+        This is the real source for WiFi signal/traffic data on this firmware
+        — Device/Hosts entries have neither. The xpath is confirmed live:
+        `Device/WiFi/AccessPoints/AccessPoint[Alias="..."]/AssociatedDevices`
+        (plural — the singular `AssociatedDevice` the XMO docs and most
+        Sagemcom API examples use is XMO_UNKNOWN_PATH_ERR on this firmware).
+        Each entry carries SignalStrength (dBm), LastDataDownlinkRate/
+        LastDataUplinkRate (kbps), and cumulative Stats.BytesSent/BytesReceived.
+        """
+        actions = [
+            {
+                'id': i,
+                'method': 'getValue',
+                'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{alias}"]/AssociatedDevices',
+            }
+            for i, alias in enumerate(_ACCESS_POINT_ALIASES)
+        ]
+        resp = await self._client.post(actions)
+
+        by_mac: dict[str, dict] = {}
+        for i in range(len(_ACCESS_POINT_ALIASES)):
+            clients = self._client._extract_result(resp, i) or []
+            if isinstance(clients, dict):
+                clients = [clients]
+            for client in clients:
+                if not isinstance(client, dict):
+                    continue
+                mac = _norm_mac(client.get('MACAddress', ''))
+                if not mac:
+                    continue
+                # A device can have a stale entry on more than one AP object
+                # (e.g. mid-roam between bands) — prefer whichever the router
+                # currently reports as Active.
+                if mac not in by_mac or client.get('Active'):
+                    by_mac[mac] = client
+        return by_mac
 
     async def _get_port_traffic_samples(self) -> List[TrafficSample]:
         """Return one PER_PORT TrafficSample per active port (based on Stats/BytesSent)."""

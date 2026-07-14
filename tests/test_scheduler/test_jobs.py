@@ -30,6 +30,11 @@ _MOCK_MACS = [
     'a8:5e:60:f1:2c:3d', 'b4:b0:1d:8e:4f:5a', 'c8:1c:c3:2d:4b:6e',
     'd4:6e:0e:33:f2:1a', 'e8:31:cd:1f:4c:2e', 'f4:75:88:a9:3d:b2',
 ]
+# 'd4:6e:0e:33:f2:1a' (guest-phone) is the one MockSagemcomAdapter device with
+# is_online=False — NewDeviceDetector only alerts on an actual connection, so
+# it never fires NEW_DEVICE for that MAC. See test_new_device.py for the
+# focused regression coverage on that behavior.
+_MOCK_ONLINE_MACS = [m for m in _MOCK_MACS if m != 'd4:6e:0e:33:f2:1a']
 _MOCK_PORTS = ['PHY1', 'PHY2', 'PHY3', 'PHY4', 'PHY5']
 
 
@@ -221,7 +226,7 @@ class TestPollCycle:
 
 
 class TestDetectionIntegration:
-    async def test_first_poll_raises_new_device_alert_for_every_mock_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_first_poll_raises_new_device_alert_for_every_online_mock_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
@@ -231,8 +236,19 @@ class TestDetectionIntegration:
                 )
             )
             alerts = result.scalars().all()
-            assert {a.device_mac for a in alerts} == set(_MOCK_MACS)
+            assert {a.device_mac for a in alerts} == set(_MOCK_ONLINE_MACS)
             assert all(a.severity == 'CRITICAL' for a in alerts)
+
+    async def test_offline_mock_device_never_raises_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(
+                    Alert.device_mac == 'd4:6e:0e:33:f2:1a', Alert.alert_type == 'NEW_DEVICE'
+                )
+            )
+            assert result.scalars().all() == []
 
     async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # devices become known here
@@ -245,7 +261,7 @@ class TestDetectionIntegration:
                 )
             )
             alerts = result.scalars().all()
-            assert len(alerts) == len(_MOCK_MACS)  # exactly one per device, not two
+            assert len(alerts) == len(_MOCK_ONLINE_MACS)  # exactly one per online device, not two
 
     async def test_pretrusted_mac_raises_no_new_device_alert_even_with_no_devices_row(
         self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,

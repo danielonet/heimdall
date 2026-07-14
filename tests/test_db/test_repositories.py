@@ -49,6 +49,30 @@ class TestExists:
         assert await repo.exists(_MAC) is True
 
 
+class TestHasConnectedBefore:
+    async def test_no_row_returns_false(self):
+        repo = DeviceRepository()
+        assert await repo.has_connected_before(_MAC) is False
+
+    async def test_row_exists_but_never_connected_returns_false(self):
+        """The core regression: a devices row alone (e.g. a stale DHCP
+        reservation the router mentions but that never actually connected)
+        must not count as 'has connected before' — see NewDeviceDetector."""
+        async with get_session() as session:
+            session.add(Device(mac_address=_MAC, hostname='test-device', ever_connected=False))
+
+        repo = DeviceRepository()
+        assert await repo.exists(_MAC) is True
+        assert await repo.has_connected_before(_MAC) is False
+
+    async def test_ever_connected_true_returns_true(self):
+        async with get_session() as session:
+            session.add(Device(mac_address=_MAC, hostname='test-device', ever_connected=True))
+
+        repo = DeviceRepository()
+        assert await repo.has_connected_before(_MAC) is True
+
+
 class TestTrustedMacRepository:
     async def test_unknown_mac_is_not_trusted(self):
         repo = TrustedMacRepository()

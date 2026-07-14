@@ -129,7 +129,7 @@ peels that wrapper off automatically.
 | XPath | Status | Data |
 |-------|--------|------|
 | `Device/Hosts/Host` | ❌ | **Does not exist on this firmware** — `XMO_UNKNOWN_PATH_ERR` (16777243), confirmed live despite this doc previously marking it ✅. Use `Device/Hosts` instead. |
-| `Device/Hosts` | ✅ | Returns a container: `{"GlobalBlackAndWhitelistSwitch", "MasterBlacklistEnable", "SweepARP", "Hosts": [...]}` — the actual host list is the nested `Hosts` array, one level below what `_extract_result`'s xpath-leaf unwrap gives you. Each entry has MAC (`PhysAddress`), IP (`IPAddress`), hostname (`HostName`), `InterfaceType` (WiFi/Ethernet), `Active`. Confirmed **absent** on this firmware: `X_SAGEMCOM_SignalStrength`, `X_SAGEMCOM_RxRate`, `BytesSent`, `BytesReceived` (present instead: `SignalSgtrength` [sic — real firmware typo] as an enum string like `WL_SIGNAL_NONE`, not dBm). Per-device WiFi signal/traffic still needs the right xpath — see "Remaining captures needed" below. |
+| `Device/Hosts` | ✅ | Returns a container: `{"GlobalBlackAndWhitelistSwitch", "MasterBlacklistEnable", "SweepARP", "Hosts": [...]}` — the actual host list is the nested `Hosts` array, one level below what `_extract_result`'s xpath-leaf unwrap gives you. Each entry has MAC (`PhysAddress`), IP (`IPAddress`), hostname (`HostName`), `InterfaceType` (WiFi/Ethernet), `Active`. Confirmed **absent** on this firmware: `X_SAGEMCOM_SignalStrength`, `X_SAGEMCOM_RxRate`, `BytesSent`, `BytesReceived` (present instead: `SignalSgtrength` [sic — real firmware typo] as an enum string like `WL_SIGNAL_NONE`, not dBm). Per-device WiFi signal/traffic now comes from `Device/WiFi/AccessPoints/AccessPoint[Alias="X"]/AssociatedDevices` instead — see WiFi Layer below. |
 | `Device/DHCPv4/Server/Pool/Client` | ✅ | DHCP leases: MAC, IP, hostname, lease expiry |
 | `Device/DeviceInfo` | ✅ | Confirmed live. Model "Fast5670_GPON", firmware "SGFg12000116", serial "N7223428X002678", hardware version "2.00" |
 
@@ -144,7 +144,8 @@ peels that wrapper off automatically.
 | `Device/WiFi/Radios/Radio[Alias="wl0"]/Stats/*` | ✅* | 5GHz radio: 907 Mbps link speed, 50.48 GB sent, 6.50 GB recv, ErrorsSent 202257 |
 | `Device/WiFi/Radios/Radio[Alias="wl1"]/Stats/*` | ✅* | 2.4GHz radio: 72 Mbps link speed, 2.32 GB sent, 1.08 GB recv |
 | `Device/WiFi/Radios/Radio` | ✅ | Radio config: channel, TX power, standard (n/ac/ax) |
-| `Device/WiFi/AccessPoints/AccessPoint/.../AssociatedDevice` | ⬜ | Per-client: RSSI, TX/RX rate, connection time |
+| `Device/WiFi/AccessPoints/AccessPoint[Alias="X"]/AssociatedDevice` | ❌ | **Does not exist on this firmware** — `XMO_UNKNOWN_PATH_ERR`. Despite this being the form most XMO docs/examples (and the `iMicknl/python-sagemcom-api` library) suggest. |
+| `Device/WiFi/AccessPoints/AccessPoint[Alias="X"]/AssociatedDevices` | ✅ | **This is the real per-client WiFi data source** (note the plural — confirmed live, solves what `Device/Hosts` can't: real `SignalStrength` in dBm, `LastDataDownlinkRate`/`LastDataUplinkRate` in **kbps** (confirmed: 72222 ≈ `MaxBitRate` 72200 for an 802.11n client), `Active`, `MACAddress`, and cumulative `Stats.BytesSent`/`Stats.BytesReceived`. **Direction gotcha, confirmed empirically against live traffic**: from the AP's own perspective, `Sent` is AP→device (the device's *download*) and `Received` is device→AP (the device's *upload*) — the **opposite** of the WAN interface's Sent/Received convention (there, `Sent` = upload to the internet). Get this backwards and up/down are swapped in the UI. Valid `AccessPoint` aliases on this unit (fixed set, not user-configurable): `PRIV0`, `VID1`, `GUEST2G`, `GUEST5G`, `AP_BACKHAUL` — query all of them and merge by MAC to cover every band/SSID. A device mid-roam can have a stale entry on one AP and a live one on another; prefer whichever has `Active: true`. |
 
 ---
 
@@ -242,7 +243,7 @@ don't reliably match this ISP's customized data model.
 | Priority | Navigate to | Reveals |
 |----------|-------------|---------|
 | **CRITICAL** | Access Control → Parental Control → add temp block → capture XHR | Exact Firewall chain name and Rule xpath for `block_device()` — `Device/Firewall/Chain[Name="LAN_IN"]/Rule` is unverified |
-| **CRITICAL** | WiFi client list / Connected devices page (DevTools open) | Correct xpath for per-client WiFi signal strength and byte counters — `Device/Hosts` entries have neither (see Device & Host Layer above) |
-| Important | Ethernet ports page (DevTools open) | Confirm `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/Stats` still resolves — untested against this firmware since the Hosts xpath mismatch was found |
+| ~~CRITICAL~~ ✅ done | ~~WiFi client list / Connected devices page~~ | Solved: `Device/WiFi/AccessPoints/AccessPoint[Alias="X"]/AssociatedDevices` — see WiFi Layer above |
+| Important | Ethernet ports page (DevTools open) | Confirm `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/Stats` still resolves — untested against this firmware since the Hosts xpath mismatch was found. Also worth checking whether its Sent/Received has the same AP-side direction gotcha found on `AssociatedDevices/Stats` — currently unverified, may mean wired up/down are swapped in the Ports page too. |
 | Important | WAN → Statistics | `IP_DATA/Stats/*` sub-paths for total household bandwidth — untested |
 | Useful | WiFi → Stats (DevTools open) | Confirms Radio alias (`wl0`/`wl1`) vs SSID alias — untested |

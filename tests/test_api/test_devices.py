@@ -76,6 +76,28 @@ class TestListDevices:
         resp = client.get('/api/devices')
         assert resp.get_json()['devices'][0]['latest_traffic'] is None
 
+    def test_online_devices_sort_before_offline(self, client):
+        """Regression coverage: list_devices() had no ORDER BY at all, so an
+        unfiltered `.slice(0, N)` on the frontend (e.g. the dashboard's
+        "Connected Hosts" panel) could show mostly-offline devices in an
+        arbitrary order — see frontend/src/pages/dashboard/*.jsx."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        async def _seed():
+            async with get_session() as session:
+                session.add(Device(mac_address='aa:aa:aa:aa:aa:aa', hostname='offline-device',
+                                    is_online=False, last_seen=now))
+                session.add(Device(mac_address='bb:bb:bb:bb:bb:bb', hostname='online-device',
+                                    is_online=True, last_seen=now - timedelta(minutes=5)))
+        asyncio.run(_seed())
+
+        resp = client.get('/api/devices')
+        macs_in_order = [d['mac_address'] for d in resp.get_json()['devices']]
+        our_macs_in_order = [m for m in macs_in_order if m in ('aa:aa:aa:aa:aa:aa', 'bb:bb:bb:bb:bb:bb')]
+        assert our_macs_in_order == ['bb:bb:bb:bb:bb:bb', 'aa:aa:aa:aa:aa:aa']
+
     def test_unacknowledged_alert_count(self, client):
         _seed_device()
         _seed_alert(acknowledged=False)

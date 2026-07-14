@@ -35,6 +35,11 @@ class Device(Base):
     is_blocked: Mapped[bool] = mapped_column(Boolean, server_default='false')
     is_trusted: Mapped[bool] = mapped_column(Boolean, server_default='false')
     is_online: Mapped[bool] = mapped_column(Boolean, server_default='false')
+    # True once this MAC has ever been seen with is_online=True — distinct
+    # from the row simply existing, which happens for any Hosts/
+    # AssociatedDevices sighting regardless of actual connection. See
+    # NewDeviceDetector, which alerts on this rather than plain row existence.
+    ever_connected: Mapped[bool] = mapped_column(Boolean, server_default='false')
     first_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 

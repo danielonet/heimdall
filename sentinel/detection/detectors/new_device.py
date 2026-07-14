@@ -1,4 +1,4 @@
-"""NewDeviceDetector — fires when a MAC address is seen for the first time."""
+"""NewDeviceDetector — fires when a device actually connects for the first time."""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,15 +10,23 @@ from sentinel.detection.detectors.base import BaseDetector
 
 
 class NewDeviceDetector(BaseDetector):
-    """Flags any device whose MAC address isn't already in the device registry.
+    """Flags a device the first time it's actually connected.
+
+    Deliberately does NOT alert on every MAC the router's Hosts/
+    AssociatedDevices tables mention — a device can show up there without
+    ever really connecting (a stale DHCP reservation, a device only briefly
+    visible, a probe) via `is_online=False`. Only a real connection
+    (is_online=True) that hasn't been seen before (has_connected_before)
+    counts as "new".
 
     Must run before the current poll's devices are upserted into PostgreSQL —
-    otherwise device_repo.exists() would always be True by the time this runs.
+    otherwise device_repo.has_connected_before() would already reflect this
+    poll's data by the time this runs.
 
     Also skips MACs in the persistent trusted_macs registry, independent of
-    whether a devices row exists — that registry is meant to survive a
-    devices-table reset, so a previously-established baseline device doesn't
-    re-trigger a flood of CRITICAL alerts on the next poll after a reset (see
+    connection history — that registry is meant to survive a devices-table
+    reset, so a previously-established baseline device doesn't re-trigger a
+    flood of CRITICAL alerts on the next poll after a reset (see
     scripts/seed_baseline.py).
     """
 
@@ -29,8 +37,9 @@ class NewDeviceDetector(BaseDetector):
         self._trusted_repo = trusted_repo
 
     async def inspect_device(self, snapshot: DeviceSnapshot) -> Optional[Alert]:
-        known = await self._repo.exists(snapshot.mac_address)
-        if known:
+        if not snapshot.is_online:
+            return None
+        if await self._repo.has_connected_before(snapshot.mac_address):
             return None
         if await self._trusted_repo.is_trusted(snapshot.mac_address):
             return None

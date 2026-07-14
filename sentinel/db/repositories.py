@@ -15,9 +15,27 @@ class DeviceRepository:
     """Read access to the devices table."""
 
     async def exists(self, mac_address: str) -> bool:
-        """Return True if this MAC address is already in the device registry."""
+        """Return True if this MAC address is already in the device registry.
+
+        Note: a row exists for any MAC the router's Hosts/AssociatedDevices
+        tables have ever mentioned, active or not — this is not the same as
+        "has this device ever actually connected". See has_connected_before.
+        """
         async with get_session() as session:
             return await session.get(Device, mac_address) is not None
+
+    async def has_connected_before(self, mac_address: str) -> bool:
+        """Return True if this MAC has ever been seen with is_online=True.
+
+        Used by NewDeviceDetector instead of exists() — a device that's only
+        ever been visible-but-not-connected (a stale DHCP reservation, a
+        probe, etc.) already has a devices row, but has never really
+        connected; exists() alone would wrongly suppress its first real
+        NEW_DEVICE alert.
+        """
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            return bool(device and device.ever_connected)
 
 
 class TrustedMacRepository:
