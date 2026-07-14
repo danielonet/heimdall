@@ -63,6 +63,29 @@ class TestListDevices:
         resp = client.get('/api/devices')
         assert resp.get_json()['devices'][0]['is_online'] is True
 
+    def test_signal_strength_and_rate_are_exposed(self, client):
+        """Regression coverage: signal_strength_dbm/signal_rate_mbps were
+        computed correctly by the adapter (AssociatedDevices fix) but never
+        persisted or serialized — see sentinel/api/serializers.py."""
+        _seed_device(signal_strength_dbm=-59, signal_rate_mbps=130)
+        resp = client.get('/api/devices')
+        device = resp.get_json()['devices'][0]
+        assert device['signal_strength_dbm'] == -59
+        assert device['signal_rate_mbps'] == 130
+
+    def test_port_alias_is_exposed(self, client):
+        _seed_device(interface_name='Ethernet', port_alias='PHY5')
+        resp = client.get('/api/devices')
+        assert resp.get_json()['devices'][0]['port_alias'] == 'PHY5'
+
+    def test_ever_connected_is_exposed(self, client):
+        """Regression coverage: the frontend flags devices the router has
+        only ever listed but that never actually connected — see
+        NeverConnectedIcon and NewDeviceDetector."""
+        _seed_device(ever_connected=False)
+        resp = client.get('/api/devices')
+        assert resp.get_json()['devices'][0]['ever_connected'] is False
+
     def test_includes_latest_traffic(self, client):
         _seed_device()
         _seed_traffic_sample()

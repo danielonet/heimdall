@@ -3,6 +3,8 @@ import { StatusDot } from '../../components/StatusDot'
 import { MacAddress } from '../../components/MacAddress'
 import { TrafficDisplay } from '../../components/TrafficDisplay'
 import { Badge } from '../../components/Badge'
+import { SignalBars } from '../../components/SignalBars'
+import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
 import { BlockButton } from '../../components/BlockButton'
 import { UnblockButton } from '../../components/UnblockButton'
 import { isDeviceOnline } from '../../lib/deviceFilters'
@@ -64,14 +66,22 @@ export function MobileDevicesList({ devices, totalCount, isLoading, filters, set
           >
             <StatusDot variant={d.is_blocked ? 'red' : isDeviceOnline(d) ? 'green' : 'muted'} />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[11px] text-text-primary">
-                {d.hostname || <MacAddress mac={d.mac_address} />}
+              <div className="flex items-center gap-1.5">
+                {!d.ever_connected && <NeverConnectedIcon />}
+                <div className="truncate text-[11px] text-text-primary">
+                  {d.hostname || <MacAddress mac={d.mac_address} />}
+                </div>
               </div>
               <div className="truncate text-[9px] text-text-muted">{d.ip_address || '—'}</div>
             </div>
             <div className="flex flex-shrink-0 flex-col items-end gap-1">
               <TrafficDisplay sample={d.latest_traffic} />
               <div className="flex items-center gap-1">
+                {d.interface_name === 'Ethernet' ? (
+                  d.port_alias && <Badge variant="info">{d.port_alias}</Badge>
+                ) : (
+                  <SignalBars dbm={d.signal_strength_dbm} />
+                )}
                 <Badge variant="info">{d.interface_name === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>
                 {d.is_trusted ? (
                   <Badge variant="success">OK</Badge>

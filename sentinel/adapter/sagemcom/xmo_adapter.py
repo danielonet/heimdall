@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
@@ -69,6 +70,10 @@ class SagemcomXmoAdapter(RouterAdapter):
 
         WiFi samples have granularity=PER_DEVICE.
         Wired port samples have granularity=PER_PORT and mac_address=port_alias.
+        A wired port with exactly one device on it (no switch/hub sharing
+        that port) additionally gets a PER_DEVICE sample too, since the
+        port's whole traffic total unambiguously belongs to that one device —
+        see _single_occupant_port_samples.
         """
         samples: List[TrafficSample] = []
 
@@ -103,8 +108,51 @@ class SagemcomXmoAdapter(RouterAdapter):
         # Wired: per-port aggregate (PHY1–PHY5)
         port_samples = await self._get_port_traffic_samples()
         samples.extend(port_samples)
+        samples.extend(self._single_occupant_port_samples(hosts, port_samples))
 
         return samples
+
+    def _single_occupant_port_samples(
+        self, hosts: List[dict], port_samples: List[TrafficSample],
+    ) -> List[TrafficSample]:
+        """For any PHY port with exactly one *currently active* wired device
+        attached, that port's traffic total unambiguously belongs to that
+        device — copy it into a PER_DEVICE sample too. Ports shared by more
+        than one device (a switch/hub downstream) can't be split apart; the
+        router has no visibility past the switch — see docs/router/
+        wired-monitoring-caveat.md. Only active hosts count towards occupancy
+        — a stale/historical Host entry pointing at a port it's no longer
+        actually plugged into shouldn't make a genuinely single-occupant port
+        look shared.
+        """
+        macs_by_port: dict[str, List[str]] = {}
+        for h in hosts:
+            if not isinstance(h, dict) or h.get('InterfaceType') == 'WiFi' or not _is_active(h):
+                continue
+            alias = _parse_port_alias(h.get('Layer1Interface', ''))
+            mac = _norm_mac(h.get('PhysAddress', ''))
+            if alias and mac:
+                macs_by_port.setdefault(alias, []).append(mac)
+
+        port_samples_by_alias = {s.port_alias: s for s in port_samples}
+        device_samples: List[TrafficSample] = []
+        for alias, macs in macs_by_port.items():
+            if len(macs) != 1:
+                continue
+            port_sample = port_samples_by_alias.get(alias)
+            if port_sample is None:
+                continue
+            device_samples.append(TrafficSample(
+                mac_address=macs[0],
+                timestamp=port_sample.timestamp,
+                bytes_sent_delta=port_sample.bytes_sent_delta,
+                bytes_recv_delta=port_sample.bytes_recv_delta,
+                throughput_up_kbps=port_sample.throughput_up_kbps,
+                throughput_dn_kbps=port_sample.throughput_dn_kbps,
+                granularity=TrafficGranularity.PER_DEVICE,
+                poll_interval_s=self._poll_interval_s,
+            ))
+        return device_samples
 
     async def get_port_stats(self) -> List[PortStats]:
         """Return per-physical-port Ethernet stats (PHY1–PHY5)."""
@@ -269,9 +317,7 @@ class SagemcomXmoAdapter(RouterAdapter):
         """
         iface_type = host.get('InterfaceType', '')
         interface_name = 'WiFi' if iface_type == 'WiFi' else 'Ethernet'
-        is_active = host.get('Active', False)
-        if isinstance(is_active, str):
-            is_active = is_active.lower() == 'true'
+        is_active = _is_active(host)
 
         mac = _norm_mac(host.get('PhysAddress', ''))
         client = (associated or {}).get(mac, {})
@@ -293,6 +339,7 @@ class SagemcomXmoAdapter(RouterAdapter):
             signal_strength_dbm=signal_strength_dbm,
             signal_rate_mbps=signal_rate_mbps,
             is_online=bool(is_active),
+            port_alias=_parse_port_alias(host.get('Layer1Interface', '')) if interface_name == 'Ethernet' else '',
         )
 
     async def _get_hosts(self) -> List[dict]:
@@ -407,6 +454,32 @@ class SagemcomXmoAdapter(RouterAdapter):
 def _norm_mac(mac: str) -> str:
     """Normalise a MAC address to lowercase colon-separated format."""
     return mac.lower().strip()
+
+
+def _is_active(host: dict) -> bool:
+    """Parse a Host entry's Active field — a bool on this firmware, but
+    defensively handles a string 'true'/'false' too."""
+    is_active = host.get('Active', False)
+    if isinstance(is_active, str):
+        return is_active.lower() == 'true'
+    return bool(is_active)
+
+
+_LAYER1_INTERFACE_RE = re.compile(r'\[([^\]]+)\]')
+
+
+def _parse_port_alias(layer1_interface: str) -> str:
+    """Extract the PHY alias from a Host's Layer1Interface field.
+
+    Confirmed live: wired hosts carry e.g.
+    'Device/Ethernet/Interfaces/Interface[PHY5]' — only meaningful for
+    Ethernet hosts; WiFi hosts have this blank.
+    """
+    if not layer1_interface:
+        return ''
+    match = _LAYER1_INTERFACE_RE.search(layer1_interface)
+    alias = match.group(1) if match else ''
+    return alias if alias in _PORT_ALIASES else ''
 
 
 def _int_field(d: Any, key: str) -> int:

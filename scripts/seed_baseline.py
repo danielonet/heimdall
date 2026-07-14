@@ -53,11 +53,22 @@ async def main() -> None:
 
         added = 0
         already_known = 0
+        retrusted = 0
         async with get_session() as session:
             for snapshot in devices:
                 existing = await session.get(Device, snapshot.mac_address)
                 if existing is not None:
                     already_known += 1
+                    # Re-sync is_trusted even for rows that already exist —
+                    # a row can end up incorrectly untrusted (e.g. created
+                    # during a brief window where trusted_macs was empty,
+                    # such as a race between a reset and this script running)
+                    # and nothing else ever revisits it otherwise. See
+                    # sentinel/scheduler/jobs.py:_upsert_devices for the same
+                    # fix on the regular poll-cycle path.
+                    if not existing.is_trusted:
+                        existing.is_trusted = True
+                        retrusted += 1
                     continue
                 session.add(Device(
                     mac_address=snapshot.mac_address,
@@ -68,6 +79,12 @@ async def main() -> None:
                     traffic_granularity='per_port' if snapshot.interface_name == 'Ethernet' else 'per_device',
                     is_trusted=True,
                     is_online=snapshot.is_online,
+                    # Seeding a device here means "known and trusted as of
+                    # right now" — if it's currently online, that counts as
+                    # a real connection, not just a sighting. Leaving this at
+                    # the column default (False) would make NewDeviceDetector
+                    # treat its next poll as a first-ever connection.
+                    ever_connected=snapshot.is_online,
                     first_seen=now,
                     last_seen=now,
                 ))
@@ -76,7 +93,7 @@ async def main() -> None:
         for snapshot in devices:
             await trusted_repo.trust(snapshot.mac_address)
 
-        print(f'Seeded baseline: {added} new device(s) added, {already_known} already known.')
+        print(f'Seeded baseline: {added} new device(s) added, {already_known} already known ({retrusted} re-trusted).')
         print(f'{len(devices)} MAC(s) now in the persistent trusted_macs registry.')
         print('These will not trigger NEW_DEVICE alerts, even if the devices table is reset again.')
     finally:

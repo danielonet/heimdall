@@ -13,6 +13,7 @@ from redis.asyncio import from_url
 from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
+from sentinel.adapter.models import DeviceSnapshot
 from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, TrustedMac
 from sentinel.db.repositories import TrustedMacRepository
@@ -22,7 +23,7 @@ from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.notifications.service import NotificationConfig, NotificationService
-from sentinel.scheduler.jobs import poll_cycle
+from sentinel.scheduler.jobs import _upsert_devices, _wired_single_occupant_macs, poll_cycle
 
 pytestmark = pytest.mark.asyncio
 
@@ -138,6 +139,24 @@ class TestPollCycle:
         async with get_session() as session:
             device = await session.get(Device, 'd4:6e:0e:33:f2:1a')  # guest-phone, mock is_online=False
             assert device.is_online is False
+
+    async def test_wifi_signal_strength_persisted(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        """Regression coverage: the adapter has computed real signal_strength_dbm/
+        signal_rate_mbps since the AssociatedDevices fix, but neither ever
+        reached the devices table or the API — see sentinel/api/serializers.py."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, 'a8:5e:60:f1:2c:3d')  # daniel-laptop, WiFi
+            assert device.signal_strength_dbm < 0  # a real dBm reading, not the 0 default
+            assert device.signal_rate_mbps > 0
+
+    async def test_wired_device_signal_strength_is_zero(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
+            assert device.signal_strength_dbm == 0
 
     async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
@@ -293,3 +312,120 @@ class TestDetectionIntegration:
             device = await session.get(Device, mac)
             assert device is not None
             assert device.is_trusted is True
+
+    async def test_existing_untrusted_row_gets_resynced_once_trusted_macs_catches_up(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """Regression coverage for a real incident: a devices row can end up
+        incorrectly is_trusted=False (e.g. created during a race where
+        trusted_macs was momentarily empty). The existing-row update path
+        must re-sync from trusted_macs every poll, not just at row creation —
+        otherwise a wrong value never self-heals and NewDeviceDetector's
+        trust check silently fails forever for that MAC."""
+        mac = 'a8:5e:60:f1:2c:3d'
+
+        # First poll: not yet trusted — row gets created with is_trusted=False.
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        async with get_session() as session:
+            assert (await session.get(Device, mac)).is_trusted is False
+
+        # Trust is established afterwards (e.g. via scripts/seed_baseline.py
+        # or the PATCH /devices/{mac} UI toggle).
+        await TrustedMacRepository().trust(mac)
+
+        # Second poll: the existing row must pick up the trust, not stay stuck.
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        async with get_session() as session:
+            assert (await session.get(Device, mac)).is_trusted is True
+
+
+def _wired_snapshot(mac: str, port_alias: str, is_online: bool = True) -> DeviceSnapshot:
+    return DeviceSnapshot(
+        mac_address=mac, ip_address='10.0.0.1', hostname='test-device',
+        interface_name='Ethernet', is_online=is_online, port_alias=port_alias,
+    )
+
+
+class TestWiredSingleOccupantMacs:
+    async def test_single_device_on_port_is_included(self):
+        devices = [_wired_snapshot('aa:aa:aa:aa:aa:aa', 'PHY2')]
+        assert _wired_single_occupant_macs(devices) == {'aa:aa:aa:aa:aa:aa'}
+
+    async def test_shared_port_excluded(self):
+        devices = [
+            _wired_snapshot('aa:aa:aa:aa:aa:aa', 'PHY2'),
+            _wired_snapshot('bb:bb:bb:bb:bb:bb', 'PHY2'),
+        ]
+        assert _wired_single_occupant_macs(devices) == set()
+
+    async def test_offline_device_excluded(self):
+        """A stale/historical entry shouldn't make a genuinely single-occupant
+        port look occupied — only currently-online devices count."""
+        devices = [_wired_snapshot('aa:aa:aa:aa:aa:aa', 'PHY2', is_online=False)]
+        assert _wired_single_occupant_macs(devices) == set()
+
+    async def test_wifi_device_excluded_even_with_port_alias_set(self):
+        snap = DeviceSnapshot(
+            mac_address='aa:aa:aa:aa:aa:aa', ip_address='10.0.0.1', hostname='t',
+            interface_name='WiFi', is_online=True, port_alias='PHY2',
+        )
+        assert _wired_single_occupant_macs([snap]) == set()
+
+    async def test_no_port_alias_excluded(self):
+        devices = [_wired_snapshot('aa:aa:aa:aa:aa:aa', '')]
+        assert _wired_single_occupant_macs(devices) == set()
+
+    async def test_two_independent_single_occupant_ports_both_included(self):
+        devices = [
+            _wired_snapshot('aa:aa:aa:aa:aa:aa', 'PHY1'),
+            _wired_snapshot('bb:bb:bb:bb:bb:bb', 'PHY2'),
+        ]
+        assert _wired_single_occupant_macs(devices) == {'aa:aa:aa:aa:aa:aa', 'bb:bb:bb:bb:bb:bb'}
+
+
+class TestUpsertDevicesPortGranularity:
+    """Regression coverage for '#1'/'#2' from the wired-bandwidth follow-up:
+    port_alias must be persisted, and traffic_granularity must reflect
+    current port occupancy — recomputed every poll, not frozen at first
+    sight, since occupancy can change as devices connect/disconnect."""
+
+    _MACS = ['11:11:11:11:11:11', '22:22:22:22:22:22']
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup(self):
+        yield
+        async with get_session() as session:
+            await session.execute(delete(Device).where(Device.mac_address.in_(self._MACS)))
+
+    async def test_single_occupant_wired_device_gets_per_device_granularity(self):
+        mac = self._MACS[0]
+        async with get_session() as session:
+            await _upsert_devices(session, [_wired_snapshot(mac, 'PHY3')])
+
+        async with get_session() as session:
+            device = await session.get(Device, mac)
+            assert device.port_alias == 'PHY3'
+            assert device.traffic_granularity == 'per_device'
+
+    async def test_shared_port_wired_devices_stay_per_port(self):
+        mac1, mac2 = self._MACS
+        snapshots = [_wired_snapshot(mac1, 'PHY4'), _wired_snapshot(mac2, 'PHY4')]
+        async with get_session() as session:
+            await _upsert_devices(session, snapshots)
+
+        async with get_session() as session:
+            assert (await session.get(Device, mac1)).traffic_granularity == 'per_port'
+            assert (await session.get(Device, mac2)).traffic_granularity == 'per_port'
+
+    async def test_granularity_updates_when_sibling_disconnects(self):
+        mac1, mac2 = self._MACS
+        async with get_session() as session:
+            await _upsert_devices(session, [_wired_snapshot(mac1, 'PHY1'), _wired_snapshot(mac2, 'PHY1')])
+        async with get_session() as session:
+            assert (await session.get(Device, mac1)).traffic_granularity == 'per_port'
+
+        # mac2 disconnects — mac1 is now the sole occupant of PHY1.
+        async with get_session() as session:
+            await _upsert_devices(session, [_wired_snapshot(mac1, 'PHY1')])
+        async with get_session() as session:
+            assert (await session.get(Device, mac1)).traffic_granularity == 'per_device'

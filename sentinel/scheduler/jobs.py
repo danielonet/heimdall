@@ -171,13 +171,39 @@ def _score_traffic_samples(
     return scores
 
 
+def _wired_single_occupant_macs(devices: list[DeviceSnapshot]) -> set[str]:
+    """MACs of currently-online wired devices that are the only device on
+    their PHY port — those get real per-device traffic (see
+    SagemcomXmoAdapter._single_occupant_port_samples), so traffic_granularity
+    should say 'per_device', not 'per_port'. Ports shared by more than one
+    device can't be split apart and stay 'per_port'.
+    """
+    macs_by_port: dict[str, list[str]] = {}
+    for d in devices:
+        if d.interface_name != 'Ethernet' or not d.is_online or not d.port_alias:
+            continue
+        macs_by_port.setdefault(d.port_alias, []).append(d.mac_address)
+    return {macs[0] for macs in macs_by_port.values() if len(macs) == 1}
+
+
 async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) -> set[str]:
     """Insert new devices / refresh known ones. Returns the set of newly-seen MACs."""
     now = datetime.now(timezone.utc)
     newly_seen: set[str] = set()
     trusted_repo = TrustedMacRepository()
+    single_occupant_macs = _wired_single_occupant_macs(devices)
 
     for snapshot in devices:
+        # Wired devices only get real per-device traffic when they're the
+        # only device on their PHY port — see docs/router/
+        # wired-monitoring-caveat.md and _wired_single_occupant_macs above.
+        # Recomputed every poll since port occupancy can change (e.g. a
+        # sibling device on a shared port disconnects).
+        traffic_granularity = (
+            'per_device'
+            if snapshot.interface_name != 'Ethernet' or snapshot.mac_address in single_occupant_macs
+            else 'per_port'
+        )
         existing = await session.get(Device, snapshot.mac_address)
         if existing is None:
             # A MAC in the persistent trusted_macs registry (see
@@ -192,10 +218,10 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 hostname=snapshot.hostname,
                 vendor_name=snapshot.vendor_name,
                 interface_name=snapshot.interface_name,
-                # Wired devices only ever get port-aggregate traffic — see
-                # docs/router/wired-monitoring-caveat.md. port_alias is left
-                # unset here; it's assigned manually per docs/architecture/07.
-                traffic_granularity='per_port' if snapshot.interface_name == 'Ethernet' else 'per_device',
+                port_alias=snapshot.port_alias or None,
+                traffic_granularity=traffic_granularity,
+                signal_strength_dbm=snapshot.signal_strength_dbm,
+                signal_rate_mbps=snapshot.signal_rate_mbps,
                 is_trusted=was_trusted,
                 is_online=snapshot.is_online,
                 ever_connected=snapshot.is_online,
@@ -208,9 +234,22 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             existing.hostname = snapshot.hostname
             existing.vendor_name = snapshot.vendor_name
             existing.interface_name = snapshot.interface_name
+            existing.port_alias = snapshot.port_alias or None
+            existing.traffic_granularity = traffic_granularity
+            existing.signal_strength_dbm = snapshot.signal_strength_dbm
+            existing.signal_rate_mbps = snapshot.signal_rate_mbps
             existing.is_online = snapshot.is_online
             if snapshot.is_online:
                 existing.ever_connected = True
+            # Re-sync is_trusted from the persistent registry every poll, not
+            # just at row creation. Without this, a row created during a
+            # brief window where trusted_macs was empty (e.g. a race between
+            # a reset and re-seeding — this actually happened) stays
+            # incorrectly untrusted forever, since nothing else ever
+            # revisits it. trusted_macs is the source of truth; the PATCH
+            # /devices/{mac} route already keeps both in sync in the other
+            # direction (see sentinel/api/routes/devices.py).
+            existing.is_trusted = await trusted_repo.is_trusted(snapshot.mac_address)
             # Only advance last_seen while the router reports this device as
             # actually active — otherwise every device's last_seen gets
             # bumped on every poll regardless of connectivity, which is

@@ -21,6 +21,7 @@ class DeviceSnapshot:
     signal_strength_dbm: int = 0   # e.g. -59; 0 if wired
     signal_rate_mbps: int = 0      # e.g. 130 Mbps
     is_online: bool = True
+    port_alias: str = ''           # 'PHY1'..'PHY5' for wired devices, '' for WiFi
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     tags: Set[str] = field(default_factory=set)

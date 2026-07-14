@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sentinel.adapter.models import DeviceSnapshot
+from datetime import datetime, timezone
+
+from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
 from sentinel.adapter.sagemcom.xmo_adapter import SagemcomXmoAdapter
 
 
@@ -124,6 +126,45 @@ class TestToDeviceSnapshotSignal:
         snap = adapter._to_device_snapshot(host)
         assert snap.signal_strength_dbm == 0
         assert snap.signal_rate_mbps == 0
+
+
+class TestParsePortAlias:
+    def test_extracts_alias_from_layer1_interface(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_port_alias
+        assert _parse_port_alias('Device/Ethernet/Interfaces/Interface[PHY5]') == 'PHY5'
+
+    def test_empty_string_returns_empty(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_port_alias
+        assert _parse_port_alias('') == ''
+
+    def test_unrecognized_alias_returns_empty(self):
+        """Defensive: only ever return one of the 5 known PHY aliases."""
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_port_alias
+        assert _parse_port_alias('Device/Ethernet/Interfaces/Interface[SOMETHING_ELSE]') == ''
+
+    def test_no_brackets_returns_empty(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_port_alias
+        assert _parse_port_alias('Device/Ethernet/Interfaces/Interface') == ''
+
+
+class TestToDeviceSnapshotPortAlias:
+    def test_wired_host_gets_port_alias(self, adapter):
+        host = _wired_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
+        snap = adapter._to_device_snapshot(host)
+        assert snap.port_alias == 'PHY2'
+
+    def test_wifi_host_has_no_port_alias(self, adapter):
+        """WiFi hosts don't have a meaningful Layer1Interface — even if one
+        somehow carried a PHY-looking value, it must not surface as port_alias."""
+        host = _wifi_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
+        snap = adapter._to_device_snapshot(host)
+        assert snap.port_alias == ''
+
+    def test_missing_layer1_interface_defaults_to_empty(self, adapter):
+        host = _wired_host()
+        assert 'Layer1Interface' not in host
+        snap = adapter._to_device_snapshot(host)
+        assert snap.port_alias == ''
 
 
 def _associated_client(**kwargs) -> dict:
@@ -319,6 +360,70 @@ class TestGetTrafficSamplesWifiDirection:
         wifi_sample = next(s for s in samples if s.mac_address == mac)
         assert wifi_sample.throughput_dn_kbps > 0  # the AP-Sent growth must land in download
         assert wifi_sample.throughput_up_kbps == 0  # AP-Received didn't change
+
+
+def _port_sample(alias: str, up: int = 100, down: int = 200) -> TrafficSample:
+    return TrafficSample(
+        mac_address=alias,
+        timestamp=datetime.now(timezone.utc),
+        bytes_sent_delta=up * 128,  # rough kbps->bytes, exact value doesn't matter for these tests
+        bytes_recv_delta=down * 128,
+        throughput_up_kbps=up,
+        throughput_dn_kbps=down,
+        granularity=TrafficGranularity.PER_PORT,
+        port_alias=alias,
+    )
+
+
+class TestSingleOccupantPortSamples:
+    """Regression coverage for '#2' from the wired-bandwidth discussion: a
+    PHY port with exactly one currently-active device on it has its whole
+    traffic total unambiguously attributable to that device."""
+
+    def test_single_occupant_port_gets_a_per_device_sample(self, adapter):
+        hosts = [_wired_host(PhysAddress='0C:11:05:61:AD:5B', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')]
+        port_samples = [_port_sample('PHY2', up=100, down=200)]
+        result = adapter._single_occupant_port_samples(hosts, port_samples)
+        assert len(result) == 1
+        assert result[0].mac_address == '0c:11:05:61:ad:5b'
+        assert result[0].granularity == TrafficGranularity.PER_DEVICE
+        assert result[0].throughput_up_kbps == 100
+        assert result[0].throughput_dn_kbps == 200
+
+    def test_shared_port_gets_no_per_device_sample(self, adapter):
+        """Can't attribute a shared port's traffic to either device."""
+        hosts = [
+            _wired_host(PhysAddress='0C:11:05:61:AD:5B', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]'),
+            _wired_host(PhysAddress='AA:BB:CC:DD:EE:FF', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]'),
+        ]
+        port_samples = [_port_sample('PHY2')]
+        result = adapter._single_occupant_port_samples(hosts, port_samples)
+        assert result == []
+
+    def test_wifi_hosts_are_ignored(self, adapter):
+        hosts = [_wifi_host()]
+        port_samples = [_port_sample('PHY2')]
+        result = adapter._single_occupant_port_samples(hosts, port_samples)
+        assert result == []
+
+    def test_inactive_host_does_not_count_towards_occupancy(self, adapter):
+        """A stale/historical Host entry pointing at a port it's no longer
+        plugged into shouldn't make a genuinely single-occupant port look
+        shared — only Active hosts count."""
+        hosts = [
+            _wired_host(PhysAddress='0C:11:05:61:AD:5B', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]', Active=True),
+            _wired_host(PhysAddress='AA:BB:CC:DD:EE:FF', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]', Active=False),
+        ]
+        port_samples = [_port_sample('PHY2', up=100, down=200)]
+        result = adapter._single_occupant_port_samples(hosts, port_samples)
+        assert len(result) == 1
+        assert result[0].mac_address == '0c:11:05:61:ad:5b'
+
+    def test_no_matching_port_sample_is_skipped(self, adapter):
+        """A port with no traffic data this poll (e.g. DOWN) shouldn't crash."""
+        hosts = [_wired_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY3]')]
+        result = adapter._single_occupant_port_samples(hosts, port_samples=[])
+        assert result == []
 
 
 class TestToDeviceSnapshotActive:

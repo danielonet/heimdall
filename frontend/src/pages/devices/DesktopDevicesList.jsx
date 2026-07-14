@@ -5,6 +5,8 @@ import { StatusDot } from '../../components/StatusDot'
 import { MacAddress } from '../../components/MacAddress'
 import { TrafficDisplay } from '../../components/TrafficDisplay'
 import { Badge } from '../../components/Badge'
+import { SignalBars } from '../../components/SignalBars'
+import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
 import { BlockButton } from '../../components/BlockButton'
 import { UnblockButton } from '../../components/UnblockButton'
 import { isDeviceOnline } from '../../lib/deviceFilters'
@@ -52,9 +54,12 @@ const columnHelperDefs = [
     cell: ({ row }) => {
       const d = row.original
       return (
-        <div className="min-w-0">
-          <div className="truncate text-text-primary">{d.hostname || <MacAddress mac={d.mac_address} />}</div>
-          <div className="truncate text-[9px] text-text-muted">{d.ip_address || '—'}</div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {!d.ever_connected && <NeverConnectedIcon />}
+          <div className="min-w-0">
+            <div className="truncate text-text-primary">{d.hostname || <MacAddress mac={d.mac_address} />}</div>
+            <div className="truncate text-[9px] text-text-muted">{d.ip_address || '—'}</div>
+          </div>
         </div>
       )
     },
@@ -75,6 +80,22 @@ const columnHelperDefs = [
     header: 'TYPE',
     accessorFn: (d) => d.interface_name || '',
     cell: ({ getValue }) => <Badge variant="info">{getValue() === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>,
+  },
+  {
+    id: 'signal',
+    header: 'SIGNAL / PORT',
+    accessorFn: (d) => (d.interface_name === 'Ethernet' ? 0 : d.signal_strength_dbm || -999),
+    cell: ({ row }) => {
+      const d = row.original
+      if (d.interface_name === 'Ethernet') {
+        return d.port_alias ? (
+          <Badge variant="info">{d.port_alias}</Badge>
+        ) : (
+          <span className="text-text-muted">—</span>
+        )
+      }
+      return <SignalBars dbm={d.signal_strength_dbm} />
+    },
   },
   {
     id: 'trust',

@@ -40,7 +40,9 @@ export function DeviceHeader({ device }) {
             {device.os_fingerprint && <span>{device.os_fingerprint}</span>}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <Badge variant="info">{device.interface_name === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>
+            <Badge variant="info">
+              {device.interface_name === 'Ethernet' ? `ETH${device.port_alias ? ` · ${device.port_alias}` : ''}` : 'WiFi'}
+            </Badge>
             <button
               type="button"
               disabled={setTrusted.isPending}
