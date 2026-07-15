@@ -105,6 +105,41 @@ class MockSagemcomAdapter(RouterAdapter):
                 poll_interval_s=15,
             ))
 
+        # Wired devices that are the sole occupant of their PHY port get a
+        # synthetic per-device sample too, copying that port's numbers —
+        # mirrors SagemcomXmoAdapter._single_occupant_port_samples, so mock
+        # data exercises the same 'per_device' wired path real hardware does
+        # (see _wired_single_occupant_macs in sentinel/scheduler/jobs.py).
+        macs_by_port: dict[str, list[str]] = {}
+        for device in self._devices:
+            if (
+                device.interface_name == 'Ethernet'
+                and device.port_alias
+                and device.mac_address not in self._blocked_macs
+            ):
+                macs_by_port.setdefault(device.port_alias, []).append(device.mac_address)
+
+        port_samples_by_alias = {
+            s.port_alias: s for s in samples if s.granularity == TrafficGranularity.PER_PORT
+        }
+        for port_alias, macs in macs_by_port.items():
+            if len(macs) != 1:
+                continue
+            port_sample = port_samples_by_alias.get(port_alias)
+            if port_sample is None:
+                continue
+            samples.append(TrafficSample(
+                mac_address=macs[0],
+                timestamp=now,
+                bytes_sent_delta=port_sample.bytes_sent_delta,
+                bytes_recv_delta=port_sample.bytes_recv_delta,
+                throughput_up_kbps=port_sample.throughput_up_kbps,
+                throughput_dn_kbps=port_sample.throughput_dn_kbps,
+                granularity=TrafficGranularity.PER_DEVICE,
+                port_alias=port_alias,
+                poll_interval_s=15,
+            ))
+
         return samples
 
     async def get_port_stats(self) -> List[PortStats]:
@@ -124,11 +159,19 @@ class MockSagemcomAdapter(RouterAdapter):
         return True
 
     async def get_router_info(self) -> RouterInfo:
-        """Return mock router metadata."""
+        """Return mock router metadata — including WAN/SSID fields the real
+        SagemcomXmoAdapter now actually populates, so mock mode doesn't show
+        a Settings page full of blanks that only a live router would fill."""
         return RouterInfo(
             model='Sagemcom F@st 5670 (Mock)',
             firmware='TELNET_SE_17.06.12_AUPV5.6_27_Release',
             serial='6A1F2B3C4D5E',
+            wan_ip='203.0.113.42',  # RFC 5737 TEST-NET-3 — obviously not a real WAN IP
+            wan_mac='02:00:5e:10:20:30',  # 02: locally-administered prefix — obviously synthetic
+            wan_status='UP',
+            wan_mode='PPPoE',
+            uptime_seconds=1_234_567,
+            ssids=['HomeNet-5G', 'HomeNet-2.4G'],
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -198,6 +241,81 @@ class MockSagemcomAdapter(RouterAdapter):
                 interface_name='Ethernet',
                 signal_strength_dbm=0,
                 signal_rate_mbps=100,
+                is_online=True,
+            ),
+            # Wired, sole occupant of PHY2 — exercises the real per-device
+            # traffic path for wired devices (see _wired_single_occupant_macs
+            # in sentinel/scheduler/jobs.py and the matching synthesis in
+            # get_traffic_samples() below), not just the port-aggregate path
+            # nas-nas-01/office-printer exercise above.
+            DeviceSnapshot(
+                mac_address='dc:a6:32:4c:1a:9e',
+                ip_address='192.168.0.15',
+                hostname='homeassistant-pi',
+                vendor_name='',  # left blank on purpose — real OUI lookup
+                                  # resolves this to 'Raspberry Pi Trading Ltd'
+                                  # via sentinel/security/mac_vendor.py, same
+                                  # as a freshly-seen real device would get
+                interface_name='Ethernet',
+                signal_strength_dbm=0,
+                signal_rate_mbps=0,
+                is_online=True,
+                port_alias='PHY2',
+            ),
+            # IoT — weak signal, low data rate, always-on
+            DeviceSnapshot(
+                mac_address='18:b4:30:7a:2f:9c',
+                ip_address='192.168.0.60',
+                hostname='nest-thermostat',
+                vendor_name='',  # blank on purpose — resolves to 'Nest Labs Inc.'
+                interface_name='WiFi',
+                signal_strength_dbm=-78,
+                signal_rate_mbps=24,
+                is_online=True,
+            ),
+            # Modern phone with WiFi private-address randomization — the
+            # locally-administered MAC means lookup_vendor() correctly
+            # returns '' rather than guessing (see is_locally_administered()
+            # in sentinel/security/mac_vendor.py); vendor_name stays blank
+            # server-side too, which is itself realistic data, not a gap.
+            DeviceSnapshot(
+                mac_address='02:1a:2b:3c:4d:5e',
+                ip_address='192.168.0.61',
+                hostname='daniels-iphone',
+                vendor_name='',
+                interface_name='WiFi',
+                signal_strength_dbm=-50,
+                signal_rate_mbps=400,
+                is_online=True,
+            ),
+            DeviceSnapshot(
+                mac_address='3c:e1:a1:5f:8a:22',
+                ip_address='192.168.0.62',
+                hostname='backyard-camera',
+                vendor_name='Xiaomi',
+                interface_name='WiFi',
+                signal_strength_dbm=-80,
+                signal_rate_mbps=36,
+                is_online=True,
+            ),
+            DeviceSnapshot(
+                mac_address='4c:aa:16:8b:3e:71',
+                ip_address='192.168.0.63',
+                hostname='living-room-tv',
+                vendor_name='Samsung Electronics',
+                interface_name='WiFi',
+                signal_strength_dbm=-60,
+                signal_rate_mbps=270,
+                is_online=True,
+            ),
+            DeviceSnapshot(
+                mac_address='2c:f0:5d:9a:44:e7',
+                ip_address='192.168.0.64',
+                hostname='ps5-livingroom',
+                vendor_name='Sony Interactive Entertainment',
+                interface_name='WiFi',
+                signal_strength_dbm=-58,
+                signal_rate_mbps=433,
                 is_online=True,
             ),
         ]

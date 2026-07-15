@@ -30,6 +30,8 @@ pytestmark = pytest.mark.asyncio
 _MOCK_MACS = [
     'a8:5e:60:f1:2c:3d', 'b4:b0:1d:8e:4f:5a', 'c8:1c:c3:2d:4b:6e',
     'd4:6e:0e:33:f2:1a', 'e8:31:cd:1f:4c:2e', 'f4:75:88:a9:3d:b2',
+    'dc:a6:32:4c:1a:9e', '18:b4:30:7a:2f:9c', '02:1a:2b:3c:4d:5e',
+    '3c:e1:a1:5f:8a:22', '4c:aa:16:8b:3e:71', '2c:f0:5d:9a:44:e7',
 ]
 # 'd4:6e:0e:33:f2:1a' (guest-phone) is the one MockSagemcomAdapter device with
 # is_online=False — NewDeviceDetector only alerts on an actual connection, so
