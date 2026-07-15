@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
@@ -13,6 +15,8 @@ _SNAPSHOT = DeviceSnapshot(
     interface_name='WiFi',
 )
 
+_LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)  # well past any learning period
+
 
 class _FakeAnomalyEngine:
     def __init__(self, anomalous: bool) -> None:
@@ -22,8 +26,27 @@ class _FakeAnomalyEngine:
         return self._anomalous
 
 
+class _FakeDeviceRepository:
+    """Test double: no DB, just a fixed first_seen (or None) per MAC."""
+
+    def __init__(self, first_seen: dict[str, datetime] | None = None) -> None:
+        self._first_seen = first_seen or {}
+
+    async def get_first_seen(self, mac_address: str):
+        return self._first_seen.get(mac_address)
+
+
+class _FakeSettingsRepository:
+    """Test double: no DB, just a fixed learning-period value."""
+
+    def __init__(self, ml_learning_period_hours: int = 72) -> None:
+        self._hours = ml_learning_period_hours
+
+    async def get_ml_learning_period_hours(self) -> int:
+        return self._hours
+
+
 def _sample(granularity=TrafficGranularity.PER_DEVICE) -> TrafficSample:
-    from datetime import datetime, timezone
     return TrafficSample(
         mac_address='aa:bb:cc:dd:ee:ff',
         timestamp=datetime.now(timezone.utc),
@@ -33,9 +56,19 @@ def _sample(granularity=TrafficGranularity.PER_DEVICE) -> TrafficSample:
     )
 
 
+def _detector(
+    anomalous: bool = True,
+    first_seen: datetime | None = _LONG_AGO,
+    learning_period_hours: int = 72,
+) -> AnomalousVolumeDetector:
+    device_repo = _FakeDeviceRepository({'aa:bb:cc:dd:ee:ff': first_seen} if first_seen is not None else {})
+    settings_repo = _FakeSettingsRepository(learning_period_hours)
+    return AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=anomalous), device_repo, settings_repo)
+
+
 class TestInspectTraffic:
     async def test_anomalous_sample_produces_warning_alert(self):
-        detector = AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=True))
+        detector = _detector(anomalous=True)
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is not None
         assert alert.severity == 'WARNING'
@@ -43,15 +76,61 @@ class TestInspectTraffic:
         assert alert.device_mac == 'aa:bb:cc:dd:ee:ff'
 
     async def test_non_anomalous_sample_produces_no_alert(self):
-        detector = AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=False))
+        detector = _detector(anomalous=False)
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is None
 
     async def test_per_port_samples_are_skipped_even_if_anomalous(self):
-        detector = AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=True))
+        detector = _detector(anomalous=True)
         alert = await detector.inspect_traffic(_sample(granularity=TrafficGranularity.PER_PORT), _SNAPSHOT)
         assert alert is None
 
     async def test_inspect_device_always_returns_none(self):
-        detector = AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=True))
+        detector = _detector(anomalous=True)
         assert await detector.inspect_device(_SNAPSHOT) is None
+
+
+class TestLearningPeriod:
+    """A freshly trained model has only seen a narrow slice of a device's real
+    behaviour — alerts must stay suppressed until the device has been observed
+    for at least `learning_period`, even if the ML models already agree it's
+    an outlier. See Settings.ML_LEARNING_PERIOD_HOURS."""
+
+    async def test_suppressed_within_the_learning_period(self):
+        recently_seen = datetime.now(timezone.utc) - timedelta(hours=1)
+        detector = _detector(anomalous=True, first_seen=recently_seen, learning_period_hours=72)
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is None
+
+    async def test_fires_once_the_learning_period_has_elapsed(self):
+        detector = _detector(anomalous=True, first_seen=_LONG_AGO, learning_period_hours=72)
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is not None
+
+    async def test_no_devices_row_yet_is_treated_as_still_learning(self):
+        """Defense-in-depth: a device with no first_seen at all (no devices
+        row) can't have a trained model either, but suppress explicitly
+        rather than relying on that alone."""
+        detector = _detector(anomalous=True, first_seen=None)
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is None
+
+    async def test_just_under_the_learning_period_is_still_suppressed(self):
+        # Deliberately not an exact boundary — datetime.now() advances between
+        # computing first_seen and the detector's own now() call, so a value
+        # equal to the threshold is timing-flaky in either direction.
+        first_seen = datetime.now(timezone.utc) - timedelta(hours=71, minutes=59)
+        detector = _detector(anomalous=True, first_seen=first_seen, learning_period_hours=72)
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is None
+
+    async def test_reads_the_configured_period_dynamically(self):
+        """The learning period comes from SettingsRepository on every call,
+        not a value frozen at construction — an admin's change in the
+        Settings tab must take effect on the very next poll."""
+        first_seen = datetime.now(timezone.utc) - timedelta(hours=10)
+        detector = _detector(anomalous=True, first_seen=first_seen, learning_period_hours=72)
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # 10h < 72h
+
+        detector._settings_repo = _FakeSettingsRepository(ml_learning_period_hours=5)
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None  # 10h >= 5h now

@@ -5,7 +5,10 @@ export function AckResolveButtons({ alert }) {
   const qc = useQueryClient()
   const mutation = useMutation({
     mutationFn: (body) => apiJson(`/alerts/${alert.id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['alerts'] })
+      qc.invalidateQueries({ queryKey: ['device'] })
+    },
   })
 
   return (

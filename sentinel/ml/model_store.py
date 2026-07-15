@@ -27,3 +27,13 @@ class ModelStore:
 
     def _path_for(self, mac: str) -> Path:
         return self._model_dir / f'{mac.replace(":", "-")}.joblib'
+
+    def clear_all(self) -> None:
+        """Delete every persisted model file — used when purging the database
+        so every device restarts its learning period from scratch instead of
+        continuing to score against a model trained on data that no longer
+        exists."""
+        if not self._model_dir.exists():
+            return
+        for path in self._model_dir.glob('*.joblib'):
+            path.unlink()

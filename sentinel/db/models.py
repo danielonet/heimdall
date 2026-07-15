@@ -46,6 +46,20 @@ class Device(Base):
     last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class AppSettings(Base):
+    """Singleton row (id always 1) for runtime-configurable settings that must
+    take effect without restarting the process — currently just the ML
+    learning-period window, adjustable from the frontend Settings tab. Falls
+    back to Settings.ML_LEARNING_PERIOD_HOURS (the env-config default) until
+    an admin sets an override here — see SettingsRepository.
+    """
+
+    __tablename__ = 'app_settings'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    ml_learning_period_hours: Mapped[int] = mapped_column(Integer, server_default='72')
+
+
 class TrustedMac(Base):
     """A permanently-trusted MAC address, independent of the devices table's
     lifecycle — so a device already established as trusted doesn't re-trigger

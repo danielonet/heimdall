@@ -1,6 +1,7 @@
 import { SeverityBar } from '../SeverityBar'
 import { TimeAgo } from '../TimeAgo'
 import { Badge } from '../Badge'
+import { AckResolveButtons } from '../alerts/AckResolveButtons'
 
 export function AlertHistoryTable({ alerts }) {
   if (!alerts?.length) {
@@ -10,7 +11,7 @@ export function AlertHistoryTable({ alerts }) {
   return (
     <div>
       {alerts.map((a) => (
-        <div key={a.id} className="flex gap-2 border-b border-border/50 py-2 last:border-none">
+        <div key={a.id} className="flex items-center gap-2 border-b border-border/50 py-2 last:border-none">
           <SeverityBar severity={a.severity} />
           <div className="min-w-0 flex-1">
             <div className="text-[10px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
@@ -28,6 +29,7 @@ export function AlertHistoryTable({ alerts }) {
               <Badge variant="danger">OPEN</Badge>
             )}
           </div>
+          <AckResolveButtons alert={a} />
         </div>
       ))}
     </div>

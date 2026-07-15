@@ -5,15 +5,25 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 
 from sentinel.api.serializers import alert_to_dict
-from sentinel.db.models import Alert
+from sentinel.db.models import Alert, Device
 from sentinel.db.session import get_session
 
 bp = Blueprint('alerts', __name__)
 
 MAX_PER_PAGE = 200
+
+# Ordinal so func.max() picks the worst severity present in a group — plain
+# alphabetical order (CRITICAL < INFO < WARNING) would pick the wrong one.
+_SEVERITY_RANK = case(
+    (Alert.severity == 'CRITICAL', 3),
+    (Alert.severity == 'WARNING', 2),
+    (Alert.severity == 'INFO', 1),
+    else_=0,
+)
+_RANK_TO_SEVERITY = {3: 'CRITICAL', 2: 'WARNING', 1: 'INFO'}
 
 
 @bp.route('', methods=['GET'])
@@ -63,6 +73,101 @@ async def list_alerts():
         per_page=per_page,
         total=total,
     )
+
+
+@bp.route('/grouped', methods=['GET'])
+async def list_alerts_grouped():
+    """Alerts collapsed into (device_mac, alert_type) groups with counts —
+    for triaging a flood (e.g. a misfiring detector producing thousands of
+    rows for the same device) without paging through every individual alert."""
+    query = (
+        select(
+            Alert.device_mac,
+            Device.hostname,
+            Alert.alert_type,
+            func.count().label('count'),
+            func.sum(case((Alert.acknowledged.is_(False), 1), else_=0)).label('unacknowledged_count'),
+            func.sum(case((Alert.resolved.is_(False), 1), else_=0)).label('unresolved_count'),
+            func.max(_SEVERITY_RANK).label('severity_rank'),
+            func.min(Alert.created_at).label('first_seen'),
+            func.max(Alert.created_at).label('last_seen'),
+        )
+        .outerjoin(Device, Device.mac_address == Alert.device_mac)
+        .group_by(Alert.device_mac, Device.hostname, Alert.alert_type)
+    )
+
+    severity = request.args.get('severity')
+    if severity:
+        query = query.where(Alert.severity == severity)
+
+    acknowledged = request.args.get('acknowledged')
+    if acknowledged is not None:
+        flag = acknowledged.lower() in ('true', '1')
+        query = query.where(Alert.acknowledged.is_(flag))
+
+    resolved = request.args.get('resolved')
+    if resolved is not None:
+        flag = resolved.lower() in ('true', '1')
+        query = query.where(Alert.resolved.is_(flag))
+
+    from_ts = _parse_timestamp(request.args.get('from'))
+    if from_ts:
+        query = query.where(Alert.created_at >= from_ts)
+
+    query = query.order_by(func.count().desc())
+
+    async with get_session() as session:
+        rows = (await session.execute(query)).all()
+
+    groups = [
+        {
+            'device_mac': row.device_mac,
+            'hostname': row.hostname,
+            'alert_type': row.alert_type,
+            'severity': _RANK_TO_SEVERITY.get(row.severity_rank, 'INFO'),
+            'count': row.count,
+            'unacknowledged_count': row.unacknowledged_count,
+            'unresolved_count': row.unresolved_count,
+            'first_seen': row.first_seen.isoformat() if row.first_seen else None,
+            'last_seen': row.last_seen.isoformat() if row.last_seen else None,
+        }
+        for row in rows
+    ]
+
+    return jsonify(groups=groups)
+
+
+@bp.route('/bulk', methods=['PATCH'])
+async def bulk_patch_alerts():
+    """Acknowledge or resolve every alert matching a filter in one query —
+    the group-triage counterpart to PATCH /alerts/<id>. Body must include
+    device_mac and/or alert_type (refusing to touch the whole table by
+    accident) plus acknowledged and/or resolved."""
+    body = request.get_json(silent=True) or {}
+
+    device_mac = body.get('device_mac')
+    alert_type = body.get('alert_type')
+    if not device_mac and not alert_type:
+        return jsonify(error='device_mac or alert_type is required'), 400
+
+    values = {}
+    if 'acknowledged' in body:
+        values['acknowledged'] = bool(body['acknowledged'])
+    if 'resolved' in body:
+        values['resolved'] = bool(body['resolved'])
+    if not values:
+        return jsonify(error='acknowledged or resolved is required'), 400
+
+    stmt = update(Alert).values(**values)
+    if device_mac:
+        stmt = stmt.where(Alert.device_mac == device_mac)
+    if alert_type:
+        stmt = stmt.where(Alert.alert_type == alert_type)
+
+    async with get_session() as session:
+        result = await session.execute(stmt)
+
+    return jsonify(updated=result.rowcount)
 
 
 @bp.route('/<int:alert_id>', methods=['GET'])

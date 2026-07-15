@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     ML_RETRAIN_CRON: str = '0 3 * * *'       # 03:00 daily
     ML_MODEL_DIR: str = '/data/models'       # matches the ml-models Docker volume;
                                               # override in .env for host/console dev
+    # A model trained on ML_MIN_SAMPLES_TO_TRAIN samples (~25min at the default
+    # poll interval) has only seen a narrow slice of a device's real behaviour
+    # and floods WARNING alerts for normal variation it hasn't learned yet
+    # (e.g. no diurnal pattern). AnomalousVolumeDetector suppresses alerts
+    # until a device has been observed for this long, regardless of when its
+    # model actually finished training. See docs/architecture/05-ml-anomaly-engine.md.
+    ML_LEARNING_PERIOD_HOURS: int = 72
 
     # ── Security services ─────────────────────────────────────────────────────
     OTX_API_KEY: str = ''          # populated from OTX_API_KEY_FILE if blank

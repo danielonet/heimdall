@@ -1,6 +1,15 @@
 #!/usr/bin/env python
 """seed_baseline.py — Re-establish a healthy device baseline without an alert flood.
 
+NOTE: a genuinely empty devices table + trusted_macs registry (a fresh
+install, or a full reset of both) now self-baselines automatically on the
+very next poll cycle — see _establish_baseline_if_fresh_install in
+sentinel/scheduler/jobs.py. This script is still useful when you want it
+established immediately/synchronously rather than waiting up to
+POLL_INTERVAL_SECONDS, or when only `devices` was cleared while trusted_macs
+still has old entries (not a "fresh install" by the automatic check, but you
+still want everyone currently visible re-trusted right away).
+
 Use this after the devices table has been cleared/reset (e.g. a dev reset, or
 restoring from a backup that predates current devices) and you don't want
 NewDeviceDetector to fire a CRITICAL "new device" alert for every device

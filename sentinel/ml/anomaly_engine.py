@@ -81,6 +81,15 @@ class AnomalyEngine:
             return
         self._fit_and_save(mac, np.vstack(feature_vectors))
 
+    def reset(self) -> None:
+        """Clear all in-memory state — bootstrap buffers and the loaded-model
+        cache. Used after an external purge of the devices/traffic_samples
+        tables and the on-disk model store (see ModelStore.clear_all), so
+        this already-running process doesn't keep scoring against models
+        trained on data that no longer exists."""
+        self._buffers.clear()
+        self._model_cache.clear()
+
     def _get_model(self, mac: str) -> Optional[dict]:
         if mac not in self._model_cache:
             loaded = self._store.load(mac)

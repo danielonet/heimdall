@@ -30,7 +30,7 @@ from sentinel.api.websocket import (
     emit_wan_status,
 )
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
-from sentinel.db.repositories import TrustedMacRepository
+from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -65,6 +65,8 @@ async def poll_cycle(
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
 
+    await _establish_baseline_if_fresh_install(devices)
+
     alerts = await _run_detection(pipeline, devices, traffic_samples)
     scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
 
@@ -89,6 +91,36 @@ async def poll_cycle(
         'Poll cycle complete: %d devices, %d traffic samples, %d port stats, %d alerts',
         len(devices), len(traffic_samples), len(port_stats), len(alerts),
     )
+
+
+async def _establish_baseline_if_fresh_install(devices: list[DeviceSnapshot]) -> None:
+    """On a brand-new install (devices table AND trusted_macs registry both
+    completely empty), treat every device visible on this very first poll as
+    the trusted baseline — the automatic equivalent of scripts/seed_baseline.py.
+
+    Without this, a fresh install's first poll cycle would run every device
+    already on the LAN through NewDeviceDetector with nothing to compare
+    against, flooding a CRITICAL NEW_DEVICE alert for each one — there is no
+    "new" here, just no baseline yet.
+
+    Gated on *both* tables being empty, not just trusted_macs, so this never
+    fires for the (real, previously-hit) case where trusted_macs alone was
+    wiped — e.g. mid-poll during a table reset — while devices rows already
+    exist. That case must fall through to the normal per-MAC trust resync in
+    _upsert_devices, not silently re-trust everyone.
+    """
+    trusted_repo = TrustedMacRepository()
+    if not await trusted_repo.is_empty():
+        return
+    if not await DeviceRepository().is_empty():
+        return
+
+    online_macs = [d.mac_address for d in devices if d.is_online]
+    if not online_macs:
+        return
+
+    await trusted_repo.trust_many(online_macs)
+    logger.info('Fresh install detected — established trusted baseline for %d device(s)', len(online_macs))
 
 
 def _enrich_vendor_names(devices: list[DeviceSnapshot]) -> None:

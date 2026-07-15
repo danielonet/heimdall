@@ -113,6 +113,30 @@ async def _cleanup_mock_rows():
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))
 
 
+_ANCHOR_MAC = '00:00:00:00:00:01'
+
+
+@pytest_asyncio.fixture
+async def established_baseline():
+    """Seeds one already-known, already-trusted device unrelated to the mock
+    MACs, so poll_cycle never treats the devices/trusted_macs tables as
+    empty (see _establish_baseline_if_fresh_install in
+    sentinel/scheduler/jobs.py). Needed by tests that exercise steady-state
+    NewDeviceDetector behavior — the fresh-install auto-baseline path itself
+    is covered separately by TestFreshInstallBaseline, which relies on these
+    tables actually being empty."""
+    async with get_session() as session:
+        session.add(Device(
+            mac_address=_ANCHOR_MAC, hostname='anchor', is_trusted=True,
+            is_online=True, ever_connected=True,
+        ))
+    await TrustedMacRepository().trust(_ANCHOR_MAC)
+    yield
+    async with get_session() as session:
+        await session.execute(delete(Device).where(Device.mac_address == _ANCHOR_MAC))
+        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == _ANCHOR_MAC))
+
+
 class TestPollCycle:
     async def test_persists_devices(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
@@ -245,7 +269,9 @@ class TestPollCycle:
 
 
 class TestDetectionIntegration:
-    async def test_first_poll_raises_new_device_alert_for_every_online_mock_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_first_poll_raises_new_device_alert_for_every_online_mock_device(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
+    ):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
 
         async with get_session() as session:
@@ -269,7 +295,9 @@ class TestDetectionIntegration:
             )
             assert result.scalars().all() == []
 
-    async def test_second_poll_does_not_re_raise_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_second_poll_does_not_re_raise_new_device_alert(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
+    ):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # devices become known here
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # should raise nothing new
 
@@ -314,14 +342,20 @@ class TestDetectionIntegration:
             assert device.is_trusted is True
 
     async def test_existing_untrusted_row_gets_resynced_once_trusted_macs_catches_up(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
     ):
         """Regression coverage for a real incident: a devices row can end up
         incorrectly is_trusted=False (e.g. created during a race where
         trusted_macs was momentarily empty). The existing-row update path
         must re-sync from trusted_macs every poll, not just at row creation —
         otherwise a wrong value never self-heals and NewDeviceDetector's
-        trust check silently fails forever for that MAC."""
+        trust check silently fails forever for that MAC.
+
+        Uses established_baseline so the first poll below is the *race*
+        scenario this regression covers (trusted_macs momentarily empty for
+        just this one MAC while the rest of the baseline is intact) — not a
+        genuine fresh install, which is covered separately and would instead
+        auto-trust this MAC on the first poll, defeating the test."""
         mac = 'a8:5e:60:f1:2c:3d'
 
         # First poll: not yet trusted — row gets created with is_trusted=False.
@@ -337,6 +371,71 @@ class TestDetectionIntegration:
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
         async with get_session() as session:
             assert (await session.get(Device, mac)).is_trusted is True
+
+
+class TestFreshInstallBaseline:
+    """Covers _establish_baseline_if_fresh_install. Deliberately does NOT use
+    established_baseline — these tests need the devices/trusted_macs tables
+    to actually be empty, which only holds on an isolated, freshly migrated
+    database (e.g. sentinel_test) with no other tests' leftover rows. Never
+    run against a live/shared database — the assertions below only make
+    sense before any real baseline exists."""
+
+    async def test_first_poll_on_empty_db_raises_no_new_device_alerts(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac.in_(_MOCK_MACS), Alert.alert_type == 'NEW_DEVICE')
+            )
+            assert result.scalars().all() == []
+
+    async def test_first_poll_on_empty_db_trusts_every_online_device(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+        for mac in _MOCK_ONLINE_MACS:
+            assert await TrustedMacRepository().is_trusted(mac) is True
+            async with get_session() as session:
+                assert (await session.get(Device, mac)).is_trusted is True
+
+    async def test_offline_device_is_not_pre_trusted(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """Only devices actually online this poll count toward the baseline —
+        a MAC the router merely mentions (is_online=False) shouldn't be
+        silently trusted before it's ever really connected."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        assert await TrustedMacRepository().is_trusted('d4:6e:0e:33:f2:1a') is False
+
+    async def test_fresh_install_path_only_fires_once(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """A device joining after the baseline is established must still
+        alert normally — the auto-trust behavior is strictly a one-time,
+        empty-database bootstrap, not a standing exemption."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # establishes baseline
+
+        new_mac = 'aa:aa:aa:aa:aa:aa'
+        adapter._devices.append(DeviceSnapshot(
+            mac_address=new_mac, ip_address='10.0.0.99', hostname='late-joiner',
+            interface_name='WiFi', is_online=True,
+        ))
+        try:
+            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Alert).where(Alert.device_mac == new_mac, Alert.alert_type == 'NEW_DEVICE')
+                )
+                assert len(result.scalars().all()) == 1
+        finally:
+            async with get_session() as session:
+                await session.execute(delete(Device).where(Device.mac_address == new_mac))
+                await session.execute(delete(Alert).where(Alert.device_mac == new_mac))
+                await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == new_mac))
 
 
 def _wired_snapshot(mac: str, port_alias: str, is_online: bool = True) -> DeviceSnapshot:

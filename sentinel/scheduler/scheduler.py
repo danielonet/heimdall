@@ -396,6 +396,17 @@ class SentinelScheduler:
             raise RuntimeError('Scheduler not running')
         return self._threat_intel
 
+    def reset_ml_state(self) -> None:
+        """Thread-safe: clear the running AnomalyEngine's in-memory bootstrap
+        buffers and loaded-model cache — called via /api/settings/purge after
+        the on-disk model files and devices/traffic_samples tables have been
+        wiped, so this process doesn't keep serving now-orphaned models for
+        the rest of its uptime. Fire-and-forget: reset() is a couple of plain
+        dict.clear() calls, nothing worth blocking the request thread on."""
+        if self._loop is None or self._anomaly_engine is None:
+            return
+        self._loop.call_soon_threadsafe(self._anomaly_engine.reset)
+
 
 _scheduler: SentinelScheduler | None = None
 

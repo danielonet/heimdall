@@ -9,6 +9,7 @@ from sentinel.db.session import init_db
 from sentinel.scheduler.scheduler import init_scheduler
 
 from sentinel.api.routes import alerts, auth, devices, ports, rules, system, threats
+from sentinel.api.routes import settings as settings_routes
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(ports.bp,   url_prefix='/api/ports')
     app.register_blueprint(threats.bp, url_prefix='/api/threats')
     app.register_blueprint(system.bp,  url_prefix='/api')
+    app.register_blueprint(settings_routes.bp, url_prefix='/api/settings')
 
     logger.info('Heimdall sentinel API ready')
     return app

@@ -96,6 +96,78 @@ class TestPatchAlert:
         assert resp.get_json()['resolved'] is True
 
 
+class TestListAlertsGrouped:
+    def test_groups_by_device_and_type(self, client):
+        _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='NEW_DEVICE')
+        _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='NEW_DEVICE')
+        _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='HIGH_UPLOAD')
+        _seed_alert(device_mac='bb:bb:bb:bb:bb:bb', alert_type='NEW_DEVICE')
+        resp = client.get('/api/alerts/grouped')
+        groups = {(g['device_mac'], g['alert_type']): g['count'] for g in resp.get_json()['groups']}
+        assert groups[('aa:aa:aa:aa:aa:aa', 'NEW_DEVICE')] == 2
+        assert groups[('aa:aa:aa:aa:aa:aa', 'HIGH_UPLOAD')] == 1
+        assert groups[('bb:bb:bb:bb:bb:bb', 'NEW_DEVICE')] == 1
+
+    def test_severity_is_the_worst_in_the_group(self, client):
+        """func.max() on the raw string would pick WARNING over CRITICAL —
+        alphabetically CRITICAL < WARNING — so this must use the rank case."""
+        _seed_alert(severity='WARNING')
+        _seed_alert(severity='CRITICAL')
+        resp = client.get('/api/alerts/grouped')
+        assert resp.get_json()['groups'][0]['severity'] == 'CRITICAL'
+
+    def test_counts_unacknowledged_and_unresolved(self, client):
+        _seed_alert(acknowledged=True, resolved=True)
+        _seed_alert(acknowledged=False, resolved=False)
+        resp = client.get('/api/alerts/grouped')
+        group = resp.get_json()['groups'][0]
+        assert group['count'] == 2
+        assert group['unacknowledged_count'] == 1
+        assert group['unresolved_count'] == 1
+
+    def test_filter_by_acknowledged(self, client):
+        _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', acknowledged=True)
+        _seed_alert(device_mac='bb:bb:bb:bb:bb:bb', acknowledged=False)
+        resp = client.get('/api/alerts/grouped?acknowledged=false')
+        groups = resp.get_json()['groups']
+        assert len(groups) == 1
+        assert groups[0]['device_mac'] == 'bb:bb:bb:bb:bb:bb'
+
+
+class TestBulkPatchAlerts:
+    def test_requires_device_mac_or_alert_type(self, client):
+        resp = client.patch('/api/alerts/bulk', json={'acknowledged': True})
+        assert resp.status_code == 400
+
+    def test_requires_acknowledged_or_resolved(self, client):
+        resp = client.patch('/api/alerts/bulk', json={'device_mac': 'aa:aa:aa:aa:aa:aa'})
+        assert resp.status_code == 400
+
+    def test_acks_all_matching_device_and_type(self, client):
+        id_a = _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='NEW_DEVICE')
+        id_b = _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='NEW_DEVICE')
+        other = _seed_alert(device_mac='bb:bb:bb:bb:bb:bb', alert_type='NEW_DEVICE')
+
+        resp = client.patch('/api/alerts/bulk', json={
+            'device_mac': 'aa:aa:aa:aa:aa:aa', 'alert_type': 'NEW_DEVICE', 'acknowledged': True,
+        })
+        assert resp.status_code == 200
+        assert resp.get_json()['updated'] == 2
+
+        assert client.get(f'/api/alerts/{id_a}').get_json()['acknowledged'] is True
+        assert client.get(f'/api/alerts/{id_b}').get_json()['acknowledged'] is True
+        assert client.get(f'/api/alerts/{other}').get_json()['acknowledged'] is False
+
+    def test_resolves_by_alert_type_only(self, client):
+        id_a = _seed_alert(device_mac='aa:aa:aa:aa:aa:aa', alert_type='HIGH_UPLOAD')
+        id_b = _seed_alert(device_mac='bb:bb:bb:bb:bb:bb', alert_type='HIGH_UPLOAD')
+
+        resp = client.patch('/api/alerts/bulk', json={'alert_type': 'HIGH_UPLOAD', 'resolved': True})
+        assert resp.get_json()['updated'] == 2
+        assert client.get(f'/api/alerts/{id_a}').get_json()['resolved'] is True
+        assert client.get(f'/api/alerts/{id_b}').get_json()['resolved'] is True
+
+
 class TestDeleteAlert:
     def test_requires_auth(self, client):
         alert_id = _seed_alert()
