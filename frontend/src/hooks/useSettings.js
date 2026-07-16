@@ -9,6 +9,14 @@ export function useSettings() {
   })
 }
 
+export function useNetworkInterfaces() {
+  return useQuery({
+    queryKey: ['settings', 'interfaces'],
+    queryFn: () => apiJson('/settings/interfaces'),
+    select: (data) => data.interfaces,
+  })
+}
+
 export function useUpdateSettings() {
   const qc = useQueryClient()
   return useMutation({

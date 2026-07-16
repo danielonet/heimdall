@@ -5,6 +5,7 @@ import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
+import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import heimdallLogo from '../assets/heimdall-logo.svg'
 
@@ -70,23 +71,22 @@ export function SettingsPage() {
       </div>
 
       <div className={sectionGridClass}>
+        <NetworkInterfaceSection />
         <PurgeDatabaseSection />
-
-        <div className="border border-border bg-surface p-4">
-          <div className="mb-3 text-[8px] tracking-[3px] text-text-muted">SESSION</div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="border border-accent-red/30 bg-accent-red/5 px-4 py-2 text-[10px] tracking-wider text-accent-red transition-colors hover:bg-accent-red/20"
-          >
-            LOG OUT
-          </button>
-        </div>
       </div>
 
-      <div className="flex items-center gap-3 border border-border bg-surface p-4">
-        <img src={heimdallLogo} alt="" className="h-6 w-6 flex-shrink-0" />
-        <div className="text-[9px] text-text-muted">Sentinel — Heimdall Home Network Monitor</div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-4">
+        <div className="flex items-center gap-3">
+          <img src={heimdallLogo} alt="" className="h-6 w-6 flex-shrink-0" />
+          <div className="text-[9px] text-text-muted">Sentinel — Heimdall Home Network Monitor</div>
+        </div>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="border border-accent-red/30 bg-accent-red/5 px-4 py-2 text-[10px] tracking-wider text-accent-red transition-colors hover:bg-accent-red/20"
+        >
+          LOG OUT
+        </button>
       </div>
     </div>
   )
