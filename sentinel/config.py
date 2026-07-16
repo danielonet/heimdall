@@ -13,6 +13,25 @@ def _read_secret_file(path: str) -> str:
         return ''
 
 
+def write_secret_file(path: str, value: str) -> None:
+    """Write a Docker-secret-style file — used by the Settings tab's
+    router/SMTP password fields, so editing a password there still keeps
+    the file (not the database) as the source of truth, per CLAUDE.md's
+    "secrets via Docker secrets only" rule.
+
+    Only works when `path` is actually writable by this process. The
+    project's console/dev mode (scripts/run.sh) points *_FILE env vars
+    directly at ./secrets/*.txt, which is writable. A full docker-compose
+    deployment using Docker's native `secrets:` mechanism mounts these
+    read-only at /run/secrets/*, so this will raise OSError there — see
+    docs/architecture/09-docker-compose.md.
+    """
+    if not path:
+        raise ValueError('No secret file path is configured for this value')
+    with open(path, 'w') as f:
+        f.write(value.strip() + '\n')
+
+
 class Settings(BaseSettings):
     """Application configuration.
 
@@ -28,6 +47,7 @@ class Settings(BaseSettings):
     ROUTER_PORT: int = 80
     ROUTER_USERNAME: str = 'home'
     ROUTER_PASSWORD: str = ''      # populated from ROUTER_PASSWORD_FILE if blank
+    ROUTER_PASSWORD_FILE: str = ''  # also the write target for PATCH /api/settings
     POLL_INTERVAL_SECONDS: int = 15
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router
     SCHEDULER_ENABLED: bool = True  # set False in tests to avoid starting the poll loop
@@ -86,7 +106,8 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ''
     SMTP_TO: str = ''               # falls back to SMTP_FROM if blank (notify yourself)
     SMTP_USERNAME: str = ''
-    SMTP_PASSWORD: str = ''
+    SMTP_PASSWORD: str = ''        # populated from SMTP_PASSWORD_FILE if blank
+    SMTP_PASSWORD_FILE: str = ''   # also the write target for PATCH /api/settings
     SMTP_USE_TLS: bool = True
 
     class Config:
@@ -97,10 +118,11 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context: object) -> None:
         """Load secrets from Docker secret files when the plain value is empty."""
-        if not self.ROUTER_PASSWORD:
-            path = os.environ.get('ROUTER_PASSWORD_FILE', '')
-            if path:
-                object.__setattr__(self, 'ROUTER_PASSWORD', _read_secret_file(path))
+        if not self.ROUTER_PASSWORD and self.ROUTER_PASSWORD_FILE:
+            object.__setattr__(self, 'ROUTER_PASSWORD', _read_secret_file(self.ROUTER_PASSWORD_FILE))
+
+        if not self.SMTP_PASSWORD and self.SMTP_PASSWORD_FILE:
+            object.__setattr__(self, 'SMTP_PASSWORD', _read_secret_file(self.SMTP_PASSWORD_FILE))
 
         if not self.JWT_SECRET_KEY:
             path = os.environ.get('JWT_SECRET_FILE', '')

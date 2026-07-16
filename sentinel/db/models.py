@@ -71,6 +71,23 @@ class AppSettings(Base):
     # restart — see POST /api/settings.
     sniff_iface: Mapped[str | None] = mapped_column(String(20))
 
+    # Router credentials (Settings tab "ROUTER" section). Only the username
+    # lives here — the password is deliberately NOT stored in the database;
+    # it's written straight to Settings.ROUTER_PASSWORD_FILE on disk instead,
+    # keeping CLAUDE.md's "secrets via Docker secrets only" rule intact. See
+    # sentinel/adapter/factory.py and SentinelScheduler.reload_router_credentials().
+    router_username: Mapped[str | None] = mapped_column(String(100))
+
+    # Notifications tab. smtp_password is likewise never stored here — see
+    # Settings.SMTP_PASSWORD_FILE.
+    ntfy_url: Mapped[str | None] = mapped_column(String(500))
+    smtp_host: Mapped[str | None] = mapped_column(String(255))
+    smtp_port: Mapped[int | None] = mapped_column(Integer)
+    smtp_from: Mapped[str | None] = mapped_column(String(255))
+    smtp_to: Mapped[str | None] = mapped_column(String(255))
+    smtp_username: Mapped[str | None] = mapped_column(String(255))
+    smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean)
+
 
 class TrustedMac(Base):
     """A permanently-trusted MAC address, independent of the devices table's

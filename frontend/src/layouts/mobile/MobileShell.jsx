@@ -10,6 +10,7 @@ const TABS = [
   { to: '/alerts', label: 'ALERTS' },
   { to: '/threats', label: 'THREATS' },
   { to: '/rules', label: 'RULES' },
+  { to: '/notifications', label: 'NOTIFICATIONS' },
 ]
 
 const BOTTOM_NAV = [

@@ -10,6 +10,7 @@ import { AlertsPage } from './pages/AlertsPage'
 import { PortsPage } from './pages/PortsPage'
 import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
+import { NotificationsPage } from './pages/NotificationsPage'
 import { SettingsPage } from './pages/SettingsPage'
 
 const queryClient = new QueryClient({
@@ -31,6 +32,7 @@ function App() {
               <Route path="/ports" element={<PortsPage />} />
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />
+              <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Routes>

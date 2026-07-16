@@ -111,6 +111,7 @@ JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
 ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
+SMTP_PASSWORD_FILE="${REPO_ROOT}/secrets/smtp_password.txt"
 
 # Source .env for non-secret settings (ROUTER_IP, SNIFF_IFACE, etc.) when available
 if [ -f "${REPO_ROOT}/.env" ]; then
@@ -127,6 +128,7 @@ export ROUTER_PASSWORD_FILE
 export JWT_SECRET_FILE
 export OTX_API_KEY_FILE
 export ADMIN_PASSWORD_FILE
+export SMTP_PASSWORD_FILE
 # DB_PASS exported so docker compose can interpolate ${DB_PASS} in compose file
 export DB_PASS
 

@@ -124,6 +124,18 @@ class SettingsRepository:
                 'data_retention_days': row.data_retention_days if row else settings.DATA_RETENTION_DAYS,
                 'baseline_established_at': row.baseline_established_at if row else None,
                 'sniff_iface': (row.sniff_iface if row and row.sniff_iface else settings.SNIFF_IFACE),
+                'router_username': (
+                    row.router_username if row and row.router_username else settings.ROUTER_USERNAME
+                ),
+                'ntfy_url': row.ntfy_url if row and row.ntfy_url else settings.NTFY_URL,
+                'smtp_host': row.smtp_host if row and row.smtp_host else settings.SMTP_HOST,
+                'smtp_port': row.smtp_port if row and row.smtp_port else settings.SMTP_PORT,
+                'smtp_from': row.smtp_from if row and row.smtp_from else settings.SMTP_FROM,
+                'smtp_to': row.smtp_to if row and row.smtp_to else settings.SMTP_TO,
+                'smtp_username': row.smtp_username if row and row.smtp_username else settings.SMTP_USERNAME,
+                'smtp_use_tls': (
+                    row.smtp_use_tls if row and row.smtp_use_tls is not None else settings.SMTP_USE_TLS
+                ),
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -149,6 +161,49 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.sniff_iface = iface
+
+    async def get_router_username(self) -> str:
+        return (await self.get_all())['router_username']
+
+    async def set_router_username(self, username: str) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.router_username = username
+
+    async def get_ntfy_url(self) -> str:
+        return (await self.get_all())['ntfy_url']
+
+    async def set_ntfy_url(self, url: str) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.ntfy_url = url
+
+    async def get_smtp_settings(self) -> dict:
+        """The non-secret SMTP fields — host/port/from/to/username/use_tls.
+        smtp_password is deliberately excluded; it lives in Settings.SMTP_PASSWORD
+        (sourced from SMTP_PASSWORD_FILE on disk), never in this table."""
+        data = await self.get_all()
+        return {
+            'smtp_host': data['smtp_host'],
+            'smtp_port': data['smtp_port'],
+            'smtp_from': data['smtp_from'],
+            'smtp_to': data['smtp_to'],
+            'smtp_username': data['smtp_username'],
+            'smtp_use_tls': data['smtp_use_tls'],
+        }
+
+    async def set_smtp_settings(
+        self, *, smtp_host: str, smtp_port: int, smtp_from: str,
+        smtp_to: str, smtp_username: str, smtp_use_tls: bool,
+    ) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.smtp_host = smtp_host
+            row.smtp_port = smtp_port
+            row.smtp_from = smtp_from
+            row.smtp_to = smtp_to
+            row.smtp_username = smtp_username
+            row.smtp_use_tls = smtp_use_tls
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

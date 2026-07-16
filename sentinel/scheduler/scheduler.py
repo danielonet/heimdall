@@ -140,6 +140,15 @@ class SentinelScheduler:
         # via run_until_complete since the loop isn't running yet.
         self._sniff_iface = self._loop.run_until_complete(self._resolve_sniff_iface())
 
+        # Likewise for notification settings (Notifications tab) — a
+        # previously-saved ntfy_url/SMTP config persists across restarts
+        # without editing .env. SMTP_PASSWORD itself is never DB-backed (see
+        # AppSettings' docstring), so it's still read straight off Settings,
+        # which model_post_init already populated from SMTP_PASSWORD_FILE.
+        self._notification_config = self._loop.run_until_complete(
+            self._resolve_notification_config(self._notification_config)
+        )
+
         self._anomaly_engine = AnomalyEngine(
             model_store=ModelStore(self._ml_model_dir),
             min_samples=self._ml_min_samples,
@@ -380,6 +389,27 @@ class SentinelScheduler:
             )
             return self._sniff_iface
 
+    async def _resolve_notification_config(self, fallback: NotificationConfig) -> NotificationConfig:
+        """The admin's configured ntfy_url/SMTP settings (SettingsRepository),
+        falling back to `fallback` (the env-config default built in
+        init_scheduler) if the DB isn't reachable yet at startup."""
+        try:
+            repo = SettingsRepository()
+            smtp = await repo.get_smtp_settings()
+            return NotificationConfig(
+                ntfy_url=await repo.get_ntfy_url(),
+                smtp_host=smtp['smtp_host'] or '',
+                smtp_port=smtp['smtp_port'] or 587,
+                smtp_from=smtp['smtp_from'] or '',
+                smtp_to=smtp['smtp_to'] or '',
+                smtp_username=smtp['smtp_username'] or '',
+                smtp_password=fallback.smtp_password,
+                smtp_use_tls=smtp['smtp_use_tls'] if smtp['smtp_use_tls'] is not None else True,
+            )
+        except Exception:
+            logger.exception('Failed to read notification config from SettingsRepository — using env defaults')
+            return fallback
+
     async def _ensure_adapter(self) -> RouterAdapter:
         if self._adapter is None:
             self._adapter = await create_router_adapter()
@@ -492,6 +522,46 @@ class SentinelScheduler:
             self._arp_watcher.restart(iface)
         if self._fingerprinter is not None:
             self._fingerprinter.restart(iface)
+
+    def reload_router_credentials(self) -> None:
+        """Thread-safe: drop the cached router adapter so the next call to
+        _ensure_adapter() rebuilds it from the current settings.ROUTER_USERNAME/
+        ROUTER_PASSWORD — called after the admin changes router credentials
+        in the Settings tab (PATCH /api/settings has already written the new
+        password to disk and mutated settings.ROUTER_PASSWORD in place by the
+        time this runs). Closes the old adapter's HTTP client on the
+        scheduler's own loop rather than leaking it.
+        """
+        if self._loop is None:
+            return
+
+        def _apply() -> None:
+            old_adapter = self._adapter
+            self._adapter = None
+            if old_adapter is None:
+                return
+            aclose = getattr(old_adapter, 'aclose', None)
+            if aclose is not None:
+                asyncio.ensure_future(aclose(), loop=self._loop)
+
+        self._loop.call_soon_threadsafe(_apply)
+
+    def reload_notification_config(self, config: NotificationConfig) -> None:
+        """Thread-safe: rebuild the notifier with new SMTP settings — called
+        after the admin saves the Settings tab's Notifications section, so it
+        takes effect on the next notify() call without restarting the
+        process. Also drops the cached RuleEngine (lazily rebuilt in
+        _poll_job) since it was constructed with a reference to the old
+        notifier and RuleEngine itself doesn't expose a way to swap it."""
+        self._notification_config = config
+        if self._loop is None:
+            return
+
+        def _apply() -> None:
+            self._notifier = NotificationService(config)
+            self._rule_engine = None
+
+        self._loop.call_soon_threadsafe(_apply)
 
 
 _scheduler: SentinelScheduler | None = None

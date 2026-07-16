@@ -7,6 +7,7 @@ import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
+import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
 import heimdallLogo from '../assets/heimdall-logo.svg'
 
 function formatUptime(seconds) {
@@ -63,6 +64,7 @@ export function SettingsPage() {
             <Field label="SSIDs">{(router.ssids || []).join(', ') || '—'}</Field>
           </div>
         )}
+        <RouterCredentialsForm />
       </div>
 
       <div className={sectionGridClass}>

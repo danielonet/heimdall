@@ -212,4 +212,43 @@ class TestSettingsRepository:
 
     async def test_get_all_returns_every_field_together(self):
         data = await SettingsRepository().get_all()
-        assert set(data.keys()) == {'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at'}
+        assert set(data.keys()) == {
+            'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at', 'sniff_iface',
+            'router_username', 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username',
+            'smtp_use_tls',
+        }
+
+    async def test_router_username_falls_back_to_the_env_default(self):
+        assert await SettingsRepository().get_router_username() == settings.ROUTER_USERNAME
+
+    async def test_router_username_set_then_get_round_trips(self):
+        await SettingsRepository().set_router_username('newadmin')
+        assert await SettingsRepository().get_router_username() == 'newadmin'
+
+    async def test_smtp_settings_fall_back_to_env_defaults_with_no_row(self):
+        smtp = await SettingsRepository().get_smtp_settings()
+        assert smtp == {
+            'smtp_host': settings.SMTP_HOST,
+            'smtp_port': settings.SMTP_PORT,
+            'smtp_from': settings.SMTP_FROM,
+            'smtp_to': settings.SMTP_TO,
+            'smtp_username': settings.SMTP_USERNAME,
+            'smtp_use_tls': settings.SMTP_USE_TLS,
+        }
+
+    async def test_smtp_settings_set_then_get_round_trips(self):
+        repo = SettingsRepository()
+        await repo.set_smtp_settings(
+            smtp_host='smtp.example.com', smtp_port=465, smtp_from='a@b.com',
+            smtp_to='c@d.com', smtp_username='a@b.com', smtp_use_tls=False,
+        )
+        smtp = await repo.get_smtp_settings()
+        assert smtp == {
+            'smtp_host': 'smtp.example.com', 'smtp_port': 465, 'smtp_from': 'a@b.com',
+            'smtp_to': 'c@d.com', 'smtp_username': 'a@b.com', 'smtp_use_tls': False,
+        }
+
+    async def test_smtp_settings_does_not_include_a_password_field(self):
+        """smtp_password is deliberately never stored in this table — see
+        Settings.SMTP_PASSWORD_FILE."""
+        assert 'smtp_password' not in await SettingsRepository().get_smtp_settings()

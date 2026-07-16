@@ -37,11 +37,22 @@ async def create_router_adapter() -> RouterAdapter:
         router_ip = discover_gateway_ip()
         logger.info('Auto-discovered router IP: %s', router_ip)
 
+    # Username is a runtime-overridable, non-secret setting (see
+    # SettingsRepository.set_router_username, PATCH /api/settings) — read
+    # fresh here so a change from the Settings tab applies to the next
+    # adapter build. The password is deliberately NOT DB-backed (see
+    # AppSettings.router_username's docstring) — PATCH /api/settings writes
+    # it straight to Settings.ROUTER_PASSWORD_FILE and mutates settings.
+    # ROUTER_PASSWORD in place, so reading it directly here already picks
+    # up any change.
+    from sentinel.db.repositories import SettingsRepository
+    username = await SettingsRepository().get_router_username()
+
     logger.info('Connecting to Sagemcom router at %s:%s', router_ip, settings.ROUTER_PORT)
     return SagemcomXmoAdapter(
         router_ip=router_ip,
         password=settings.ROUTER_PASSWORD,
         router_port=settings.ROUTER_PORT,
         poll_interval_s=settings.POLL_INTERVAL_SECONDS,
-        username=settings.ROUTER_USERNAME,
+        username=username,
     )

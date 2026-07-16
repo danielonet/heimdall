@@ -237,3 +237,114 @@ class TestPurge:
         body = client.get('/api/settings').get_json()
         assert body['baseline_established_at'] is None
         assert body['status'] == 'LEARNING'
+
+
+class TestRouterCredentials:
+    def test_get_never_includes_the_password_only_whether_one_is_set(self, client):
+        body = client.get('/api/settings').get_json()
+        assert 'router_password' not in body
+        assert isinstance(body['router_password_configured'], bool)
+
+    def test_updates_username(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'router_username': 'newadmin'}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['router_username'] == 'newadmin'
+        assert client.get('/api/settings').get_json()['router_username'] == 'newadmin'
+
+    def test_rejects_blank_username(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'router_username': '   '}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_password_change_rejected_when_no_secret_file_configured(self, client, auth_headers):
+        """This sandbox's test process doesn't run through scripts/run.sh, so
+        ROUTER_PASSWORD_FILE is blank — the route must refuse rather than
+        silently no-op or crash trying to write to an empty path."""
+        from sentinel.config import settings
+        assert not settings.ROUTER_PASSWORD_FILE  # sanity-check the premise
+        resp = client.patch('/api/settings', json={'router_password': 'hunter2'}, headers=auth_headers)
+        assert resp.status_code == 503
+
+    def test_blank_password_is_a_no_op_not_an_error(self, client, auth_headers):
+        """An empty string means 'leave it unchanged' — must not hit the
+        'no secret file configured' path just because the field was present."""
+        resp = client.patch('/api/settings', json={'router_password': ''}, headers=auth_headers)
+        assert resp.status_code == 200
+
+    def test_password_writes_to_the_configured_file_and_applies_live(self, client, auth_headers, tmp_path):
+        import sentinel.config as config_module
+        pw_file = tmp_path / 'router_password.txt'
+        original = config_module.settings.ROUTER_PASSWORD_FILE
+        object.__setattr__(config_module.settings, 'ROUTER_PASSWORD_FILE', str(pw_file))
+        try:
+            resp = client.patch('/api/settings', json={'router_password': 'hunter2'}, headers=auth_headers)
+            assert resp.status_code == 200
+            assert pw_file.read_text().strip() == 'hunter2'
+            assert config_module.settings.ROUTER_PASSWORD == 'hunter2'
+            assert client.get('/api/settings').get_json()['router_password_configured'] is True
+        finally:
+            object.__setattr__(config_module.settings, 'ROUTER_PASSWORD_FILE', original)
+            object.__setattr__(config_module.settings, 'ROUTER_PASSWORD', '')
+
+
+class TestSmtpSettings:
+    def test_get_never_includes_the_password_only_whether_one_is_set(self, client):
+        body = client.get('/api/settings').get_json()
+        assert 'smtp_password' not in body
+        assert isinstance(body['smtp_password_configured'], bool)
+
+    def test_updates_smtp_fields(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={
+            'smtp_host': 'smtp.example.com', 'smtp_port': 465, 'smtp_from': 'heimdall@example.com',
+            'smtp_to': 'me@example.com', 'smtp_username': 'heimdall@example.com', 'smtp_use_tls': False,
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['smtp_host'] == 'smtp.example.com'
+        assert body['smtp_port'] == 465
+        assert body['smtp_from'] == 'heimdall@example.com'
+        assert body['smtp_to'] == 'me@example.com'
+        assert body['smtp_username'] == 'heimdall@example.com'
+        assert body['smtp_use_tls'] is False
+
+    def test_partial_update_preserves_unspecified_fields(self, client, auth_headers):
+        client.patch('/api/settings', json={'smtp_host': 'smtp.example.com', 'smtp_from': 'a@b.com'}, headers=auth_headers)
+        resp = client.patch('/api/settings', json={'smtp_port': 25}, headers=auth_headers)
+        body = resp.get_json()
+        assert body['smtp_port'] == 25
+        assert body['smtp_host'] == 'smtp.example.com'
+        assert body['smtp_from'] == 'a@b.com'
+
+    def test_rejects_out_of_range_port(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'smtp_port': 0}, headers=auth_headers)
+        assert resp.status_code == 400
+        resp = client.patch('/api/settings', json={'smtp_port': 70000}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_non_boolean_use_tls(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'smtp_use_tls': 'yes'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_password_change_rejected_when_no_secret_file_configured(self, client, auth_headers):
+        from sentinel.config import settings
+        assert not settings.SMTP_PASSWORD_FILE  # sanity-check the premise
+        resp = client.patch('/api/settings', json={'smtp_password': 'hunter2'}, headers=auth_headers)
+        assert resp.status_code == 503
+
+    def test_blank_password_is_a_no_op_not_an_error(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'smtp_password': ''}, headers=auth_headers)
+        assert resp.status_code == 200
+
+    def test_password_writes_to_the_configured_file_and_applies_live(self, client, auth_headers, tmp_path):
+        import sentinel.config as config_module
+        pw_file = tmp_path / 'smtp_password.txt'
+        original = config_module.settings.SMTP_PASSWORD_FILE
+        object.__setattr__(config_module.settings, 'SMTP_PASSWORD_FILE', str(pw_file))
+        try:
+            resp = client.patch('/api/settings', json={'smtp_password': 'app-password'}, headers=auth_headers)
+            assert resp.status_code == 200
+            assert pw_file.read_text().strip() == 'app-password'
+            assert config_module.settings.SMTP_PASSWORD == 'app-password'
+            assert client.get('/api/settings').get_json()['smtp_password_configured'] is True
+        finally:
+            object.__setattr__(config_module.settings, 'SMTP_PASSWORD_FILE', original)
+            object.__setattr__(config_module.settings, 'SMTP_PASSWORD', '')

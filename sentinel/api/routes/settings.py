@@ -1,5 +1,6 @@
 """Settings routes: ML learning-period + data-retention configuration,
-system status, destructive DB purge/reset."""
+router credentials, SMTP notification settings, system status, destructive
+DB purge/reset."""
 from __future__ import annotations
 
 import hmac
@@ -9,9 +10,11 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import text
 
+from sentinel.config import settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.ml.model_store import ModelStore
+from sentinel.notifications.service import NotificationConfig
 from sentinel.scheduler.scheduler import get_scheduler
 from sentinel.security.interfaces import list_network_interfaces
 
@@ -23,15 +26,18 @@ MIN_LEARNING_PERIOD_HOURS = 1
 MAX_LEARNING_PERIOD_HOURS = 24 * 30  # 30 days
 MIN_RETENTION_DAYS = 1
 MAX_RETENTION_DAYS = 3650  # 10 years
+MIN_SMTP_PORT = 1
+MAX_SMTP_PORT = 65535
 
 
-@bp.route('', methods=['GET'])
-async def get_settings():
-    repo = SettingsRepository()
+async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:
+    """Shared response shape for GET and PATCH. Never includes the actual
+    router/SMTP password — only whether one is currently configured, so the
+    frontend can show a "configured" indicator without ever round-tripping
+    the secret back to the browser."""
     data = await repo.get_all()
     status = await repo.get_status()
-    db_size_mb = await _get_db_size_mb()
-    return jsonify(
+    payload = dict(
         ml_learning_period_hours=data['ml_learning_period_hours'],
         data_retention_days=data['data_retention_days'],
         sniff_iface=data['sniff_iface'],
@@ -39,8 +45,25 @@ async def get_settings():
             data['baseline_established_at'].isoformat() if data['baseline_established_at'] else None
         ),
         status=status,
-        db_size_mb=db_size_mb,
+        router_username=data['router_username'],
+        router_password_configured=bool(settings.ROUTER_PASSWORD),
+        ntfy_url=data['ntfy_url'],
+        smtp_host=data['smtp_host'],
+        smtp_port=data['smtp_port'],
+        smtp_from=data['smtp_from'],
+        smtp_to=data['smtp_to'],
+        smtp_username=data['smtp_username'],
+        smtp_use_tls=data['smtp_use_tls'],
+        smtp_password_configured=bool(settings.SMTP_PASSWORD),
     )
+    if include_db_size:
+        payload['db_size_mb'] = await _get_db_size_mb()
+    return payload
+
+
+@bp.route('', methods=['GET'])
+async def get_settings():
+    return jsonify(await _serialize(SettingsRepository(), include_db_size=True))
 
 
 @bp.route('/interfaces', methods=['GET'])
@@ -88,6 +111,52 @@ async def update_settings():
                       f'{", ".join(available) or "(none detected)"}'
             ), 400
 
+    router_username = body.get('router_username')
+    if 'router_username' in body and (not isinstance(router_username, str) or not router_username.strip()):
+        return jsonify(error='router_username must not be blank'), 400
+
+    router_password = body.get('router_password')
+    if 'router_password' in body and not isinstance(router_password, str):
+        return jsonify(error='router_password must be a string'), 400
+    # An empty string means "leave it unchanged" — the frontend never
+    # receives the real password back to pre-fill, so a blank field must not
+    # accidentally wipe a configured one.
+    change_router_password = bool(router_password)
+    if change_router_password and not settings.ROUTER_PASSWORD_FILE:
+        return jsonify(
+            error='ROUTER_PASSWORD_FILE is not configured on this deployment — router_password '
+                  'can only be changed by editing the secrets file directly and restarting.'
+        ), 503
+
+    ntfy_url = body.get('ntfy_url')
+    if 'ntfy_url' in body and not isinstance(ntfy_url, str):
+        return jsonify(error='ntfy_url must be a string'), 400
+
+    smtp_port = body.get('smtp_port')
+    if 'smtp_port' in body and (
+        not isinstance(smtp_port, int) or isinstance(smtp_port, bool)
+        or not (MIN_SMTP_PORT <= smtp_port <= MAX_SMTP_PORT)
+    ):
+        return jsonify(error=f'smtp_port must be an integer between {MIN_SMTP_PORT} and {MAX_SMTP_PORT}'), 400
+
+    for field in ('smtp_host', 'smtp_from', 'smtp_to', 'smtp_username'):
+        if field in body and not isinstance(body.get(field), str):
+            return jsonify(error=f'{field} must be a string'), 400
+
+    if 'smtp_use_tls' in body and not isinstance(body.get('smtp_use_tls'), bool):
+        return jsonify(error='smtp_use_tls must be a boolean'), 400
+
+    smtp_password = body.get('smtp_password')
+    if 'smtp_password' in body and not isinstance(smtp_password, str):
+        return jsonify(error='smtp_password must be a string'), 400
+    change_smtp_password = bool(smtp_password)
+    if change_smtp_password and not settings.SMTP_PASSWORD_FILE:
+        return jsonify(
+            error='SMTP_PASSWORD_FILE is not configured on this deployment — smtp_password '
+                  'can only be changed by editing the secrets file directly and restarting.'
+        ), 503
+
+    # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
     if 'data_retention_days' in body:
@@ -99,17 +168,54 @@ async def update_settings():
         except RuntimeError:
             pass  # scheduler not running (e.g. tests) — takes effect on next start
 
-    data = await repo.get_all()
-    status = await repo.get_status()
-    return jsonify(
-        ml_learning_period_hours=data['ml_learning_period_hours'],
-        data_retention_days=data['data_retention_days'],
-        sniff_iface=data['sniff_iface'],
-        baseline_established_at=(
-            data['baseline_established_at'].isoformat() if data['baseline_established_at'] else None
-        ),
-        status=status,
+    if 'router_username' in body:
+        await repo.set_router_username(router_username.strip())
+    if change_router_password:
+        write_secret_file(settings.ROUTER_PASSWORD_FILE, router_password)
+        object.__setattr__(settings, 'ROUTER_PASSWORD', router_password.strip())
+    if 'router_username' in body or change_router_password:
+        try:
+            get_scheduler().reload_router_credentials()
+        except RuntimeError:
+            pass  # scheduler not running (e.g. tests) — takes effect on next start
+
+    if 'ntfy_url' in body:
+        await repo.set_ntfy_url(ntfy_url.strip())
+
+    smtp_fields_changed = any(
+        f in body for f in ('smtp_host', 'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls')
     )
+    if smtp_fields_changed:
+        current = await repo.get_smtp_settings()
+        await repo.set_smtp_settings(
+            smtp_host=body.get('smtp_host', current['smtp_host']),
+            smtp_port=body.get('smtp_port', current['smtp_port']),
+            smtp_from=body.get('smtp_from', current['smtp_from']),
+            smtp_to=body.get('smtp_to', current['smtp_to']),
+            smtp_username=body.get('smtp_username', current['smtp_username']),
+            smtp_use_tls=body.get('smtp_use_tls', current['smtp_use_tls']),
+        )
+    if change_smtp_password:
+        write_secret_file(settings.SMTP_PASSWORD_FILE, smtp_password)
+        object.__setattr__(settings, 'SMTP_PASSWORD', smtp_password.strip())
+    if 'ntfy_url' in body or smtp_fields_changed or change_smtp_password:
+        smtp = await repo.get_smtp_settings()
+        current_ntfy_url = await repo.get_ntfy_url()
+        try:
+            get_scheduler().reload_notification_config(NotificationConfig(
+                ntfy_url=current_ntfy_url,
+                smtp_host=smtp['smtp_host'] or '',
+                smtp_port=smtp['smtp_port'] or 587,
+                smtp_from=smtp['smtp_from'] or '',
+                smtp_to=smtp['smtp_to'] or '',
+                smtp_username=smtp['smtp_username'] or '',
+                smtp_password=settings.SMTP_PASSWORD,
+                smtp_use_tls=smtp['smtp_use_tls'] if smtp['smtp_use_tls'] is not None else True,
+            ))
+        except RuntimeError:
+            pass  # scheduler not running (e.g. tests) — takes effect on next start
+
+    return jsonify(await _serialize(repo))
 
 
 @bp.route('/purge', methods=['POST'])
