@@ -48,16 +48,28 @@ class Device(Base):
 
 class AppSettings(Base):
     """Singleton row (id always 1) for runtime-configurable settings that must
-    take effect without restarting the process — currently just the ML
-    learning-period window, adjustable from the frontend Settings tab. Falls
-    back to Settings.ML_LEARNING_PERIOD_HOURS (the env-config default) until
-    an admin sets an override here — see SettingsRepository.
+    take effect without restarting the process — the ML learning-period
+    window and the data-retention window, both adjustable from the frontend
+    Settings tab. Falls back to the matching Settings.* env-config default
+    until an admin sets an override here — see SettingsRepository.
     """
 
     __tablename__ = 'app_settings'
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     ml_learning_period_hours: Mapped[int] = mapped_column(Integer, server_default='72')
+    data_retention_days: Mapped[int] = mapped_column(Integer, server_default='90')
+    # When the current learning clock started — stamped by
+    # _auto_trust_new_connections_during_learning (jobs.py) and cleared back to NULL
+    # by a purge (POST /api/settings/purge), so the frontend's LEARNING/ARMED
+    # status badge tracks the *current* baseline, not the original install.
+    baseline_established_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # NULL = use Settings.SNIFF_IFACE (the env default) — overridden once an
+    # admin picks a NIC from the Settings tab dropdown (see
+    # sentinel/security/interfaces.py). Applied live via
+    # SentinelScheduler.restart_sniffers(), not just on the next process
+    # restart — see POST /api/settings.
+    sniff_iface: Mapped[str | None] = mapped_column(String(20))
 
 
 class TrustedMac(Base):

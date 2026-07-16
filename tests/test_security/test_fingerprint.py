@@ -1,6 +1,7 @@
+import threading
+
 from scapy.all import IP, TCP, UDP
 
-from sentinel.security import fingerprint
 from sentinel.security.fingerprint import PassiveFingerprinter
 
 
@@ -8,21 +9,65 @@ def _syn(src: str, ttl: int, window: int) -> IP:
     return IP(src=src, ttl=ttl) / TCP(sport=1234, dport=80, flags='S', window=window)
 
 
+class _FinishedThread:
+    """A stand-in for AsyncSniffer with a .thread that's already exited —
+    so _watch_for_failure's join() returns immediately, making these tests
+    deterministic instead of racing a real background sniffer thread. Also
+    doubles as a fake AsyncSniffer class (start()/stop() no-ops) so it can
+    stand in for `AsyncSniffer(...)` itself in restart()/start() tests."""
+
+    def __init__(self, *args, exception=None, **kwargs):
+        self.thread = threading.Thread(target=lambda: None)
+        self.thread.start()
+        self.thread.join()
+        self.exception = exception
+
+    def start(self) -> None:
+        pass
+
+    def stop(self, join: bool = True) -> None:
+        pass
+
+
 class TestIsActive:
     def test_defaults_false(self):
         fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
         assert fp.is_active is False
 
-    def test_resets_false_when_interface_not_found(self, monkeypatch):
+    def test_watch_for_failure_marks_inactive_on_exception(self):
         """Scapy raises ValueError (not OSError) for a bad iface name — a
         misconfigured SNIFF_IFACE must still be reported as inactive."""
-        def _raise(*args, **kwargs):
-            raise ValueError("Interface 'eth0' not found !")
-
-        monkeypatch.setattr(fingerprint, 'sniff', _raise)
         fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
-        fp._run()
+        fp._active = True  # pretend sniffing had started
+        fake_sniffer = _FinishedThread(exception=ValueError("Interface 'eth0' not found !"))
+        fp._sniffer = fake_sniffer
+
+        fp._watch_for_failure(fake_sniffer, threading.Event())
+
         assert fp.is_active is False
+
+    def test_watch_for_failure_is_a_no_op_for_an_intentional_stop(self):
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        fp._active = True
+        fake_sniffer = _FinishedThread(exception=None)
+        fp._sniffer = fake_sniffer
+        stop_requested = threading.Event()
+        stop_requested.set()
+
+        fp._watch_for_failure(fake_sniffer, stop_requested)
+
+        assert fp.is_active is False
+
+    def test_stop_without_ever_starting_is_a_no_op(self):
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        fp.stop()  # must not raise
+        assert fp.is_active is False
+
+    def test_restart_updates_iface(self, monkeypatch):
+        monkeypatch.setattr('sentinel.security.fingerprint.AsyncSniffer', lambda *a, **k: _FinishedThread())
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+        fp.restart('eth1')
+        assert fp.iface == 'eth1'
 
 
 class TestProcess:

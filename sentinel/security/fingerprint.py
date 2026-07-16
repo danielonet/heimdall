@@ -1,6 +1,7 @@
 """Passive OS fingerprinting — guesses a device's OS from TCP SYN packet
-characteristics (TTL, window size) without any active scanning. Runs
-alongside ArpWatcher in its own daemon thread; same NET_RAW requirement.
+characteristics (TTL, window size) without any active scanning. Uses Scapy's
+AsyncSniffer (its own background thread), alongside ArpWatcher; same
+NET_RAW requirement.
 """
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import logging
 import threading
 from typing import Callable
 
-from scapy.all import IP, TCP, sniff
+from scapy.all import IP, TCP, AsyncSniffer
 
 logger = logging.getLogger(__name__)
 
@@ -31,34 +32,81 @@ class PassiveFingerprinter:
         self._callback = on_fingerprint
         self._iface = iface
         self._seen: set[str] = set()
+        self._sniffer: AsyncSniffer | None = None
         self._active = False
+        self._stop_requested: threading.Event | None = None
 
     @property
     def is_active(self) -> bool:
-        """True once sniff() is actually running — false if raw sockets aren't permitted."""
+        """True once sniffing is actually running — false if raw sockets aren't permitted."""
         return self._active
 
-    def start(self) -> None:
-        thread = threading.Thread(target=self._run, name='passive-fingerprinter', daemon=True)
-        thread.start()
+    @property
+    def iface(self) -> str:
+        return self._iface
 
-    def _run(self) -> None:
-        try:
-            self._active = True
-            sniff(filter='tcp[tcpflags] & tcp-syn != 0', prn=self._process, iface=self._iface, store=False)
-        except PermissionError:
+    def start(self) -> None:
+        """Start sniffing on self._iface. Never raises to the caller — logs
+        and gives up if raw sockets aren't permitted or the interface
+        doesn't exist; failure surfaces asynchronously on AsyncSniffer's own
+        thread, so a watcher thread joins it to catch that.
+        """
+        stop_requested = threading.Event()
+        self._stop_requested = stop_requested
+        sniffer = AsyncSniffer(
+            filter='tcp[tcpflags] & tcp-syn != 0', prn=self._process, iface=self._iface, store=False,
+            started_callback=self._on_started,
+        )
+        self._sniffer = sniffer
+        sniffer.start()
+        threading.Thread(
+            target=self._watch_for_failure, args=(sniffer, stop_requested),
+            name='passive-fingerprinter-monitor', daemon=True,
+        ).start()
+
+    def stop(self) -> None:
+        """Stop sniffing, if running. Safe to call even if never started."""
+        if self._sniffer is not None and self._active:
+            if self._stop_requested is not None:
+                self._stop_requested.set()  # this stop was requested, not a failure — see _watch_for_failure
+            try:
+                self._sniffer.stop(join=False)
+            except Exception:
+                logger.exception('PassiveFingerprinter: error stopping sniffer on %s', self._iface)
+        self._active = False
+
+    def restart(self, iface: str) -> None:
+        """Stop sniffing on the current interface (if any) and start again
+        on `iface` — used when the admin changes SNIFF_IFACE in the Settings
+        tab, so it takes effect without restarting the whole process."""
+        self.stop()
+        self._iface = iface
+        self.start()
+
+    def _on_started(self) -> None:
+        self._active = True
+
+    def _watch_for_failure(self, sniffer: AsyncSniffer, stop_requested: threading.Event) -> None:
+        """Bound to the specific sniffer/event pair created by the start()
+        call that spawned this thread — never reads self._sniffer, so a
+        restart() replacing it mid-flight can't race this thread's view of
+        whether this particular run was stopped intentionally.
+        """
+        if sniffer.thread is None:
+            return
+        sniffer.thread.join()
+        if self._sniffer is sniffer:
             self._active = False
+        if stop_requested.is_set():
+            return  # an intentional stop()/restart() — not a failure worth logging
+        if sniffer.exception is not None:
+            logger.warning('PassiveFingerprinter: failed to sniff on %s: %s', self._iface, sniffer.exception)
+        else:
             logger.warning(
                 'PassiveFingerprinter: permission denied opening a raw socket on %s — '
                 'needs the NET_RAW capability (or root). Passive fingerprinting is disabled.',
                 self._iface,
             )
-        except (OSError, ValueError) as exc:
-            # ValueError covers Scapy's own "interface not found" (e.g. a
-            # misconfigured SNIFF_IFACE) — not an OSError subclass, but just
-            # as much a reason sniffing never actually started.
-            self._active = False
-            logger.warning('PassiveFingerprinter: failed to sniff on %s: %s', self._iface, exc)
 
     def _process(self, pkt) -> None:
         if IP not in pkt or TCP not in pkt:

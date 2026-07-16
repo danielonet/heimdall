@@ -1,6 +1,7 @@
+import threading
+
 from scapy.all import ARP
 
-from sentinel.security import arp_watch
 from sentinel.security.arp_watch import ArpWatcher
 
 
@@ -12,21 +13,69 @@ def _arp_request(ip: str, mac: str) -> ARP:
     return ARP(op=1, psrc=ip, hwsrc=mac)
 
 
+class _FinishedThread:
+    """A stand-in for AsyncSniffer with a .thread that's already exited —
+    so _watch_for_failure's join() returns immediately, making these tests
+    deterministic instead of racing a real background sniffer thread. Also
+    doubles as a fake AsyncSniffer class (start()/stop() no-ops) so it can
+    stand in for `AsyncSniffer(...)` itself in restart()/start() tests."""
+
+    def __init__(self, *args, exception=None, **kwargs):
+        self.thread = threading.Thread(target=lambda: None)
+        self.thread.start()
+        self.thread.join()
+        self.exception = exception
+
+    def start(self) -> None:
+        pass
+
+    def stop(self, join: bool = True) -> None:
+        pass
+
+
 class TestIsActive:
     def test_defaults_false(self):
         watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
         assert watcher.is_active is False
 
-    def test_resets_false_when_interface_not_found(self, monkeypatch):
+    def test_watch_for_failure_marks_inactive_on_exception(self):
         """Scapy raises ValueError (not OSError) for a bad iface name — a
         misconfigured SNIFF_IFACE must still be reported as inactive."""
-        def _raise(*args, **kwargs):
-            raise ValueError("Interface 'eth0' not found !")
-
-        monkeypatch.setattr(arp_watch, 'sniff', _raise)
         watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
-        watcher._run()
+        watcher._active = True  # pretend sniffing had started
+        fake_sniffer = _FinishedThread(exception=ValueError("Interface 'eth0' not found !"))
+        watcher._sniffer = fake_sniffer
+
+        watcher._watch_for_failure(fake_sniffer, threading.Event())
+
         assert watcher.is_active is False
+
+    def test_watch_for_failure_is_a_no_op_for_an_intentional_stop(self):
+        """stop()/restart() set the Event before tearing down — must not log
+        a spurious failure for a deliberate stop."""
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        watcher._active = True
+        fake_sniffer = _FinishedThread(exception=None)
+        watcher._sniffer = fake_sniffer
+        stop_requested = threading.Event()
+        stop_requested.set()
+
+        watcher._watch_for_failure(fake_sniffer, stop_requested)
+
+        assert watcher.is_active is False  # still updated...
+
+    def test_stop_without_ever_starting_is_a_no_op(self):
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        watcher.stop()  # must not raise
+        assert watcher.is_active is False
+
+    def test_restart_updates_iface(self, monkeypatch):
+        """restart() must switch to the new interface even if the sniffer
+        itself can't actually be exercised in this sandbox (no NET_RAW)."""
+        monkeypatch.setattr('sentinel.security.arp_watch.AsyncSniffer', lambda *a, **k: _FinishedThread())
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+        watcher.restart('eth1')
+        assert watcher.iface == 'eth1'
 
 
 class TestSeed:

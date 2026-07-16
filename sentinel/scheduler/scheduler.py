@@ -10,21 +10,22 @@ import dataclasses
 import logging
 import threading
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Coroutine
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import Flask
 from redis.asyncio import Redis, from_url
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.factory import create_router_adapter
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
-from sentinel.db.models import Alert, Device
+from sentinel.db.models import Alert, Device, WanStatusHistory
+from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -59,6 +60,7 @@ class SentinelScheduler:
         otx_api_key: str,
         nmap_scan_cron: str,
         threat_feed_refresh_cron: str,
+        data_retention_cron: str,
         notification_config: NotificationConfig,
         opencanary_log_path: str,
         canary_poll_interval_s: int,
@@ -73,6 +75,7 @@ class SentinelScheduler:
         self._otx_api_key = otx_api_key
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
+        self._data_retention_cron = data_retention_cron
         self._notification_config = notification_config
         self._opencanary_log_path = opencanary_log_path
         self._canary_poll_interval_s = canary_poll_interval_s
@@ -130,6 +133,13 @@ class SentinelScheduler:
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._redis_client = from_url(self._redis_url)
+
+        # A runtime-configured SNIFF_IFACE (an admin's pick from the Settings
+        # tab dropdown — see SettingsRepository) overrides the env default,
+        # so it persists across restarts without editing .env. Resolved here
+        # via run_until_complete since the loop isn't running yet.
+        self._sniff_iface = self._loop.run_until_complete(self._resolve_sniff_iface())
+
         self._anomaly_engine = AnomalyEngine(
             model_store=ModelStore(self._ml_model_dir),
             min_samples=self._ml_min_samples,
@@ -170,6 +180,12 @@ class SentinelScheduler:
             self._threat_feed_refresh_job,
             CronTrigger.from_crontab(self._threat_feed_refresh_cron),
             id='threat_feed_refresh',
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._data_retention_job,
+            CronTrigger.from_crontab(self._data_retention_cron),
+            id='data_retention',
             replace_existing=True,
         )
         self._scheduler.add_job(
@@ -255,6 +271,42 @@ class SentinelScheduler:
         except Exception:
             logger.exception('Threat feed refresh failed')
 
+    async def _data_retention_job(self) -> None:
+        """Roll off data older than SettingsRepository's data_retention_days
+        (env default: Settings.DATA_RETENTION_DAYS) — read fresh every run so
+        an admin's change in the Settings tab takes effect on the very next
+        nightly run, not just future data.
+
+        traffic_samples/port_stats are TimescaleDB hypertables: drop_chunks()
+        removes whole chunks below the cutoff, far cheaper than a row-by-row
+        DELETE at this table's poll-driven volume. It's chunk-granular, not
+        row-exact — a chunk straddling the cutoff is kept whole, so actual
+        retention can run up to one chunk_time_interval (default 7 days)
+        longer than configured; that's normal, expected TimescaleDB behavior.
+
+        alerts/wan_status_history are plain tables, so a direct DELETE is
+        used instead. devices/trusted_macs are deliberately untouched —
+        those represent current known-device state, not a time-series
+        history, and pruning them would risk re-triggering NEW_DEVICE alerts
+        for a device that's simply been offline (e.g. a seasonal device) for
+        longer than the retention window.
+        """
+        try:
+            days = await SettingsRepository().get_data_retention_days()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            async with get_session() as session:
+                await session.execute(
+                    text("SELECT drop_chunks('traffic_samples', older_than => :cutoff)"), {'cutoff': cutoff}
+                )
+                await session.execute(
+                    text("SELECT drop_chunks('port_stats', older_than => :cutoff)"), {'cutoff': cutoff}
+                )
+                await session.execute(delete(WanStatusHistory).where(WanStatusHistory.changed_at < cutoff))
+                await session.execute(delete(Alert).where(Alert.created_at < cutoff))
+            logger.info('Data retention cleanup complete (cutoff: %s, retention: %d days)', cutoff, days)
+        except Exception:
+            logger.exception('Data retention cleanup failed')
+
     async def _canary_poll_job(self) -> None:
         """Tail the OpenCanary log and persist any new honeypot-interaction alerts."""
         self._last_canary_check_at = datetime.now(timezone.utc)
@@ -313,6 +365,20 @@ class SentinelScheduler:
             await ModelTrainer(self._anomaly_engine).retrain_all()
         except Exception:
             logger.exception('Nightly ML retrain failed')
+
+    async def _resolve_sniff_iface(self) -> str:
+        """The admin's configured SNIFF_IFACE (SettingsRepository), falling
+        back to this scheduler's own env-config default if the DB isn't
+        reachable yet at startup — better to sniff on something than crash
+        the whole scheduler thread over a transient DB hiccup."""
+        try:
+            return await SettingsRepository().get_sniff_iface()
+        except Exception:
+            logger.exception(
+                'Failed to read sniff_iface from SettingsRepository — using env default %s',
+                self._sniff_iface,
+            )
+            return self._sniff_iface
 
     async def _ensure_adapter(self) -> RouterAdapter:
         if self._adapter is None:
@@ -379,6 +445,7 @@ class SentinelScheduler:
         return {
             'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
             'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
+            'sniff_iface': self._sniff_iface,
             'nmap_last_scan_at': (
                 self._last_nmap_scan_at.isoformat() if self._last_nmap_scan_at else None
             ),
@@ -406,6 +473,25 @@ class SentinelScheduler:
         if self._loop is None or self._anomaly_engine is None:
             return
         self._loop.call_soon_threadsafe(self._anomaly_engine.reset)
+
+    def restart_sniffers(self, iface: str) -> None:
+        """Restart ARP watch + passive fingerprinting on a new interface —
+        called when the admin changes SNIFF_IFACE in the Settings tab, so it
+        takes effect immediately instead of only on the next process
+        restart. Safe to call whether or not sniffing ever successfully
+        started (e.g. no NET_RAW) — restart() just stops-then-starts.
+
+        Unlike reset_ml_state(), this doesn't need to run on the scheduler's
+        own event loop — ArpWatcher/PassiveFingerprinter manage their own
+        threads directly and don't touch the asyncio loop at all, so calling
+        their plain restart() methods straight from the Flask request thread
+        is safe.
+        """
+        self._sniff_iface = iface
+        if self._arp_watcher is not None:
+            self._arp_watcher.restart(iface)
+        if self._fingerprinter is not None:
+            self._fingerprinter.restart(iface)
 
 
 _scheduler: SentinelScheduler | None = None
@@ -444,6 +530,7 @@ def init_scheduler(app: Flask) -> None:
         otx_api_key=app.config['OTX_API_KEY'],
         nmap_scan_cron=app.config['NMAP_SCAN_CRON'],
         threat_feed_refresh_cron=app.config['THREAT_FEED_REFRESH_CRON'],
+        data_retention_cron=app.config['DATA_RETENTION_CRON'],
         notification_config=notification_config,
         opencanary_log_path=app.config['OPENCANARY_LOG_PATH'],
         canary_poll_interval_s=app.config['CANARY_POLL_INTERVAL_SECONDS'],

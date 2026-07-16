@@ -15,7 +15,7 @@ from sqlalchemy import delete, select
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.adapter.models import DeviceSnapshot
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, Device, PortStats, TrafficSample, TrustedMac
+from sentinel.db.models import Alert, AppSettings, Device, PortStats, TrafficSample, TrustedMac
 from sentinel.db.repositories import TrustedMacRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.pipeline import create_default_pipeline
@@ -113,6 +113,7 @@ async def _cleanup_mock_rows():
         await session.execute(delete(Alert).where(Alert.device_mac.in_(_MOCK_MACS)))
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))
+        await session.execute(delete(AppSettings))
 
 
 _ANCHOR_MAC = '00:00:00:00:00:01'
@@ -121,12 +122,13 @@ _ANCHOR_MAC = '00:00:00:00:00:01'
 @pytest_asyncio.fixture
 async def established_baseline():
     """Seeds one already-known, already-trusted device unrelated to the mock
-    MACs, so poll_cycle never treats the devices/trusted_macs tables as
-    empty (see _establish_baseline_if_fresh_install in
+    MACs, so poll_cycle never treats the devices table as empty and
+    grandfathers straight to ARMED (see
+    _auto_trust_new_connections_during_learning in
     sentinel/scheduler/jobs.py). Needed by tests that exercise steady-state
-    NewDeviceDetector behavior — the fresh-install auto-baseline path itself
-    is covered separately by TestFreshInstallBaseline, which relies on these
-    tables actually being empty."""
+    NewDeviceDetector behavior — the LEARNING auto-trust path itself is
+    covered separately by TestAutoTrustDuringLearning, which relies on
+    these tables actually being empty."""
     async with get_session() as session:
         session.add(Device(
             mac_address=_ANCHOR_MAC, hostname='anchor', is_trusted=True,
@@ -375,13 +377,13 @@ class TestDetectionIntegration:
             assert (await session.get(Device, mac)).is_trusted is True
 
 
-class TestFreshInstallBaseline:
-    """Covers _establish_baseline_if_fresh_install. Deliberately does NOT use
-    established_baseline — these tests need the devices/trusted_macs tables
-    to actually be empty, which only holds on an isolated, freshly migrated
-    database (e.g. sentinel_test) with no other tests' leftover rows. Never
-    run against a live/shared database — the assertions below only make
-    sense before any real baseline exists."""
+class TestAutoTrustDuringLearning:
+    """Covers _auto_trust_new_connections_during_learning. Deliberately does
+    NOT use established_baseline — these tests need the devices/trusted_macs
+    tables to actually be empty, which only holds on an isolated, freshly
+    migrated database (e.g. sentinel_test) with no other tests' leftover
+    rows. Never run against a live/shared database — the assertions below
+    only make sense before any real baseline exists."""
 
     async def test_first_poll_on_empty_db_raises_no_new_device_alerts(
         self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
@@ -413,13 +415,34 @@ class TestFreshInstallBaseline:
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
         assert await TrustedMacRepository().is_trusted('d4:6e:0e:33:f2:1a') is False
 
-    async def test_fresh_install_path_only_fires_once(
+    async def test_stamps_baseline_established_at(
         self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
     ):
-        """A device joining after the baseline is established must still
-        alert normally — the auto-trust behavior is strictly a one-time,
-        empty-database bootstrap, not a standing exemption."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # establishes baseline
+        """Drives the frontend's LEARNING/ARMED status badge — see
+        SettingsRepository.get_all()/set_baseline_established_at/get_status()."""
+        from datetime import datetime, timezone
+
+        from sentinel.db.repositories import SettingsRepository
+
+        before = datetime.now(timezone.utc)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        after = datetime.now(timezone.utc)
+
+        stamped = (await SettingsRepository().get_all())['baseline_established_at']
+        assert stamped is not None
+        assert before <= stamped <= after
+
+    async def test_late_joiner_within_the_learning_window_is_not_alerted(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """The core regression this covers: a device connecting well after
+        the *first* post-purge/fresh-install poll — but still within the
+        learning window — must be silently trusted too, not flagged. The
+        original implementation only auto-trusted devices present on that
+        very first poll; anything joining later (a phone that was asleep, a
+        laptop still associating) fell straight into NewDeviceDetector's
+        normal CRITICAL alert path."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # starts the clock
 
         new_mac = 'aa:aa:aa:aa:aa:aa'
         adapter._devices.append(DeviceSnapshot(
@@ -428,6 +451,43 @@ class TestFreshInstallBaseline:
         ))
         try:
             await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+            assert await TrustedMacRepository().is_trusted(new_mac) is True
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Alert).where(Alert.device_mac == new_mac, Alert.alert_type == 'NEW_DEVICE')
+                )
+                assert result.scalars().all() == []
+        finally:
+            async with get_session() as session:
+                await session.execute(delete(Device).where(Device.mac_address == new_mac))
+                await session.execute(delete(Alert).where(Alert.device_mac == new_mac))
+                await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == new_mac))
+
+    async def test_new_device_alerts_normally_once_armed(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+    ):
+        """Once the learning period has elapsed, auto-trust must stop — a
+        device connecting for the first time after ARMED goes back through
+        normal NewDeviceDetector treatment."""
+        from datetime import datetime, timedelta, timezone
+
+        from sentinel.db.repositories import SettingsRepository
+
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # starts the clock
+        await SettingsRepository().set_baseline_established_at(
+            datetime.now(timezone.utc) - timedelta(hours=200)  # well past the 72h default
+        )
+
+        new_mac = 'aa:aa:aa:aa:aa:aa'
+        adapter._devices.append(DeviceSnapshot(
+            mac_address=new_mac, ip_address='10.0.0.99', hostname='late-joiner',
+            interface_name='WiFi', is_online=True,
+        ))
+        try:
+            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+
+            assert await TrustedMacRepository().is_trusted(new_mac) is False
             async with get_session() as session:
                 result = await session.execute(
                     select(Alert).where(Alert.device_mac == new_mac, Alert.alert_type == 'NEW_DEVICE')

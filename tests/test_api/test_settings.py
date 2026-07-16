@@ -1,8 +1,10 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from sentinel.db.models import Alert, Device, TrustedMac
+from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from tests.test_api.conftest import TEST_ADMIN_PASSWORD, _test_config
 
@@ -31,11 +33,48 @@ class TestGetSettings:
         from sentinel.config import settings
         resp = client.get('/api/settings')
         assert resp.status_code == 200
-        assert resp.get_json()['ml_learning_period_hours'] == settings.ML_LEARNING_PERIOD_HOURS
+        body = resp.get_json()
+        assert body['ml_learning_period_hours'] == settings.ML_LEARNING_PERIOD_HOURS
+        assert body['data_retention_days'] == settings.DATA_RETENTION_DAYS
 
     def test_no_auth_required_to_read(self, client):
         resp = client.get('/api/settings')
         assert resp.status_code == 200
+
+    def test_reports_db_size(self, client):
+        """Just needs to be a real, positive number — the exact value depends
+        on whatever else happens to be in the test database at the moment."""
+        resp = client.get('/api/settings')
+        assert resp.get_json()['db_size_mb'] > 0
+
+    def test_status_is_learning_when_database_is_empty(self, client):
+        resp = client.get('/api/settings')
+        assert resp.get_json()['status'] == 'LEARNING'
+        assert resp.get_json()['baseline_established_at'] is None
+
+    def test_status_is_armed_once_baseline_is_older_than_the_learning_period(self, client):
+        old_baseline = datetime.now(timezone.utc) - timedelta(hours=100)
+        asyncio.run(SettingsRepository().set_baseline_established_at(old_baseline))
+        asyncio.run(SettingsRepository().set_ml_learning_period_hours(72))
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['status'] == 'ARMED'
+
+    def test_status_stays_learning_within_the_learning_period(self, client):
+        recent_baseline = datetime.now(timezone.utc) - timedelta(hours=1)
+        asyncio.run(SettingsRepository().set_baseline_established_at(recent_baseline))
+        asyncio.run(SettingsRepository().set_ml_learning_period_hours(72))
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['status'] == 'LEARNING'
+
+    def test_pre_existing_install_with_devices_but_no_baseline_is_grandfathered_armed(self, client):
+        """A devices row without a stamped baseline_established_at means this
+        install predates the LEARNING/ARMED feature — must not force a fake
+        new learning period onto an already-established network."""
+        _seed_device()
+        resp = client.get('/api/settings')
+        assert resp.get_json()['status'] == 'ARMED'
 
 
 class TestUpdateSettings:
@@ -75,6 +114,48 @@ class TestUpdateSettings:
     def test_unrelated_fields_are_ignored(self, client, auth_headers):
         resp = client.patch('/api/settings', json={'unrelated': 'value'}, headers=auth_headers)
         assert resp.status_code == 200
+
+    def test_updates_the_retention_days(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'data_retention_days': 30}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['data_retention_days'] == 30
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['data_retention_days'] == 30
+
+    def test_retention_rejects_zero(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'data_retention_days': 0}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_retention_rejects_non_integer(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'data_retention_days': 'a lot'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_can_update_both_fields_in_one_request(self, client, auth_headers):
+        resp = client.patch(
+            '/api/settings',
+            json={'ml_learning_period_hours': 48, 'data_retention_days': 30},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['ml_learning_period_hours'] == 48
+        assert body['data_retention_days'] == 30
+
+    def test_an_invalid_field_leaves_a_valid_one_in_the_same_request_unapplied(self, client, auth_headers):
+        """Validate-then-apply, not apply-then-validate — a bad
+        data_retention_days shouldn't silently let ml_learning_period_hours
+        through in the same request."""
+        resp = client.patch(
+            '/api/settings',
+            json={'ml_learning_period_hours': 48, 'data_retention_days': -1},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+        resp = client.get('/api/settings')
+        from sentinel.config import settings
+        assert resp.get_json()['ml_learning_period_hours'] == settings.ML_LEARNING_PERIOD_HOURS
 
 
 class TestPurge:
@@ -125,3 +206,34 @@ class TestPurge:
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD}, headers=auth_headers)
         assert resp.status_code == 200
         assert not model_file.exists()
+
+    def test_preserves_configured_preferences(self, client, auth_headers):
+        """Purging is 'delete all recorded data', not 'reset my settings' —
+        an admin's ml_learning_period_hours/data_retention_days choices must
+        survive a purge."""
+        client.patch(
+            '/api/settings',
+            json={'ml_learning_period_hours': 24, 'data_retention_days': 30},
+            headers=auth_headers,
+        )
+
+        resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD}, headers=auth_headers)
+        assert resp.status_code == 200
+
+        resp = client.get('/api/settings')
+        body = resp.get_json()
+        assert body['ml_learning_period_hours'] == 24
+        assert body['data_retention_days'] == 30
+
+    def test_clears_baseline_established_at_and_returns_to_learning(self, client, auth_headers):
+        asyncio.run(SettingsRepository().set_baseline_established_at(
+            datetime.now(timezone.utc) - timedelta(hours=200)
+        ))
+        assert client.get('/api/settings').get_json()['status'] == 'ARMED'
+
+        resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD}, headers=auth_headers)
+        assert resp.status_code == 200
+
+        body = client.get('/api/settings').get_json()
+        assert body['baseline_established_at'] is None
+        assert body['status'] == 'LEARNING'

@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     # model actually finished training. See docs/architecture/05-ml-anomaly-engine.md.
     ML_LEARNING_PERIOD_HOURS: int = 72
 
+    # ── Data retention ────────────────────────────────────────────────────────
+    # traffic_samples/port_stats accumulate one row per device/port every
+    # POLL_INTERVAL_SECONDS forever unless something rolls them off — this is
+    # the rolling window's env default; both this and ML_LEARNING_PERIOD_HOURS
+    # above have a runtime-overridable copy in the app_settings table (see
+    # SettingsRepository) so an admin can change either from the Settings tab
+    # without restarting the process.
+    DATA_RETENTION_DAYS: int = 90
+    DATA_RETENTION_CRON: str = '30 3 * * *'  # 03:30 daily
+
     # ── Security services ─────────────────────────────────────────────────────
     OTX_API_KEY: str = ''          # populated from OTX_API_KEY_FILE if blank
     SNIFF_IFACE: str = 'eth0'

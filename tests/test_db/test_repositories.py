@@ -122,8 +122,9 @@ class TestTrustMany:
 
     async def test_idempotent_with_an_already_trusted_mac(self):
         """trust_many must not choke on a conflict for a MAC that's already
-        trusted (e.g. re-running the fresh-install baseline check) — see
-        _establish_baseline_if_fresh_install in sentinel/scheduler/jobs.py."""
+        trusted (e.g. the same device trusted again on a later poll while
+        still LEARNING) — see _auto_trust_new_connections_during_learning
+        in sentinel/scheduler/jobs.py."""
         await TrustedMacRepository().trust(_MAC)
         await TrustedMacRepository().trust_many([_MAC, _MAC_2])
         assert await TrustedMacRepository().is_trusted(_MAC_2) is True
@@ -175,3 +176,40 @@ class TestSettingsRepository:
         await repo.set_ml_learning_period_hours(24)
         await repo.set_ml_learning_period_hours(48)
         assert await repo.get_ml_learning_period_hours() == 48
+
+    async def test_data_retention_days_falls_back_to_the_env_default(self):
+        assert await SettingsRepository().get_data_retention_days() == settings.DATA_RETENTION_DAYS
+
+    async def test_data_retention_days_set_then_get_round_trips(self):
+        await SettingsRepository().set_data_retention_days(30)
+        assert await SettingsRepository().get_data_retention_days() == 30
+
+    async def test_setting_one_field_does_not_clobber_the_other(self):
+        """Both fields live on the same singleton row — a setter for one must
+        not reset the other back to its column default."""
+        repo = SettingsRepository()
+        await repo.set_ml_learning_period_hours(24)
+        await repo.set_data_retention_days(30)
+        assert await repo.get_ml_learning_period_hours() == 24
+        assert await repo.get_data_retention_days() == 30
+
+    async def test_baseline_established_at_defaults_to_none(self):
+        assert (await SettingsRepository().get_all())['baseline_established_at'] is None
+
+    async def test_baseline_established_at_set_then_get_round_trips(self):
+        from datetime import datetime, timezone
+        ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        repo = SettingsRepository()
+        await repo.set_baseline_established_at(ts)
+        assert (await repo.get_all())['baseline_established_at'] == ts
+
+    async def test_baseline_established_at_can_be_cleared_back_to_none(self):
+        from datetime import datetime, timezone
+        repo = SettingsRepository()
+        await repo.set_baseline_established_at(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        await repo.set_baseline_established_at(None)
+        assert (await repo.get_all())['baseline_established_at'] is None
+
+    async def test_get_all_returns_every_field_together(self):
+        data = await SettingsRepository().get_all()
+        assert set(data.keys()) == {'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at'}

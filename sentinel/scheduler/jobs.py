@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -30,7 +30,7 @@ from sentinel.api.websocket import (
     emit_wan_status,
 )
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
-from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
+from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -65,7 +65,7 @@ async def poll_cycle(
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
 
-    await _establish_baseline_if_fresh_install(devices)
+    await _auto_trust_new_connections_during_learning(devices)
 
     alerts = await _run_detection(pipeline, devices, traffic_samples)
     scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
@@ -93,34 +93,58 @@ async def poll_cycle(
     )
 
 
-async def _establish_baseline_if_fresh_install(devices: list[DeviceSnapshot]) -> None:
-    """On a brand-new install (devices table AND trusted_macs registry both
-    completely empty), treat every device visible on this very first poll as
-    the trusted baseline — the automatic equivalent of scripts/seed_baseline.py.
+async def _auto_trust_new_connections_during_learning(devices: list[DeviceSnapshot]) -> None:
+    """While the system is LEARNING (see SettingsRepository.get_status()),
+    every device that actually connects is silently trusted instead of being
+    run through NewDeviceDetector's normal alerting — there's no established
+    baseline yet to judge "new" against, so a CRITICAL NEW_DEVICE alert for
+    literally everything that connects during this window would be noise,
+    not signal.
 
-    Without this, a fresh install's first poll cycle would run every device
-    already on the LAN through NewDeviceDetector with nothing to compare
-    against, flooding a CRITICAL NEW_DEVICE alert for each one — there is no
-    "new" here, just no baseline yet.
+    Runs every poll for the *entire* learning window, not just once — a
+    device that happens to first connect on poll #2, #50, or #500 of the
+    window (e.g. it was asleep right after a fresh install/purge) is still
+    accepted quietly. By the time the system reaches ARMED, every device
+    that connected at any point during learning has already been trusted;
+    nothing needs a separate "accept everyone" sweep at the ARMED
+    transition itself.
 
-    Gated on *both* tables being empty, not just trusted_macs, so this never
-    fires for the (real, previously-hit) case where trusted_macs alone was
-    wiped — e.g. mid-poll during a table reset — while devices rows already
-    exist. That case must fall through to the normal per-MAC trust resync in
-    _upsert_devices, not silently re-trust everyone.
+    Starts the learning clock (stamps baseline_established_at) the moment it
+    detects a genuine fresh start — devices table empty pre-poll, no
+    baseline stamped yet — which covers both a brand-new install and the
+    first poll after POST /api/settings/purge (which clears the stamp back
+    to None). A pre-existing install that predates this feature (devices
+    already exist, stamp still None) is left alone here — get_status()
+    grandfathers that straight to ARMED, so this returns immediately without
+    starting a bogus new learning period on an already-established network.
+
+    Once the learning period elapses, this becomes a no-op: a device
+    connecting for the first time goes back through normal NewDeviceDetector
+    treatment (CRITICAL NEW_DEVICE alert unless already trusted). A device
+    the router has only ever mentioned but that has never actually connected
+    (is_online never True) is untouched either way — see ever_connected /
+    NeverConnectedIcon.
     """
-    trusted_repo = TrustedMacRepository()
-    if not await trusted_repo.is_empty():
-        return
-    if not await DeviceRepository().is_empty():
-        return
+    settings_repo = SettingsRepository()
+    data = await settings_repo.get_all()
+    baseline_at = data['baseline_established_at']
+
+    if baseline_at is None:
+        if not await DeviceRepository().is_empty():
+            return  # pre-existing install — grandfathered ARMED, nothing to do
+        baseline_at = datetime.now(timezone.utc)
+        await settings_repo.set_baseline_established_at(baseline_at)
+        logger.info('Learning clock started — baseline_established_at=%s', baseline_at)
+
+    if datetime.now(timezone.utc) - baseline_at >= timedelta(hours=data['ml_learning_period_hours']):
+        return  # ARMED — normal NewDeviceDetector treatment applies
 
     online_macs = [d.mac_address for d in devices if d.is_online]
     if not online_macs:
         return
 
-    await trusted_repo.trust_many(online_macs)
-    logger.info('Fresh install detected — established trusted baseline for %d device(s)', len(online_macs))
+    await TrustedMacRepository().trust_many(online_macs)
+    logger.debug('LEARNING: auto-trusted %d currently-connected device(s)', len(online_macs))
 
 
 def _enrich_vendor_names(devices: list[DeviceSnapshot]) -> None:
