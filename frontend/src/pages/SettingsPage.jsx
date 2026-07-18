@@ -8,7 +8,7 @@ import { LearningStatusSection } from '../components/settings/LearningStatusSect
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
-import heimdallLogo from '../assets/heimdall-logo.svg'
+import heimdallLogo from '../assets/heimdall-icon.png'
 
 function formatUptime(seconds) {
   if (!seconds) return '—'

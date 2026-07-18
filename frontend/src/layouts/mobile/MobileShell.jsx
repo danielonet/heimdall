@@ -3,6 +3,7 @@ import { logout } from '../../lib/api'
 import { useHealth } from '../../hooks/useHealth'
 import { useAlerts } from '../../hooks/useAlerts'
 import { StatusDot } from '../../components/StatusDot'
+import heimdallLogo from '../../assets/heimdall-icon.png'
 
 const TABS = [
   { to: '/', label: 'OVERVIEW', end: true },
@@ -36,9 +37,12 @@ export function MobileShell() {
   return (
     <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-bg text-[11px] text-text-secondary">
       <div className="flex items-center justify-between px-4 pt-4">
-        <div>
-          <div className="font-heading text-lg font-bold tracking-wide text-text-primary">SENTINEL</div>
-          <div className="text-[9px] tracking-wide text-text-muted">NET MONITOR · LIVE</div>
+        <div className="flex items-center gap-2">
+          <img src={heimdallLogo} alt="" className="h-8 w-8 flex-shrink-0" />
+          <div>
+            <div className="font-heading text-lg font-bold tracking-wide text-text-primary">SENTINEL</div>
+            <div className="text-[9px] tracking-wide text-text-muted">NET MONITOR · LIVE</div>
+          </div>
         </div>
         <button
           type="button"

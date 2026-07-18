@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { login } from '../lib/api'
 import { nextWisdomPhrase } from '../lib/wisdom'
-import heimdallLogo from '../assets/heimdall-logo.svg'
+import heimdallLogo from '../assets/heimdall-icon.png'
 
 export function LoginPage() {
   const [username, setUsername] = useState('')
@@ -36,7 +36,7 @@ export function LoginPage() {
     <div className="flex h-screen items-center justify-center bg-bg">
       <form onSubmit={handleSubmit} className="w-80 border border-border bg-surface p-8">
         <div className="mb-6 text-center">
-          <img src={heimdallLogo} alt="" className="mx-auto mb-3 h-16 w-16" />
+          <img src={heimdallLogo} alt="" className="mx-auto mb-3 h-28 w-28" />
           <div className="font-heading text-xl font-bold tracking-[4px] text-accent-green">SENTINEL</div>
           <div className="mt-1 text-[9px] tracking-widest text-text-muted">HOME NET MONITOR</div>
         </div>

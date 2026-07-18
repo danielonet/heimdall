@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { logout } from '../../lib/api'
 import { useHealth } from '../../hooks/useHealth'
 import { StatusDot } from '../../components/StatusDot'
+import heimdallLogo from '../../assets/heimdall-icon.png'
 
 const NAV_ITEMS = [
   { to: '/', label: 'DASHBOARD', end: true },
@@ -39,9 +40,7 @@ export function DesktopShell() {
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-[11px] text-text-secondary">
       <header className="flex h-[52px] flex-shrink-0 items-stretch border-b border-border bg-surface-elevated">
         <div className="flex min-w-[200px] items-center gap-3 border-r border-border px-6">
-          <div className="flex h-[26px] w-[26px] rotate-45 items-center justify-center border-2 border-accent-green">
-            <div className="h-2 w-2 -rotate-45 bg-accent-green" />
-          </div>
+          <img src={heimdallLogo} alt="" className="h-9 w-9 flex-shrink-0" />
           <div>
             <div className="font-heading text-lg font-bold tracking-[4px] text-accent-green">SENTINEL</div>
             <div className="mt-0.5 text-[8px] tracking-wide text-text-muted">HOME NET MONITOR</div>
