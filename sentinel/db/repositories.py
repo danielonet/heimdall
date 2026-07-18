@@ -123,6 +123,7 @@ class SettingsRepository:
                 ),
                 'data_retention_days': row.data_retention_days if row else settings.DATA_RETENTION_DAYS,
                 'baseline_established_at': row.baseline_established_at if row else None,
+                'armed_retrain_done': row.armed_retrain_done if row else False,
                 'sniff_iface': (row.sniff_iface if row and row.sniff_iface else settings.SNIFF_IFACE),
                 'router_username': (
                     row.router_username if row and row.router_username else settings.ROUTER_USERNAME
@@ -207,10 +208,23 @@ class SettingsRepository:
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge
-        to put the system back into a fresh-install LEARNING state."""
+        to put the system back into a fresh-install LEARNING state. Also
+        resets armed_retrain_done — a new baseline (or a cleared one) means
+        a new learning cycle, which must retrain from scratch once it arms
+        again, not skip the retrain because a *previous* cycle already did
+        one."""
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.baseline_established_at = ts
+            row.armed_retrain_done = False
+
+    async def get_armed_retrain_done(self) -> bool:
+        return (await self.get_all())['armed_retrain_done']
+
+    async def set_armed_retrain_done(self, done: bool) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.armed_retrain_done = done
 
     async def get_status(self) -> str:
         """'LEARNING' until the current baseline has aged past the

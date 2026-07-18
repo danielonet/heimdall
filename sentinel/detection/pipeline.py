@@ -53,6 +53,6 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
         NewDeviceDetector(DeviceRepository(), TrustedMacRepository()),
         HighUploadDetector(),
         VendorMismatchDetector(),
-        SignalAnomalyDetector(),
+        SignalAnomalyDetector(DeviceRepository(), SettingsRepository()),
         AnomalousVolumeDetector(anomaly_engine, DeviceRepository(), SettingsRepository()),
     ])

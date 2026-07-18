@@ -64,6 +64,16 @@ class AppSettings(Base):
     # by a purge (POST /api/settings/purge), so the frontend's LEARNING/ARMED
     # status badge tracks the *current* baseline, not the original install.
     baseline_established_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # False until _retrain_once_armed (jobs.py) has refit every device's ML
+    # model from the *complete* learning-window history, exactly once per
+    # learning cycle. Without this, each device keeps whatever bootstrap
+    # model it got after its first ML_MIN_SAMPLES_TO_TRAIN samples (~25min
+    # at the default poll interval) — a narrow early slice of its behaviour
+    # — right up until alerts unlock, which floods ANOMALOUS_VOLUME for
+    # everything. Reset to False alongside every baseline_established_at
+    # write (see set_baseline_established_at) so a new learning cycle (fresh
+    # install or a purge) retrains again once it re-arms.
+    armed_retrain_done: Mapped[bool] = mapped_column(Boolean, server_default='false')
     # NULL = use Settings.SNIFF_IFACE (the env default) — overridden once an
     # admin picks a NIC from the Settings tab dropdown (see
     # sentinel/security/interfaces.py). Applied live via

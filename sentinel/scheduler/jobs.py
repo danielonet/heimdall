@@ -35,6 +35,7 @@ from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
 from sentinel.ml.anomaly_engine import AnomalyEngine
+from sentinel.ml.trainer import ModelTrainer
 from sentinel.security.mac_vendor import lookup_vendor
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ async def poll_cycle(
     router_info = await adapter.get_router_info()
 
     await _auto_trust_new_connections_during_learning(devices)
+    await _retrain_once_armed(anomaly_engine)
 
     alerts = await _run_detection(pipeline, devices, traffic_samples)
     scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
@@ -145,6 +147,45 @@ async def _auto_trust_new_connections_during_learning(devices: list[DeviceSnapsh
 
     await TrustedMacRepository().trust_many(online_macs)
     logger.debug('LEARNING: auto-trusted %d currently-connected device(s)', len(online_macs))
+
+
+async def _retrain_once_armed(anomaly_engine: AnomalyEngine) -> None:
+    """Force one full model retrain — from the *entire* learning-window
+    history — the moment the system transitions to ARMED, instead of
+    waiting for the next nightly ML_RETRAIN_CRON run.
+
+    Without this, each device keeps whatever bootstrap model it got after
+    its first ML_MIN_SAMPLES_TO_TRAIN samples (~25min at the default poll
+    interval, from AnomalyEngine._buffer/train) — a narrow early slice of
+    its behaviour, often near-idle — right up until alerts unlock hours or
+    days later. Real, varied traffic (daytime peaks, streaming, backups)
+    then looks nothing like that model's training data, so
+    AnomalousVolumeDetector flags nearly everything as ANOMALOUS_VOLUME the
+    moment it's allowed to alert. This was reported in production: "after
+    learning period the system reports all traffic as anomalous volume".
+
+    Runs at most once per learning cycle — guarded by armed_retrain_done,
+    which set_baseline_established_at() resets to False every time a new
+    cycle starts (fresh install/purge), so re-arming after a reset retrains
+    again rather than skipping it because a *previous* cycle already ran.
+    """
+    settings_repo = SettingsRepository()
+    data = await settings_repo.get_all()
+
+    if data['baseline_established_at'] is None or data['armed_retrain_done']:
+        return
+
+    if datetime.now(timezone.utc) - data['baseline_established_at'] < timedelta(hours=data['ml_learning_period_hours']):
+        return  # still LEARNING
+
+    try:
+        await ModelTrainer(anomaly_engine).retrain_all()
+    except Exception:
+        logger.exception('Retrain-on-arm failed — will retry next poll cycle')
+        return  # leave armed_retrain_done False so this is retried, not skipped forever
+
+    await settings_repo.set_armed_retrain_done(True)
+    logger.info('System armed — retrained all device models from the full learning-period history')
 
 
 def _enrich_vendor_names(devices: list[DeviceSnapshot]) -> None:
