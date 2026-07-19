@@ -37,7 +37,7 @@ from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.fingerprint import PassiveFingerprinter
-from sentinel.security.scanner import NetworkScanner
+from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.threat_intel import ThreatIntelService
 
 logger = logging.getLogger(__name__)
@@ -246,18 +246,38 @@ class SentinelScheduler:
             logger.exception('Initial threat feed refresh failed')
 
     async def _nmap_scan_job(self) -> None:
-        """Nightly OS/service scan of every known device, stored in devices.nmap_profile."""
+        """Nightly OS/service scan of every known device, stored in devices.nmap_profile.
+
+        Also treats two nmap findings as an attack rather than routine profile
+        data: a high-risk port (see HIGH_RISK_PORTS) that was closed on the
+        previous scan and is open now — a common sign a device has been
+        compromised and is now running a backdoor/remote-admin service — and
+        any finding at all from nmap's `--script vuln` NSE category. Both
+        route through _raise_threat_alert, which auto-blocks the device if
+        auto_block_on_threat is armed.
+        """
         try:
             async with get_session() as session:
-                result = await session.execute(select(Device.mac_address, Device.ip_address))
-                devices = [(mac, ip) for mac, ip in result.all() if ip]
+                result = await session.execute(
+                    select(Device.mac_address, Device.ip_address, Device.nmap_profile)
+                )
+                devices = [(mac, ip, profile) for mac, ip, profile in result.all() if ip]
         except Exception:
             logger.exception('Failed to load device list for nmap scan')
             return
 
-        for mac, ip in devices:
+        for mac, ip, previous_profile in devices:
             try:
                 scan = await self._scanner.scan_device(ip)
+                previous_open_ports = {
+                    p['port'] for p in (previous_profile or {}).get('ports', [])
+                    if p.get('state') == 'open'
+                }
+                newly_opened_high_risk = {
+                    p.port: HIGH_RISK_PORTS[p.port] for p in scan.ports
+                    if p.state == 'open' and p.port in HIGH_RISK_PORTS and p.port not in previous_open_ports
+                }
+
                 profile = {
                     'os': scan.os,
                     'ports': [dataclasses.asdict(p) for p in scan.ports],
@@ -269,6 +289,22 @@ class SentinelScheduler:
                         device.nmap_profile = profile
                         if scan.os != 'Unknown':
                             device.os_fingerprint = scan.os
+
+                for port, service in newly_opened_high_risk.items():
+                    await self._raise_threat_alert(
+                        mac, 'HIGH_RISK_PORT_OPENED', 'CRITICAL',
+                        f'{ip} newly exposes {service} on port {port} '
+                        f'(closed on the previous scan)',
+                        raw_data={'ip': ip, 'port': port, 'service': service},
+                    )
+
+                vuln_findings = await self._scanner.vuln_scan(ip)
+                if vuln_findings:
+                    await self._raise_threat_alert(
+                        mac, 'VULNERABILITY_DETECTED', 'CRITICAL',
+                        f'nmap vulnerability scan flagged {ip}: {", ".join(vuln_findings.keys())}',
+                        raw_data={'ip': ip, 'findings': vuln_findings},
+                    )
             except Exception:
                 logger.exception('nmap scan failed for %s (%s)', mac, ip)
 
@@ -346,16 +382,12 @@ class SentinelScheduler:
             asyncio.run_coroutine_threadsafe(self._persist_arp_alert(event), self._loop)
 
     async def _persist_arp_alert(self, event: dict) -> None:
-        async with get_session() as session:
-            alert = Alert(
-                device_mac=None,
-                alert_type=event['type'],
-                severity=event['severity'],
-                description=event['description'],
-                raw_data=event,
-            )
-            session.add(alert)
-        emit_alert(alert_to_dict(alert))
+        # new_mac is the attacker's MAC impersonating a known IP — attribute
+        # the alert to it (rather than the previous None) so it's both
+        # visible on the alert and available to auto-block.
+        await self._raise_threat_alert(
+            event.get('new_mac'), event['type'], event['severity'], event['description'], raw_data=event,
+        )
 
     def _on_fingerprint(self, ip: str, os_guess: str) -> None:
         """Sync callback invoked from PassiveFingerprinter's own daemon thread."""
@@ -363,11 +395,67 @@ class SentinelScheduler:
             asyncio.run_coroutine_threadsafe(self._persist_fingerprint(ip, os_guess), self._loop)
 
     async def _persist_fingerprint(self, ip: str, os_guess: str) -> None:
+        """Records the OS guess, and treats a *change* on an already-known
+        device as a possible attack: same IP/MAC, different underlying OS
+        signature, suggests hardware was swapped in behind a cloned MAC
+        (which a MAC-only check like ArpWatcher can't see, since the MAC
+        never changes). Heuristic, not definitive — OS_SIGNATURES is a
+        3-entry TTL/window table (see fingerprint.py), so route changes that
+        shift TTL by a hop can in principle cause a false mismatch.
+        """
         async with get_session() as session:
             result = await session.execute(select(Device).where(Device.ip_address == ip))
             device = result.scalars().first()
-            if device is not None:
-                device.os_fingerprint = os_guess
+            if device is None:
+                return
+            previous = device.os_fingerprint
+            device.os_fingerprint = os_guess
+            mac = device.mac_address
+
+        if previous and previous != 'Unknown' and os_guess != 'Unknown' and os_guess != previous:
+            await self._raise_threat_alert(
+                mac, 'FINGERPRINT_MISMATCH', 'CRITICAL',
+                f'{ip} ({mac}) was fingerprinted as "{previous}" but now looks like "{os_guess}" '
+                f'on the same MAC — possible MAC-cloning/spoofing',
+                raw_data={'ip': ip, 'mac': mac, 'previous_os': previous, 'new_os': os_guess},
+            )
+
+    async def _raise_threat_alert(
+        self, mac: str | None, alert_type: str, severity: str, description: str,
+        raw_data: dict | None = None,
+    ) -> None:
+        """Create+broadcast an Alert for a detected attack. If auto_block_on_threat
+        is armed and the device isn't already blocked, blocks it via the router
+        adapter first so the alert description can note it — the single place
+        ArpWatcher/PassiveFingerprinter/NetworkScanner-driven attack alerts go
+        through, so all three respond the same way.
+        """
+        blocked_now = False
+        if mac:
+            try:
+                async with get_session() as session:
+                    device = await session.get(Device, mac)
+                    already_blocked = bool(device and device.is_blocked)
+                if not already_blocked and await SettingsRepository().get_auto_block_on_threat():
+                    adapter = await self._ensure_adapter()
+                    blocked_now = await adapter.block_device(mac)
+            except Exception:
+                logger.exception('Auto-block failed for %s (%s)', mac, alert_type)
+
+        if blocked_now:
+            description = f'{description} — device auto-blocked'
+
+        async with get_session() as session:
+            if blocked_now:
+                device = await session.get(Device, mac)
+                if device is not None:
+                    device.is_blocked = True
+            alert = Alert(
+                device_mac=mac, alert_type=alert_type, severity=severity,
+                description=description, raw_data=raw_data or {},
+            )
+            session.add(alert)
+        emit_alert(alert_to_dict(alert))
 
     async def _retrain_job(self) -> None:
         try:

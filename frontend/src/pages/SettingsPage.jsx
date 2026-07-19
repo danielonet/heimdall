@@ -3,6 +3,7 @@ import { useRouterInfo } from '../hooks/useRouterInfo'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
+import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
@@ -76,6 +77,8 @@ export function SettingsPage() {
         <NetworkInterfaceSection />
         <PurgeDatabaseSection />
       </div>
+
+      <AutoBlockSection />
 
       <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-4">
         <div className="flex items-center gap-3">

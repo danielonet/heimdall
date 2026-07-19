@@ -98,6 +98,13 @@ class AppSettings(Base):
     smtp_username: Mapped[str | None] = mapped_column(String(255))
     smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean)
 
+    # Security tab. When True, SentinelScheduler._raise_threat_alert() calls
+    # adapter.block_device() the instant ArpWatcher/PassiveFingerprinter/
+    # NetworkScanner identify an attack (ARP spoof, fingerprint mismatch,
+    # newly-opened high-risk port, nmap vuln finding), instead of only
+    # raising an alert. See docs/architecture/06-security-services.md.
+    auto_block_on_threat: Mapped[bool] = mapped_column(Boolean, server_default='true')
+
 
 class TrustedMac(Base):
     """A permanently-trusted MAC address, independent of the devices table's

@@ -17,6 +17,28 @@ import nmap
 
 logger = logging.getLogger(__name__)
 
+# Ports that have no business being open on an ordinary LAN client — remote
+# admin/file-sharing protocols and a couple of well-known backdoor/C2 default
+# ports. A device that didn't expose one of these on its last scan and does
+# now is treated as a compromise signal by the nightly nmap job, not just a
+# routine profile update. Not exhaustive — a curated "clearly wrong on a
+# home LAN" list, not a general port-risk taxonomy.
+HIGH_RISK_PORTS = {
+    21: 'FTP',
+    23: 'Telnet',
+    135: 'MSRPC',
+    139: 'NetBIOS',
+    445: 'SMB',
+    512: 'rexec',
+    513: 'rlogin',
+    514: 'rsh',
+    1433: 'MSSQL',
+    3389: 'RDP',
+    5900: 'VNC',
+    4444: 'Metasploit default handler',
+    31337: 'Back Orifice / "elite" backdoor',
+}
+
 
 @dataclass
 class OpenPort:

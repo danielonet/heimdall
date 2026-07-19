@@ -137,6 +137,7 @@ class SettingsRepository:
                 'smtp_use_tls': (
                     row.smtp_use_tls if row and row.smtp_use_tls is not None else settings.SMTP_USE_TLS
                 ),
+                'auto_block_on_threat': row.auto_block_on_threat if row else True,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -205,6 +206,14 @@ class SettingsRepository:
             row.smtp_to = smtp_to
             row.smtp_username = smtp_username
             row.smtp_use_tls = smtp_use_tls
+
+    async def get_auto_block_on_threat(self) -> bool:
+        return (await self.get_all())['auto_block_on_threat']
+
+    async def set_auto_block_on_threat(self, enabled: bool) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.auto_block_on_threat = enabled
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

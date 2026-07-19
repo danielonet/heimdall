@@ -89,12 +89,23 @@ class TestProcess:
         fp._process(_syn('10.0.0.7', ttl=32, window=1024))
         assert results == [('10.0.0.7', 'Unknown')]
 
-    def test_same_ip_only_fingerprinted_once(self):
+    def test_same_ip_same_signature_not_refingerprinted(self):
+        results = []
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: results.append((ip, os)), iface='eth0')
+        fp._process(_syn('10.0.0.5', ttl=64, window=65535))
+        fp._process(_syn('10.0.0.5', ttl=64, window=65535))  # same signature, same IP
+        assert len(results) == 1
+
+    def test_same_ip_changed_signature_is_refingerprinted(self):
+        """A known IP suddenly presenting a different OS signature must fire
+        again (not just once per IP) — the scheduler compares it against the
+        device's previously recorded fingerprint to catch a possible
+        MAC-cloning attack. See SentinelScheduler._persist_fingerprint."""
         results = []
         fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: results.append((ip, os)), iface='eth0')
         fp._process(_syn('10.0.0.5', ttl=64, window=65535))
         fp._process(_syn('10.0.0.5', ttl=128, window=65535))  # different signature, same IP
-        assert len(results) == 1
+        assert results == [('10.0.0.5', 'Linux / Android'), ('10.0.0.5', 'Windows')]
 
     def test_non_tcp_packet_ignored(self):
         results = []

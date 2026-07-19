@@ -55,6 +55,7 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         smtp_username=data['smtp_username'],
         smtp_use_tls=data['smtp_use_tls'],
         smtp_password_configured=bool(settings.SMTP_PASSWORD),
+        auto_block_on_threat=data['auto_block_on_threat'],
     )
     if include_db_size:
         payload['db_size_mb'] = await _get_db_size_mb()
@@ -156,6 +157,9 @@ async def update_settings():
                   'can only be changed by editing the secrets file directly and restarting.'
         ), 503
 
+    if 'auto_block_on_threat' in body and not isinstance(body.get('auto_block_on_threat'), bool):
+        return jsonify(error='auto_block_on_threat must be a boolean'), 400
+
     # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
@@ -214,6 +218,9 @@ async def update_settings():
             ))
         except RuntimeError:
             pass  # scheduler not running (e.g. tests) — takes effect on next start
+
+    if 'auto_block_on_threat' in body:
+        await repo.set_auto_block_on_threat(body['auto_block_on_threat'])
 
     return jsonify(await _serialize(repo))
 

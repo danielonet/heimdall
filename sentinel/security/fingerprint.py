@@ -2,6 +2,13 @@
 characteristics (TTL, window size) without any active scanning. Uses Scapy's
 AsyncSniffer (its own background thread), alongside ArpWatcher; same
 NET_RAW requirement.
+
+The callback fires on the first sighting of a source IP *and* again any time
+its guessed signature changes thereafter (not just once per IP) — a known
+device suddenly presenting a different OS signature on the same IP/MAC is a
+signal worth surfacing (e.g. hardware swapped in behind a cloned MAC), so
+the scheduler can compare it against the device's previously recorded
+fingerprint. See SentinelScheduler._persist_fingerprint.
 """
 from __future__ import annotations
 
@@ -31,7 +38,7 @@ class PassiveFingerprinter:
     def __init__(self, on_fingerprint: FingerprintCallback, iface: str) -> None:
         self._callback = on_fingerprint
         self._iface = iface
-        self._seen: set[str] = set()
+        self._last_guess: dict[str, str] = {}
         self._sniffer: AsyncSniffer | None = None
         self._active = False
         self._stop_requested: threading.Event | None = None
@@ -112,10 +119,10 @@ class PassiveFingerprinter:
         if IP not in pkt or TCP not in pkt:
             return
         src_ip = pkt[IP].src
-        if src_ip in self._seen:
-            return
         ttl = pkt[IP].ttl
         win = pkt[TCP].window
         os_guess = OS_SIGNATURES.get((ttl, win), 'Unknown')
-        self._seen.add(src_ip)
+        if self._last_guess.get(src_ip) == os_guess:
+            return  # same signature as last time — nothing new to report
+        self._last_guess[src_ip] = os_guess
         self._callback(src_ip, os_guess)
