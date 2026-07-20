@@ -28,11 +28,14 @@ class RouterAdapter(ABC):
 
     @abstractmethod
     async def block_device(self, mac: str) -> bool:
-        """Issue a firewall DROP rule for this MAC. Returns True on success."""
+        """Remove this MAC's network access. Returns True on success.
+        Adapter-specific mechanism — see docs/router/sagemcom-xmo-api.md's
+        "Device blocking" section for why a WAN firewall rule alone isn't
+        enough (it doesn't stop purely local traffic like ARP spoofing)."""
 
     @abstractmethod
     async def unblock_device(self, mac: str) -> bool:
-        """Remove the firewall DROP rule for this MAC."""
+        """Restore this MAC's network access."""
 
     @abstractmethod
     async def get_router_info(self) -> RouterInfo:

@@ -213,9 +213,10 @@ class TestSettingsRepository:
     async def test_get_all_returns_every_field_together(self):
         data = await SettingsRepository().get_all()
         assert set(data.keys()) == {
-            'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at', 'sniff_iface',
-            'router_username', 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username',
-            'smtp_use_tls',
+            'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at',
+            'armed_retrain_done', 'sniff_iface', 'router_username', 'ntfy_url', 'smtp_host',
+            'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
+            'auto_block_on_threat',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):

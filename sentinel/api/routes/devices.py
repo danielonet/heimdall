@@ -114,14 +114,14 @@ async def patch_device(mac: str):
 @bp.route('/<mac>/block', methods=['POST'])
 @jwt_required()
 async def block_device(mac: str):
-    """Issue a firewall DROP rule for this MAC via the router adapter."""
+    """Remove this MAC's network access via the router adapter."""
     return await _set_blocked(mac, blocked=True)
 
 
 @bp.route('/<mac>/unblock', methods=['POST'])
 @jwt_required()
 async def unblock_device(mac: str):
-    """Remove the firewall DROP rule for this MAC via the router adapter."""
+    """Restore this MAC's network access via the router adapter."""
     return await _set_blocked(mac, blocked=False)
 
 

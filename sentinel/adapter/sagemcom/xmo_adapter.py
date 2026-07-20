@@ -26,8 +26,18 @@ _PORT_ALIASES = ['PHY1', 'PHY2', 'PHY3', 'PHY4', 'PHY5']
 # firmware has a fixed set of AP slots, not user-configurable in count.
 _ACCESS_POINT_ALIASES = ['PRIV0', 'VID1', 'GUEST2G', 'GUEST5G', 'AP_BACKHAUL']
 
-# Firewall chain used for MAC-based device blocking
-_BLOCK_CHAIN = 'Device/Firewall/Chain[Name="LAN_IN"]/Rule'
+# MAC-based device blocking: confirmed live (DevTools capture against the
+# router's own Devices-page block action, 2026-07-19) to work by blacklisting
+# a Device/Hosts/Hosts/Host entry 24/7 via its BlacklistedSchedule — every
+# ManagementDay[1..7 = SUNDAY..SATURDAY]/HoursN (0-23) leaf set to true. Every
+# Host entry defaults to BlacklistEnable=true and BlacklistedAccordingToSchedule
+# =true, so this alone is sufficient; no separate enable step is needed. A
+# firewall DROP rule (the previous implementation here) only cuts WAN/routed
+# access — it has no effect on purely-local traffic like ARP spoofing, which
+# is why that approach didn't actually remove an attacker from the LAN.
+_MANAGEMENT_DAY_UIDS = list(range(1, 8))  # 1=SUNDAY .. 7=SATURDAY, confirmed live
+_SCHEDULE_SETVALUE_BATCH_SIZE = 100  # the router's own UI batches ~90 setValue actions per request
+_XMO_NO_ERR = 16777239
 
 
 class SagemcomXmoAdapter(RouterAdapter):
@@ -52,8 +62,6 @@ class SagemcomXmoAdapter(RouterAdapter):
         # port alias -> (bytes_sent_total, bytes_recv_total)
         self._port_prev: dict[str, Tuple[int, int]] = {}
         self._poll_interval_s = poll_interval_s
-        # mac -> firewall rule UID (populated by block_device, consumed by unblock_device)
-        self._block_rule_uids: dict[str, str] = {}
 
     # ──────────────────────────────────────────────────────────────────────────
     # RouterAdapter interface
@@ -216,37 +224,73 @@ class SagemcomXmoAdapter(RouterAdapter):
         return result
 
     async def block_device(self, mac: str) -> bool:
-        """Add a firewall DROP rule for the given MAC address."""
+        """Blacklist the device 24/7 via its Host entry's BlacklistedSchedule —
+        see the module-level comment above _MANAGEMENT_DAY_UIDS. Returns False
+        (not True) if the MAC has no matching Host entry, or if the router
+        doesn't confirm every setValue — callers must not report a block as
+        successful just because this coroutine didn't raise.
+        """
         mac = _norm_mac(mac)
-        resp = await self._client.add_object(
-            _BLOCK_CHAIN,
-            {
-                'SourceMACAddress': mac,
-                'Target': 'DROP',
-                'Enable': True,
-                'Description': f'SENTINEL_BLOCK_{mac}',
-            },
-        )
-        # Extract the UID of the newly created rule so we can delete it later
-        uid = self._extract_added_uid(resp)
-        if uid:
-            self._block_rule_uids[mac] = uid
-            logger.info('Blocked device %s (rule uid=%s)', mac, uid)
-        else:
-            logger.warning('block_device(%s): could not extract rule UID from response', mac)
-        return True
+        host_uid = await self._find_host_uid(mac)
+        if host_uid is None:
+            logger.error('block_device(%s): no matching Device/Hosts/Hosts entry — cannot block', mac)
+            return False
+        return await self._set_blacklist_schedule(mac, host_uid, blacklisted=True)
 
     async def unblock_device(self, mac: str) -> bool:
-        """Remove the firewall DROP rule for the given MAC address."""
+        """Clear every BlacklistedSchedule hour for the device's Host entry —
+        the reverse of block_device()."""
         mac = _norm_mac(mac)
-        uid = self._block_rule_uids.pop(mac, None)
-        if uid is None:
-            logger.warning('unblock_device(%s): no stored rule UID — was block_device called?', mac)
+        host_uid = await self._find_host_uid(mac)
+        if host_uid is None:
+            logger.warning('unblock_device(%s): no matching Device/Hosts/Hosts entry', mac)
             return False
-        await self._client.delete_object(
-            f'Device/Firewall/Chain[Name="LAN_IN"]/Rule[@uid="{uid}"]'
-        )
-        logger.info('Unblocked device %s (removed rule uid=%s)', mac, uid)
+        return await self._set_blacklist_schedule(mac, host_uid, blacklisted=False)
+
+    async def _find_host_uid(self, mac: str) -> Optional[int]:
+        """Resolve a MAC to its Device/Hosts/Hosts/Host[@uid=...] uid."""
+        hosts = await self._get_hosts()
+        for h in hosts:
+            if isinstance(h, dict) and _norm_mac(h.get('PhysAddress', '')) == mac:
+                return h.get('uid')
+        return None
+
+    async def _set_blacklist_schedule(self, mac: str, host_uid: int, *, blacklisted: bool) -> bool:
+        """setValue every BlacklistedSchedule/ManagementDay/HoursN leaf (7
+        days x 24 hours = 168 actions) to `blacklisted`, batched the same way
+        the router's own UI does it — sending all 168 in a single request
+        isn't confirmed to work, so this chunks conservatively.
+        """
+        actions = [
+            {
+                'id': i,
+                'method': 'setValue',
+                'xpath': (
+                    f'Device/Hosts/Hosts/Host[@uid="{host_uid}"]/BlacklistedSchedule'
+                    f'/ManagementDay[@uid="{day_uid}"]/Hours{hour}'
+                ),
+                'parameters': {'value': blacklisted},
+            }
+            for i, (day_uid, hour) in enumerate(
+                (day_uid, hour) for day_uid in _MANAGEMENT_DAY_UIDS for hour in range(24)
+            )
+        ]
+
+        verb = 'block_device' if blacklisted else 'unblock_device'
+        for start in range(0, len(actions), _SCHEDULE_SETVALUE_BATCH_SIZE):
+            batch = actions[start:start + _SCHEDULE_SETVALUE_BATCH_SIZE]
+            resp = await self._client.post(batch)
+            reply_actions = resp.get('reply', {}).get('actions', [])
+            if len(reply_actions) != len(batch) or any(
+                a.get('error', {}).get('code') != _XMO_NO_ERR for a in reply_actions
+            ):
+                logger.error(
+                    '%s(%s): setValue batch failed (actions %d-%d): %s',
+                    verb, mac, batch[0]['id'], batch[-1]['id'], resp,
+                )
+                return False
+
+        logger.info('%s device %s (host uid=%s)', 'Blocked' if blacklisted else 'Unblocked', mac, host_uid)
         return True
 
     async def get_router_info(self) -> RouterInfo:
@@ -432,15 +476,6 @@ class SagemcomXmoAdapter(RouterAdapter):
             samples.append(sample)
 
         return samples
-
-    def _extract_added_uid(self, resp: dict) -> Optional[str]:
-        """Extract the UID of a newly created object from an addObject response."""
-        actions = resp.get('reply', {}).get('actions', [])
-        for action in actions:
-            uid = action.get('uid')
-            if uid is not None:
-                return str(uid)
-        return None
 
     async def aclose(self) -> None:
         """Release underlying HTTP connections."""

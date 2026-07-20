@@ -203,33 +203,66 @@ Sub-path pattern: `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/{sub-pat
 
 | XPath | Status | Notes |
 |-------|--------|-------|
-| `Device/Firewall/Chain` | ✅* | Chains confirmed — exact chain name for MAC blocking TBD |
-| `Device/Firewall/Chain[Name="LAN_IN"]/Rule` | ⬜ | **Confirm by**: DevTools open → Parental Control → add test block → capture XHR |
-| `Device/Firewall/Chain/Rule[Description="SENTINEL_BLOCK_*"]` | ⬜ | How adapter's own rules appear — verify after first block |
+| `Device/Firewall/Chain` | ✅* | Chains confirmed live, including a distinct `"Custom"` chain — **but this is a routed-IP firewall chain**, not device-level LAN exclusion. A `Custom`-chain rule only affects traffic that's actually routed through the firewall (WAN-bound, or cross-VLAN); it has **no effect on purely local LAN/WiFi traffic** — e.g. it does not stop ARP spoofing between two devices on the same segment. Confirmed by attempting exactly this: a device blocked via a Custom-chain DROP rule stayed fully connected and kept spoofing. Do not use this chain for `block_device()`. |
+| `Device/Firewall/Chains/Chain[Name="Custom"]/Rules` (`addChild`) | ✅ | Real xpath/method for adding a custom firewall rule (method is `addChild`, **not** `addObject` as the generic XMO docs suggest — confirmed live). Payload is nested: `{"value": {"Rule": {...}}}`. Created rules report `Status: "DISABLED"` unless the router's active firewall security level is actually set to `"Custom"` (see `Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy`, confirmed `"DROP"` on this unit) — check that before relying on rules here for anything. |
 
-### Block device (addObject)
+## Device blocking — the real mechanism (confirmed live)
+
+The router's own Devices-page "block" action does **not** touch the Firewall
+layer at all. It blacklists the device's own `Device/Hosts/Hosts/Host` entry
+24/7 via its `BlacklistedSchedule` — confirmed via a live DevTools capture of
+clicking Block for a real device (`4C:ED:DE:75:02:76`, host uid 93) on
+2026-07-19. This is enforced at the same DHCP/host-management layer that
+already tracks device presence, so — unlike the Firewall-chain approach — it
+does actually remove the device from the LAN, not just its WAN access.
+
+Every `Host` entry defaults to `BlacklistEnable: true` and
+`BlacklistedAccordingToSchedule: true`, so setting the schedule alone is
+sufficient — no separate "enable blacklisting" step needed. `Blacklisted` and
+`BlacklistStatus` are read-only/computed; don't try to `setValue` them
+directly.
+
+### Resolve MAC → host uid
+
+```json
+{"method": "getValue", "xpath": "Device/Hosts/Hosts"}
+```
+Find the entry whose `PhysAddress` matches (case-insensitive), read its
+`uid`.
+
+### Block device (setValue x168)
+
+One `setValue` per hour of every day — `ManagementDay[@uid]` runs 1=SUNDAY
+through 7=SATURDAY, `HoursN` runs 0-23. The router's own UI batches these into
+~90-action requests rather than sending all 168 in one shot:
 
 ```json
 {
-  "method": "addObject",
-  "xpath": "Device/Firewall/Chain[Name=\"LAN_IN\"]/Rule",
-  "parameters": {
-    "SourceMACAddress": "da:d4:19:31:c0:e9",
-    "Target": "DROP",
-    "Enable": true,
-    "Description": "SENTINEL_BLOCK_da:d4:19:31:c0:e9"
-  }
+  "method": "setValue",
+  "xpath": "Device/Hosts/Hosts/Host[@uid=\"93\"]/BlacklistedSchedule/ManagementDay[@uid=\"1\"]/Hours0",
+  "parameters": {"value": true}
 }
 ```
+...repeated for every `(day_uid, hour)` pair, `day_uid` in 1-7, `hour` in
+0-23 (168 actions total).
 
-### Unblock device (deleteObject)
+### Unblock device
+
+Identical, with `"value": false` for every action.
+
+### A separate, likely-cosmetic action also fires on block
 
 ```json
 {
-  "method": "deleteObject",
-  "xpath": "Device/Firewall/Chain[Name=\"LAN_IN\"]/Rule[@uid=\"42\"]"
+  "method": "addChild",
+  "xpath": "Device/Services/ParentalControl/Categories/UserProfiles/Hosts",
+  "parameters": {"value": {"Host": {"uid": null, "MAC": "4C:ED:DE:75:02:76"}}}
 }
 ```
+Associates the MAC with a Parental Control user profile — this appears to be
+for UI categorization, not enforcement (the `BlacklistedSchedule` write above
+is what actually removes the device from the network). `block_device()` does
+not replicate this step.
 
 ---
 
@@ -243,7 +276,7 @@ don't reliably match this ISP's customized data model.
 
 | Priority | Navigate to | Reveals |
 |----------|-------------|---------|
-| **CRITICAL** | Access Control → Parental Control → add temp block → capture XHR | Exact Firewall chain name and Rule xpath for `block_device()` — `Device/Firewall/Chain[Name="LAN_IN"]/Rule` is unverified |
+| ~~CRITICAL~~ ✅ done | ~~Access Control → Parental Control → add temp block → capture XHR~~ | Solved: `BlacklistedSchedule` on the device's own `Device/Hosts/Hosts/Host` entry, not the Firewall layer — see "Device blocking — the real mechanism" above |
 | ~~CRITICAL~~ ✅ done | ~~WiFi client list / Connected devices page~~ | Solved: `Device/WiFi/AccessPoints/AccessPoint[Alias="X"]/AssociatedDevices` — see WiFi Layer above |
 | Important | Ethernet ports page (DevTools open) | Confirm `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/Stats` still resolves — untested against this firmware since the Hosts xpath mismatch was found. Also worth checking whether its Sent/Received has the same AP-side direction gotcha found on `AssociatedDevices/Stats` — currently unverified, may mean wired up/down are swapped in the Ports page too. |
 | Important | WAN → Statistics | `IP_DATA/Stats/*` sub-paths for total household bandwidth — untested |

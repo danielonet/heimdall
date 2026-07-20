@@ -97,7 +97,13 @@ class TestRaiseThreatAlert:
         alert = await _latest_alert()
         assert 'auto-blocked' not in alert.description
 
-    async def test_skips_redundant_block_call_for_an_already_blocked_device(self, scheduler, monkeypatch):
+    async def test_still_reblocks_a_device_already_marked_blocked_in_the_db(self, scheduler, monkeypatch):
+        """Regression: an earlier version skipped re-blocking whenever
+        device.is_blocked was already True in the DB. That flag is only a
+        cache of the last known outcome — it went stale in production (an
+        earlier attempt's is_blocked=True outlived the actual router state)
+        and a real, live ARP-spoof attacker was never re-blocked as a result.
+        block_device() is idempotent, so there's no reason to ever skip it."""
         await _seed_device(is_blocked=True)
         await SettingsRepository().set_auto_block_on_threat(True)
         calls = []
@@ -110,7 +116,29 @@ class TestRaiseThreatAlert:
 
         await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
 
-        assert calls == []  # no duplicate firewall rule for a device already blocked
+        assert calls == [_MAC]
+
+    async def test_surfaces_a_failed_block_instead_of_claiming_success(self, scheduler, monkeypatch):
+        """Regression: adapter.block_device() used to unconditionally return
+        True even when the router never confirmed the rule (missing UID),
+        so the alert claimed "auto-blocked" while the device stayed on the
+        network. block_device() now returns False in that case, and this
+        must surface as a visible failure, never a silent no-op."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        async def _fake_block_device(mac):
+            return False  # router didn't confirm the rule
+
+        monkeypatch.setattr(scheduler._adapter, 'block_device', _fake_block_device)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+
+        device = await _get_device()
+        assert device.is_blocked is False
+        alert = await _latest_alert()
+        assert 'AUTO-BLOCK FAILED' in alert.description
+        assert 'auto-blocked' not in alert.description
 
     async def test_alert_with_no_mac_is_never_blocked(self, scheduler):
         await SettingsRepository().set_auto_block_on_threat(True)

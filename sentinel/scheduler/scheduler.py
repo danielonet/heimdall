@@ -425,25 +425,41 @@ class SentinelScheduler:
         raw_data: dict | None = None,
     ) -> None:
         """Create+broadcast an Alert for a detected attack. If auto_block_on_threat
-        is armed and the device isn't already blocked, blocks it via the router
-        adapter first so the alert description can note it — the single place
-        ArpWatcher/PassiveFingerprinter/NetworkScanner-driven attack alerts go
-        through, so all three respond the same way.
+        is armed, blocks the device via the router adapter first so the alert
+        description can note it — the single place ArpWatcher/PassiveFingerprinter/
+        NetworkScanner-driven attack alerts go through, so all three respond
+        the same way.
+
+        Always re-issues the block, even if device.is_blocked is already True
+        — that DB flag is only ever a cache of the last known outcome, and
+        trusting it to skip re-blocking let a real attack through once
+        already (the flag went stale from an earlier attempt, the device was
+        actually still on the network, and this method silently did nothing
+        because it *believed* the cache). adapter.block_device() is idempotent
+        (it just re-asserts the same blacklist state), so there's no cost to
+        always calling it.
+
+        The description only ever claims "auto-blocked" if adapter.block_device()
+        itself confirmed success — a False return (or a raised exception) is
+        surfaced as "AUTO-BLOCK FAILED" instead, never silently swallowed, so
+        the alert never lies about a device having been removed from the network.
         """
         blocked_now = False
+        block_failed = False
         if mac:
             try:
-                async with get_session() as session:
-                    device = await session.get(Device, mac)
-                    already_blocked = bool(device and device.is_blocked)
-                if not already_blocked and await SettingsRepository().get_auto_block_on_threat():
+                if await SettingsRepository().get_auto_block_on_threat():
                     adapter = await self._ensure_adapter()
                     blocked_now = await adapter.block_device(mac)
+                    block_failed = not blocked_now
             except Exception:
+                block_failed = True
                 logger.exception('Auto-block failed for %s (%s)', mac, alert_type)
 
         if blocked_now:
             description = f'{description} — device auto-blocked'
+        elif block_failed:
+            description = f'{description} — AUTO-BLOCK FAILED, device is still on the network (see backend logs)'
 
         async with get_session() as session:
             if blocked_now:
