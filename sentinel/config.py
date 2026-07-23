@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'
     CANARY_POLL_INTERVAL_SECONDS: int = 10
 
+    # ── Diagnostics ───────────────────────────────────────────────────────────
+    # Starts tracemalloc at process boot and enables GET /api/debug/memory.
+    # Off by default — tracemalloc adds real memory/CPU overhead (it tracks
+    # a traceback per allocation), worth paying only while actively hunting
+    # a leak. See sentinel/api/routes/debug.py.
+    MEMORY_DEBUG_ENABLED: bool = False
+
     # ── Notifications ─────────────────────────────────────────────────────────
     NTFY_URL: str = ''             # e.g. https://ntfy.sh/heimdall-alerts
     SMTP_HOST: str = ''

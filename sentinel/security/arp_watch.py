@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from typing import Callable
 
 from scapy.all import ARP, AsyncSniffer
@@ -17,6 +18,19 @@ logger = logging.getLogger(__name__)
 
 AlertCallback = Callable[[dict], None]
 
+# Confirmed via GET /api/debug/memory against a live install: with no cap,
+# this table grows with every distinct IP ever seen on the interface and
+# never shrinks — 21 -> 233 entries over 3 days under active pentest traffic.
+# 500 is generous for any home LAN (including guest devices and MAC
+# randomization) while still bounding worst-case memory. Eviction is
+# least-recently-updated, via move_to_end() on every touch — an IP that
+# stops being seen (device left) ages out and gets forgotten first; an IP
+# that's still active never does, even under heavy churn elsewhere. The
+# tradeoff: an evicted-then-returning IP is treated as a fresh sighting
+# rather than compared against its old MAC, a rare false-negative that's
+# preferable to unbounded growth.
+_MAX_TRACKED_IPS = 500
+
 
 class ArpWatcher:
     """Detects MAC address changes for known IPs via passive ARP sniffing."""
@@ -24,7 +38,7 @@ class ArpWatcher:
     def __init__(self, alert_callback: AlertCallback, iface: str) -> None:
         self._callback = alert_callback
         self._iface = iface
-        self._table: dict[str, str] = {}  # ip -> mac, seeded from the device registry
+        self._table: OrderedDict[str, str] = OrderedDict()  # ip -> mac, LRU-ordered
         self._sniffer: AsyncSniffer | None = None
         self._active = False
         self._stop_requested: threading.Event | None = None
@@ -33,6 +47,12 @@ class ArpWatcher:
     def is_active(self) -> bool:
         """True once sniffing is actually running — false if raw sockets aren't permitted."""
         return self._active
+
+    @property
+    def table_size(self) -> int:
+        """Number of IP->MAC entries tracked — capped at _MAX_TRACKED_IPS via
+        LRU eviction, so this should plateau rather than climb indefinitely."""
+        return len(self._table)
 
     @property
     def iface(self) -> str:
@@ -124,3 +144,6 @@ class ArpWatcher:
                 'description': f'ARP spoofing suspected: {ip} changed from {known} to {mac}',
             })
         self._table[ip] = mac
+        self._table.move_to_end(ip)
+        if len(self._table) > _MAX_TRACKED_IPS:
+            self._table.popitem(last=False)  # evict the IP updated longest ago

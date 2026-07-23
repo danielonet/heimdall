@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from typing import Callable
 
 from scapy.all import IP, TCP, AsyncSniffer
@@ -31,6 +32,13 @@ OS_SIGNATURES = {
     (64, 65536): 'macOS / iOS',
 }
 
+# Confirmed via GET /api/debug/memory against a live install: with no cap,
+# this cache grows with every distinct source IP ever seen and never
+# shrinks — 21 -> 233 entries over 3 days under active pentest traffic. See
+# the matching comment on ArpWatcher._table (same shape, same fix, same
+# tradeoff) in sentinel/security/arp_watch.py.
+_MAX_TRACKED_IPS = 500
+
 
 class PassiveFingerprinter:
     """Guesses each new source IP's OS from its first observed TCP SYN packet."""
@@ -38,7 +46,7 @@ class PassiveFingerprinter:
     def __init__(self, on_fingerprint: FingerprintCallback, iface: str) -> None:
         self._callback = on_fingerprint
         self._iface = iface
-        self._last_guess: dict[str, str] = {}
+        self._last_guess: OrderedDict[str, str] = OrderedDict()
         self._sniffer: AsyncSniffer | None = None
         self._active = False
         self._stop_requested: threading.Event | None = None
@@ -47,6 +55,13 @@ class PassiveFingerprinter:
     def is_active(self) -> bool:
         """True once sniffing is actually running — false if raw sockets aren't permitted."""
         return self._active
+
+    @property
+    def cache_size(self) -> int:
+        """Number of source IPs with a remembered signature — capped at
+        _MAX_TRACKED_IPS via LRU eviction, so this should plateau rather
+        than climb indefinitely."""
+        return len(self._last_guess)
 
     @property
     def iface(self) -> str:
@@ -122,7 +137,12 @@ class PassiveFingerprinter:
         ttl = pkt[IP].ttl
         win = pkt[TCP].window
         os_guess = OS_SIGNATURES.get((ttl, win), 'Unknown')
-        if self._last_guess.get(src_ip) == os_guess:
-            return  # same signature as last time — nothing new to report
+
+        unchanged = self._last_guess.get(src_ip) == os_guess
         self._last_guess[src_ip] = os_guess
+        self._last_guess.move_to_end(src_ip)
+        if len(self._last_guess) > _MAX_TRACKED_IPS:
+            self._last_guess.popitem(last=False)  # evict the IP updated longest ago
+        if unchanged:
+            return  # same signature as last time — nothing new to report
         self._callback(src_ip, os_guess)

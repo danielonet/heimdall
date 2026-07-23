@@ -18,6 +18,13 @@ class TrafficDeltaCalculator:
         # key -> (bytes_sent, bytes_recv, timestamp)
         self._prev: dict[str, Tuple[int, int, datetime]] = {}
 
+    @property
+    def tracked_key_count(self) -> int:
+        """Number of MAC/port keys with stored previous-poll counters —
+        nothing evicts a key when a device disconnects, so this grows with
+        every distinct MAC/port ever polled."""
+        return len(self._prev)
+
     def compute(
         self,
         key: str,

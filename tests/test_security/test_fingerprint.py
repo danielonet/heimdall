@@ -113,3 +113,19 @@ class TestProcess:
         pkt = IP(src='10.0.0.8') / UDP(sport=1234, dport=53)
         fp._process(pkt)
         assert results == []
+
+    def test_cache_is_capped_evicting_the_least_recently_updated_ip(self, monkeypatch):
+        """Regression: this cache used to grow forever — confirmed live,
+        21 -> 233 entries over 3 days — since nothing ever evicted an IP
+        that stopped being seen. Now capped via LRU eviction."""
+        monkeypatch.setattr('sentinel.security.fingerprint._MAX_TRACKED_IPS', 3)
+        fp = PassiveFingerprinter(on_fingerprint=lambda ip, os: None, iface='eth0')
+
+        fp._process(_syn('10.0.0.1', ttl=64, window=65535))
+        fp._process(_syn('10.0.0.2', ttl=64, window=65535))
+        fp._process(_syn('10.0.0.3', ttl=64, window=65535))
+        fp._process(_syn('10.0.0.4', ttl=64, window=65535))  # pushes past the cap of 3
+
+        assert len(fp._last_guess) == 3
+        assert '10.0.0.1' not in fp._last_guess  # oldest-updated, evicted first
+        assert '10.0.0.4' in fp._last_guess

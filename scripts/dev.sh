@@ -130,14 +130,52 @@ fi
 # ── Process tracking ─────────────────────────────────────────────────────────
 BACKEND_PID=""
 FRONTEND_PID=""
+BACKEND_PORT=5000
+FRONTEND_PORT=5173
 LOG_DIR="${REPO_ROOT}/.logs"
 mkdir -p "$LOG_DIR"
+
+# _stop_pid_tree PID NAME — SIGTERM, wait briefly, SIGKILL if still alive.
+# Targets the whole process group (negative PID) first, not just PID itself:
+# Flask's --debug reloader forks a child worker process that a plain `kill
+# $PID` never reaches, which is exactly what used to leave port 5000 held
+# open after Ctrl+C. Falls back to a direct-PID kill in case this job never
+# actually got its own process group (depends on the shell's job-control
+# state) — either way, _free_port below is the actual guarantee.
+_stop_pid_tree() {
+    local pid="$1" name="$2"
+    [ -z "$pid" ] && return
+    kill -0 "$pid" 2>/dev/null || return
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+    for _ in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || { log_info "Stopped ${name} (pid ${pid})"; return; }
+        sleep 0.2
+    done
+    log_warn "${name} (pid ${pid}) still running after SIGTERM — sending SIGKILL"
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+}
+
+# _free_port PORT — last-resort guarantee, independent of PID-tracking above:
+# whatever is still bound to this port when the script exits gets killed
+# directly. Covers the reloader-child case even if the process-group kill
+# above didn't reach it, and also a stale process left over from a previous
+# crashed run.
+_free_port() {
+    local port="$1"
+    have fuser || return
+    if fuser "${port}/tcp" &>/dev/null; then
+        log_warn "Port ${port} still in use after shutdown — force-freeing it"
+        fuser -k "${port}/tcp" &>/dev/null || true
+    fi
+}
 
 cleanup() {
     echo ""
     log_section "Shutting Down"
-    [ -n "$BACKEND_PID" ]  && kill "$BACKEND_PID"  2>/dev/null && log_info "Stopped backend  (pid $BACKEND_PID)"
-    [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null && log_info "Stopped frontend (pid $FRONTEND_PID)"
+    _stop_pid_tree "$BACKEND_PID"  "backend"
+    _stop_pid_tree "$FRONTEND_PID" "frontend"
+    _free_port "$BACKEND_PORT"
+    _free_port "$FRONTEND_PORT"
     exit 0
 }
 trap cleanup SIGINT SIGTERM
@@ -160,7 +198,7 @@ if $NO_BACKEND; then
     echo '    "request": "launch",'
     echo '    "module": "flask",'
     echo '    "args": ["--app", "sentinel.api.app:create_app()", "run",'
-    echo '             "--host", "127.0.0.1", "--port", "5000", "--no-debugger"],'
+    echo "             \"--host\", \"127.0.0.1\", \"--port\", \"${BACKEND_PORT}\", \"--no-debugger\"],"
     echo '    "env": {'
     echo "      \"DATABASE_URL\": \"${DATABASE_URL}\","
     echo "      \"REDIS_URL\": \"${REDIS_URL}\","
@@ -172,11 +210,16 @@ if $NO_BACKEND; then
     echo '  }'
     echo ""
 else
-    log_info "Flask backend → http://127.0.0.1:5000"
+    log_info "Flask backend → http://127.0.0.1:${BACKEND_PORT}"
     log_info "Logs also at  → ${BACKEND_LOG}"
+    # Piping the backgrounded command directly (`cmd | tee | sed &`) makes
+    # $! capture sed's PID, not Flask's — cleanup() would then be killing
+    # the log formatter while the real process (and its reloader child)
+    # kept running and holding the port. Process substitution keeps Flask
+    # itself as the backgrounded command so $! is the right PID.
     "$PYTHON_BIN" -m flask --app "$FLASK_APP" run \
-        --host 127.0.0.1 --port 5000 --debug \
-        2>&1 | tee "$BACKEND_LOG" | sed "s/^/${GREEN}[BACKEND]${NC} /" &
+        --host 127.0.0.1 --port "$BACKEND_PORT" --debug \
+        > >(tee "$BACKEND_LOG" | sed "s/^/${GREEN}[BACKEND]${NC} /") 2>&1 &
     BACKEND_PID=$!
 fi
 
@@ -196,10 +239,11 @@ else
     fi
 
     FRONTEND_LOG="${LOG_DIR}/frontend.log"
-    log_info "Vite dev server → http://localhost:5173"
+    log_info "Vite dev server → http://localhost:${FRONTEND_PORT}"
     log_info "Logs also at    → ${FRONTEND_LOG}"
+    # See the backend block above for why this isn't a plain trailing pipe.
     npm --prefix "$FRONTEND_DIR" run dev \
-        2>&1 | tee "$FRONTEND_LOG" | sed "s/^/${CYAN}[FRONTEND]${NC} /" &
+        > >(tee "$FRONTEND_LOG" | sed "s/^/${CYAN}[FRONTEND]${NC} /") 2>&1 &
     FRONTEND_PID=$!
 fi
 
@@ -207,12 +251,12 @@ fi
 log_section "Heimdall Running (app tier only — infra managed separately)"
 echo ""
 if $NO_BACKEND; then
-    echo "  ${YELLOW}Backend  ${NC} http://127.0.0.1:5000   ${YELLOW}(start manually in VS Code)${NC}"
+    echo "  ${YELLOW}Backend  ${NC} http://127.0.0.1:${BACKEND_PORT}   ${YELLOW}(start manually in VS Code)${NC}"
 else
-    echo "  ${GREEN}Backend  ${NC} http://127.0.0.1:5000   (pid ${BACKEND_PID})"
+    echo "  ${GREEN}Backend  ${NC} http://127.0.0.1:${BACKEND_PORT}   (pid ${BACKEND_PID})"
 fi
 [ -n "$FRONTEND_PID" ] && \
-echo "  ${CYAN}Frontend ${NC} http://localhost:5173    (pid ${FRONTEND_PID})"
+echo "  ${CYAN}Frontend ${NC} http://localhost:${FRONTEND_PORT}    (pid ${FRONTEND_PID})"
 echo ""
 echo "  Logs : ${LOG_DIR}/"
 echo ""

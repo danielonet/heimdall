@@ -588,6 +588,35 @@ class SentinelScheduler:
             ),
         }
 
+    def memory_diagnostics_snapshot(self) -> dict[str, Any]:
+        """Sizes of the in-memory collections most likely to grow unbounded
+        on a long-running process — every one is keyed by MAC/IP and nothing
+        currently evicts an entry for a device that's left the network, so
+        they naturally grow with distinct-device churn (e.g. MAC-randomizing
+        phones) even without an actual bug. What distinguishes a real leak
+        is a count that keeps climbing indefinitely rather than plateauing
+        once the LAN's device population stabilizes — call this endpoint a
+        few times spaced minutes apart and compare. See GET /api/debug/memory.
+        """
+        adapter = self._adapter
+        return {
+            'arp_watcher_table_size': self._arp_watcher.table_size if self._arp_watcher else None,
+            'fingerprinter_cache_size': self._fingerprinter.cache_size if self._fingerprinter else None,
+            'rule_engine_streak_count': self._rule_engine.streak_count if self._rule_engine else None,
+            'rule_engine_rate_limited_count': (
+                self._rule_engine.rate_limited_count if self._rule_engine else None
+            ),
+            'anomaly_engine_buffered_device_count': (
+                self._anomaly_engine.buffered_device_count if self._anomaly_engine else None
+            ),
+            'anomaly_engine_trained_model_count': (
+                self._anomaly_engine.trained_model_count if self._anomaly_engine else None
+            ),
+            'adapter_traffic_delta_tracked_count': (
+                adapter._device_delta.tracked_key_count if hasattr(adapter, '_device_delta') else None
+            ),
+        }
+
     def threat_intel_feeds_snapshot(self) -> dict[str, Any]:
         return self._threat_intel.feed_status() if self._threat_intel else {}
 

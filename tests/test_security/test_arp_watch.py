@@ -138,3 +138,32 @@ class TestProcess:
         watcher._process(_arp_reply('10.0.0.5', 'bb:bb:bb:bb:bb:bb'))
 
         assert watcher._table['10.0.0.5'] == 'bb:bb:bb:bb:bb:bb'
+
+    def test_table_is_capped_evicting_the_least_recently_updated_ip(self, monkeypatch):
+        """Regression: this table used to grow forever — confirmed live,
+        21 -> 233 entries over 3 days — since nothing ever evicted an IP
+        that stopped being seen. Now capped via LRU eviction."""
+        monkeypatch.setattr('sentinel.security.arp_watch._MAX_TRACKED_IPS', 3)
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+
+        watcher._process(_arp_reply('10.0.0.1', 'aa:aa:aa:aa:aa:a1'))
+        watcher._process(_arp_reply('10.0.0.2', 'aa:aa:aa:aa:aa:a2'))
+        watcher._process(_arp_reply('10.0.0.3', 'aa:aa:aa:aa:aa:a3'))
+        watcher._process(_arp_reply('10.0.0.4', 'aa:aa:aa:aa:aa:a4'))  # pushes past the cap of 3
+
+        assert len(watcher._table) == 3
+        assert '10.0.0.1' not in watcher._table  # oldest-updated, evicted first
+        assert '10.0.0.4' in watcher._table
+
+    def test_touching_an_existing_ip_keeps_it_from_being_evicted(self, monkeypatch):
+        monkeypatch.setattr('sentinel.security.arp_watch._MAX_TRACKED_IPS', 3)
+        watcher = ArpWatcher(alert_callback=lambda e: None, iface='eth0')
+
+        watcher._process(_arp_reply('10.0.0.1', 'aa:aa:aa:aa:aa:a1'))
+        watcher._process(_arp_reply('10.0.0.2', 'aa:aa:aa:aa:aa:a2'))
+        watcher._process(_arp_reply('10.0.0.3', 'aa:aa:aa:aa:aa:a3'))
+        watcher._process(_arp_reply('10.0.0.1', 'aa:aa:aa:aa:aa:a1'))  # re-touch — now the most recent
+        watcher._process(_arp_reply('10.0.0.4', 'aa:aa:aa:aa:aa:a4'))  # pushes past the cap of 3
+
+        assert '10.0.0.1' in watcher._table       # was re-touched, survives
+        assert '10.0.0.2' not in watcher._table   # untouched since, evicted instead

@@ -86,6 +86,21 @@ class RuleEngine:
         self._streaks: dict[tuple[int, str], int] = {}           # (rule_id, mac) -> consecutive matches
         self._rate_limited_until: dict[tuple[int, str], datetime] = {}
 
+    @property
+    def streak_count(self) -> int:
+        """Size of the (rule_id, mac) streak-tracking dict — reset to 0 on
+        a non-match but the key itself is never deleted, so this grows with
+        every distinct (rule, device) pair ever evaluated. A steadily
+        climbing count (not just churn) is a leak candidate."""
+        return len(self._streaks)
+
+    @property
+    def rate_limited_count(self) -> int:
+        """Size of the (rule_id, mac) rate-limit dict — entries are never
+        removed once their cooldown expires, only overwritten on the next
+        RATE_LIMIT fire for that same pair."""
+        return len(self._rate_limited_until)
+
     async def load_active_rules(self) -> None:
         """Refresh the rule list. Call once per poll cycle — not once per device/sample."""
         async with get_session() as session:

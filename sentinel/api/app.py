@@ -1,5 +1,6 @@
 import logging
 import os
+import tracemalloc
 
 from flask import Flask
 
@@ -8,7 +9,7 @@ from sentinel.config import settings
 from sentinel.db.session import init_db
 from sentinel.scheduler.scheduler import init_scheduler
 
-from sentinel.api.routes import alerts, auth, devices, ports, rules, system, threats
+from sentinel.api.routes import alerts, auth, debug, devices, ports, rules, system, threats
 from sentinel.api.routes import settings as settings_routes
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,13 @@ def create_app(config: dict | None = None) -> Flask:
     if app.config.get('SCHEDULER_ENABLED', True) and reloader_worker:
         init_scheduler(app)
 
+    # See sentinel/api/routes/debug.py — off by default, tracemalloc has
+    # real overhead. Only the actual worker process needs it, same reasoning
+    # as the scheduler guard above.
+    if app.config.get('MEMORY_DEBUG_ENABLED', False) and reloader_worker and not tracemalloc.is_tracing():
+        tracemalloc.start(25)
+        logger.warning('MEMORY_DEBUG_ENABLED — tracemalloc is running, expect extra CPU/memory overhead')
+
     app.register_blueprint(auth.bp,    url_prefix='/api')
     app.register_blueprint(devices.bp, url_prefix='/api/devices')
     app.register_blueprint(alerts.bp,  url_prefix='/api/alerts')
@@ -48,6 +56,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(threats.bp, url_prefix='/api/threats')
     app.register_blueprint(system.bp,  url_prefix='/api')
     app.register_blueprint(settings_routes.bp, url_prefix='/api/settings')
+    app.register_blueprint(debug.bp,   url_prefix='/api/debug')
 
     logger.info('Heimdall sentinel API ready')
     return app

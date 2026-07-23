@@ -35,6 +35,22 @@ class AnomalyEngine:
         self._buffers: dict[str, list[np.ndarray]] = {}
         self._model_cache: dict[str, dict] = {}
 
+    @property
+    def buffered_device_count(self) -> int:
+        """Number of MACs currently mid-bootstrap — bounded per-device
+        (cleared on train or on a training skip, see _fit_and_save), so this
+        should stay small and not climb indefinitely on its own."""
+        return len(self._buffers)
+
+    @property
+    def trained_model_count(self) -> int:
+        """Number of MACs with a model held in the in-memory cache — grows
+        with every distinct device ever trained and is never evicted for a
+        device that stops connecting, so persistent MAC-randomization churn
+        (e.g. phones rotating a private MAC per network) is a plausible
+        driver of unbounded growth here over a long uptime."""
+        return len(self._model_cache)
+
     def score(self, sample: TrafficSample) -> float:
         """Anomaly score for this sample. Lower = more anomalous. 0.0 = no model yet.
 
