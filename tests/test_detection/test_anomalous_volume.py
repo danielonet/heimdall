@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
-from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
+from sentinel.detection.detectors.anomalous_volume import SUSTAINED_POLLS, AnomalousVolumeDetector
 
 pytestmark = pytest.mark.asyncio
 
@@ -67,23 +67,55 @@ def _detector(
 
 
 class TestInspectTraffic:
-    async def test_anomalous_sample_produces_warning_alert(self):
+    async def test_sustained_anomalous_samples_produce_warning_alert(self):
         detector = _detector(anomalous=True)
+        for _ in range(SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is not None
         assert alert.severity == 'WARNING'
         assert alert.alert_type == 'ANOMALOUS_VOLUME'
         assert alert.device_mac == 'aa:bb:cc:dd:ee:ff'
 
+    async def test_single_anomalous_poll_does_not_alert(self):
+        """Regression: contamination=0.05 means ~5% of samples are *expected*
+        to score as outliers even on a correctly-calibrated model — a single
+        sample being enough turned into a real incident (68k alerts in 4
+        days). Must be sustained across SUSTAINED_POLLS in a row."""
+        detector = _detector(anomalous=True)
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+
+    async def test_streak_resets_on_a_non_anomalous_sample(self):
+        detector = _detector(anomalous=True)
+        for _ in range(SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+        detector._engine._anomalous = False
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # breaks the streak
+        detector._engine._anomalous = True
+        for _ in range(SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # needs a fresh streak
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None
+
+    async def test_no_alert_again_during_the_cooldown(self):
+        """Regression: previously nothing stopped a sustained condition from
+        re-firing every single poll for its whole duration."""
+        detector = _detector(anomalous=True)
+        for _ in range(SUSTAINED_POLLS):
+            first = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert first is not None
+        for _ in range(SUSTAINED_POLLS + 2):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # still in cooldown
+
     async def test_non_anomalous_sample_produces_no_alert(self):
         detector = _detector(anomalous=False)
-        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
-        assert alert is None
+        for _ in range(SUSTAINED_POLLS + 2):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
 
     async def test_per_port_samples_are_skipped_even_if_anomalous(self):
         detector = _detector(anomalous=True)
-        alert = await detector.inspect_traffic(_sample(granularity=TrafficGranularity.PER_PORT), _SNAPSHOT)
-        assert alert is None
+        for _ in range(SUSTAINED_POLLS + 2):
+            alert = await detector.inspect_traffic(_sample(granularity=TrafficGranularity.PER_PORT), _SNAPSHOT)
+            assert alert is None
 
     async def test_inspect_device_always_returns_none(self):
         detector = _detector(anomalous=True)
@@ -104,6 +136,8 @@ class TestLearningPeriod:
 
     async def test_fires_once_the_learning_period_has_elapsed(self):
         detector = _detector(anomalous=True, first_seen=_LONG_AGO, learning_period_hours=72)
+        for _ in range(SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is not None
 
@@ -133,4 +167,6 @@ class TestLearningPeriod:
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # 10h < 72h
 
         detector._settings_repo = _FakeSettingsRepository(ml_learning_period_hours=5)
-        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None  # 10h >= 5h now
+        for _ in range(SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # 10h >= 5h now, building streak
+        assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None

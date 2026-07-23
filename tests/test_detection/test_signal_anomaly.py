@@ -105,6 +105,25 @@ class TestInspectDevice:
         second_alert = await detector.inspect_device(_device(rssi=-80))
         assert second_alert is None
 
+    async def test_oscillating_signal_does_not_re_alert_within_the_cooldown(self):
+        """Regression: confirmed in production — a device with a genuinely
+        noisy/marginal signal produced 21 alerts in about an hour, oscillating
+        back and forth past the threshold each time. Unlike staying flat at
+        the new baseline (test_does_not_re_alert_every_poll_after_confirming),
+        this is a *second, genuine* sustained shift — it must still be
+        suppressed while in cooldown from the first."""
+        detector = _detector()
+        await detector.inspect_device(_device(rssi=-45))
+        await detector.inspect_device(_device(rssi=-80))
+        first_alert = await detector.inspect_device(_device(rssi=-80))
+        assert first_alert is not None
+
+        # Swings back the other way — a real, newly-sustained shift, not a
+        # repeat of the same value.
+        await detector.inspect_device(_device(rssi=-50))
+        second_alert = await detector.inspect_device(_device(rssi=-50))
+        assert second_alert is None  # still cooling down
+
     async def test_wired_devices_are_skipped(self):
         detector = _detector()
         await detector.inspect_device(_device(rssi=0, interface='Ethernet'))

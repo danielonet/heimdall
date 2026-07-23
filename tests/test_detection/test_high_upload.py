@@ -65,6 +65,24 @@ class TestInspectTraffic:
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
 
+    async def test_no_re_alert_within_the_cooldown_even_with_a_fresh_sustained_streak(self):
+        """Regression: an attack tool sustaining a high ratio continuously
+        used to re-fire every SUSTAINED_POLLS worth of polls for as long as
+        it kept running — confirmed in production, 1,885 alerts from one
+        device over 4 days. A second, genuinely fresh 3-poll streak must
+        still be suppressed while the cooldown from the first fire holds."""
+        detector = HighUploadDetector()
+        sample = _sample(sent=100_000, recv=1_000)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        first_alert = await detector.inspect_traffic(sample, _SNAPSHOT)
+        assert first_alert is not None
+
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        second_alert = await detector.inspect_traffic(sample, _SNAPSHOT)  # a fresh 3-poll streak
+        assert second_alert is None  # still cooling down
+
     async def test_low_ratio_poll_breaks_the_streak(self):
         detector = HighUploadDetector()
         high = _sample(sent=100_000, recv=1_000)

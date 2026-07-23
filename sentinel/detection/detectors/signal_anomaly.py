@@ -15,6 +15,16 @@ reading judged "anomalous" against anything. The baseline still tracks
 confirmed shifts during learning (so it reflects settled behaviour by the
 time alerts unlock), only the alert itself is withheld — see
 AnomalousVolumeDetector / Settings.ML_LEARNING_PERIOD_HOURS.
+
+Also cooled down for COOLDOWN_MINUTES after firing — confirmed in production:
+a device with a genuinely noisy/marginal signal (weak-signal spot, power-save
+wake cycles) can clear RSSI_DELTA_THRESHOLD_DBM for SUSTAINED_POLLS in a row
+repeatedly as it keeps oscillating, and since the baseline snaps to whatever
+value it just fired on, the very next real oscillation could immediately
+satisfy the condition again — one device produced 21 alerts in about an hour
+bouncing between roughly -55 and -92 dBm. Same fix pattern as
+AnomalousVolumeDetector / RuleEngine's RATE_LIMIT: the baseline still keeps
+tracking through the cooldown, only the alert is withheld.
 """
 from __future__ import annotations
 
@@ -28,6 +38,7 @@ from sentinel.detection.detectors.base import BaseDetector
 
 RSSI_DELTA_THRESHOLD_DBM = 15
 SUSTAINED_POLLS = 2
+COOLDOWN_MINUTES = 30
 
 
 class SignalAnomalyDetector(BaseDetector):
@@ -41,6 +52,7 @@ class SignalAnomalyDetector(BaseDetector):
         self._settings_repo = settings_repo
         self._baseline_rssi: dict[str, int] = {}
         self._consecutive_shifted: dict[str, int] = {}
+        self._quiet_until: dict[str, datetime] = {}
 
     async def inspect_device(self, snapshot: DeviceSnapshot) -> Optional[Alert]:
         if snapshot.interface_name != 'WiFi':
@@ -73,10 +85,16 @@ class SignalAnomalyDetector(BaseDetector):
         old_baseline = baseline
         self._baseline_rssi[mac] = current
 
+        now = datetime.now(timezone.utc)
+        if self._quiet_until.get(mac, now) > now:
+            return None  # still quiet from a previous fire — baseline updated, alert withheld
+
         first_seen = await self._device_repo.get_first_seen(mac)
         learning_period_hours = await self._settings_repo.get_ml_learning_period_hours()
         if first_seen is None or datetime.now(timezone.utc) - first_seen < timedelta(hours=learning_period_hours):
             return None  # still learning — baseline updated, but alert withheld
+
+        self._quiet_until[mac] = now + timedelta(minutes=COOLDOWN_MINUTES)
 
         return Alert(
             device_mac=mac,

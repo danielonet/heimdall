@@ -17,7 +17,19 @@ from sentinel.ml.model_store import ModelStore
 
 logger = logging.getLogger(__name__)
 
-ANOMALY_THRESHOLD = -0.1  # IsolationForest: < 0 = anomaly, -1 = extreme
+# decision_function()'s calibrated boundary: negative = anomaly, positive =
+# normal, per the contamination rate the model was fit with. NOT the same as
+# score_samples() < some constant — score_samples() is IsolationForest's raw,
+# uncalibrated path-length score, whose scale is specific to each fitted
+# model's own training distribution and isn't comparable across devices or to
+# a fixed threshold. Comparing it to -0.1 (an earlier version of this code)
+# caused a real incident: a low-variance/idle device's typical, repeated
+# samples scored well past that arbitrary cutoff, so it was flagged
+# anomalous on essentially every poll — 68k ANOMALOUS_VOLUME alerts across
+# 4 days. decision_function() = score_samples() - offset_, where offset_ is
+# fit specifically so 0 represents the contamination-implied boundary — see
+# https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html
+ANOMALY_THRESHOLD = 0.0
 
 # Indices of the throughput columns in FEATURE_NAMES — the only ones that
 # reflect actual traffic volume. hour_of_day/day_of_week/is_night are
@@ -52,7 +64,11 @@ class AnomalyEngine:
         return len(self._model_cache)
 
     def score(self, sample: TrafficSample) -> float:
-        """Anomaly score for this sample. Lower = more anomalous. 0.0 = no model yet.
+        """Anomaly score for this sample. Negative = anomalous, positive =
+        normal, 0.0 = the calibrated boundary (or no model yet — bootstrap
+        buffering also returns 0.0, so a dashboard can't tell "no model" from
+        "exactly at the boundary" apart from context, which is fine — both
+        read as "nothing to report").
 
         Has a side effect during bootstrap: buffers the sample, and triggers
         training once enough have accumulated — so this must be called exactly
@@ -64,7 +80,7 @@ class AnomalyEngine:
             self._buffer(mac, build_feature_vector(sample).reshape(1, -1))
             return 0.0
         vec = build_feature_vector(sample).reshape(1, -1)
-        return float(model['iso'].score_samples(vec)[0])
+        return float(model['iso'].decision_function(vec)[0])
 
     def is_anomalous(self, sample: TrafficSample) -> bool:
         """True if both IsolationForest and LOF agree this sample is an outlier
@@ -76,7 +92,14 @@ class AnomalyEngine:
             return False
 
         vec = build_feature_vector(sample).reshape(1, -1)
-        iso_anomalous = model['iso'].score_samples(vec)[0] < ANOMALY_THRESHOLD
+        # bool(...) on both sides, not just lof: `numpy_bool and python_bool`
+        # short-circuits to the *numpy* bool when the left side is falsy, so
+        # without this is_anomalous() could return np.False_ instead of
+        # Python's False — a real value (`np.False_ == False`) but not the
+        # same object (`np.False_ is False` is False), which breaks any
+        # caller doing an identity check against this method's declared
+        # `-> bool` return type.
+        iso_anomalous = bool(model['iso'].decision_function(vec)[0] < ANOMALY_THRESHOLD)
         lof_anomalous = bool(model['lof'].predict(vec)[0])  # PyOD: 1 = outlier
         return iso_anomalous and lof_anomalous
 
