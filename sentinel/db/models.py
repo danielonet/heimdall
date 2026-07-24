@@ -31,6 +31,10 @@ class Device(Base):
     port_alias: Mapped[str | None] = mapped_column(String(10))
     signal_strength_dbm: Mapped[int] = mapped_column(Integer, server_default='0')
     signal_rate_mbps: Mapped[int] = mapped_column(Integer, server_default='0')
+    # Router's own DHCP-fingerprint device classification (e.g. 'Smartphone',
+    # 'Multimedia device') — blank when the router couldn't classify it. See
+    # SagemcomXmoAdapter._to_device_snapshot.
+    device_type: Mapped[str | None] = mapped_column(String(50))
     os_fingerprint: Mapped[str | None] = mapped_column(String(100))
     nmap_profile: Mapped[dict | None] = mapped_column(JSONB)
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))

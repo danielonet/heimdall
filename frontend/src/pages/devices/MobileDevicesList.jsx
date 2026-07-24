@@ -13,6 +13,7 @@ const CHIP_GROUPS = [
   { key: 'connectivity', options: [['all', 'ALL'], ['online', 'ONLINE'], ['offline', 'OFFLINE']] },
   { key: 'network', options: [['all', 'ALL'], ['wifi', 'WIFI'], ['wired', 'WIRED']] },
   { key: 'trust', options: [['all', 'ALL'], ['trusted', 'TRUSTED'], ['suspect', 'SUSPECT']] },
+  { key: 'presence', options: [['all', 'ALL'], ['connected', 'CONNECTED'], ['nearby', 'NEARBY ONLY']] },
 ]
 
 export function MobileDevicesList({ devices, totalCount, isLoading, filters, setFilters }) {
@@ -72,7 +73,10 @@ export function MobileDevicesList({ devices, totalCount, isLoading, filters, set
                   {d.hostname || <MacAddress mac={d.mac_address} />}
                 </div>
               </div>
-              <div className="truncate text-[9px] text-text-muted">{d.ip_address || '—'}</div>
+              <div className="truncate text-[9px] text-text-muted">
+                {d.ip_address || '—'}
+                {d.device_type && d.device_type !== 'MISCELLANEOUS' && ` · ${d.device_type}`}
+              </div>
             </div>
             <div className="flex flex-shrink-0 flex-col items-end gap-1">
               <TrafficDisplay sample={d.latest_traffic} />

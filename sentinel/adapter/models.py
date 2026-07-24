@@ -22,6 +22,8 @@ class DeviceSnapshot:
     signal_rate_mbps: int = 0      # e.g. 130 Mbps
     is_online: bool = True
     port_alias: str = ''           # 'PHY1'..'PHY5' for wired devices, '' for WiFi
+    device_type: str = ''          # router's own DHCP-fingerprint classification,
+                                    # e.g. 'Smartphone', 'Multimedia device' — '' if unclassified
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     tags: Set[str] = field(default_factory=set)

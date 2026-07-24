@@ -37,6 +37,7 @@ export function DeviceHeader({ device }) {
             </span>
             <span>{device.ip_address || '—'}</span>
             {device.vendor_name && <span>{device.vendor_name}</span>}
+            {device.device_type && device.device_type !== 'MISCELLANEOUS' && <span>{device.device_type}</span>}
             {device.os_fingerprint && <span>{device.os_fingerprint}</span>}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">

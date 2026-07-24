@@ -384,6 +384,15 @@ class SagemcomXmoAdapter(RouterAdapter):
             signal_rate_mbps=signal_rate_mbps,
             is_online=bool(is_active),
             port_alias=_parse_port_alias(host.get('Layer1Interface', '')) if interface_name == 'Ethernet' else '',
+            # The router's own DHCP-fingerprint classification (matched against
+            # Device/DeviceDiscovery/DeviceIdentification/DHCPFingerprintDatabase)
+            # — confirmed live values include 'Smartphone', 'Multimedia device';
+            # blank when the router couldn't classify it. UserDeviceType (the
+            # router UI's manually-editable category) is deliberately not used
+            # here — it defaults to 'MISCELLANEOUS' for nearly every host and
+            # carries no real signal unless an admin hand-edited it in the
+            # router's own UI.
+            device_type=host.get('DetectedDeviceType', ''),
         )
 
     async def _get_hosts(self) -> List[dict]:

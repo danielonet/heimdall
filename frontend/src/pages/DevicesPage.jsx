@@ -5,7 +5,7 @@ import { filterDevices } from '../lib/deviceFilters'
 import { DesktopDevicesList } from './devices/DesktopDevicesList'
 import { MobileDevicesList } from './devices/MobileDevicesList'
 
-const DEFAULT_FILTERS = { search: '', connectivity: 'all', network: 'all', trust: 'all' }
+const DEFAULT_FILTERS = { search: '', connectivity: 'all', network: 'all', trust: 'all', presence: 'all' }
 
 export function DevicesPage() {
   const mode = useLayoutMode()

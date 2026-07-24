@@ -19,6 +19,7 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'port_alias': device.port_alias,
         'signal_strength_dbm': device.signal_strength_dbm,
         'signal_rate_mbps': device.signal_rate_mbps,
+        'device_type': device.device_type,
         'os_fingerprint': device.os_fingerprint,
         'nmap_profile': device.nmap_profile,
         'tags': device.tags or [],

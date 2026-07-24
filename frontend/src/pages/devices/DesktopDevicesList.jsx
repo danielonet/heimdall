@@ -15,6 +15,7 @@ const FILTER_GROUPS = [
   { key: 'connectivity', options: [['all', 'ALL'], ['online', 'ONLINE'], ['offline', 'OFFLINE']] },
   { key: 'network', options: [['all', 'ALL'], ['wifi', 'WIFI'], ['wired', 'WIRED']] },
   { key: 'trust', options: [['all', 'ALL'], ['trusted', 'TRUSTED'], ['suspect', 'SUSPECT']] },
+  { key: 'presence', options: [['all', 'ALL'], ['connected', 'CONNECTED'], ['nearby', 'NEARBY ONLY']] },
 ]
 
 function FilterGroup({ label, options, value, onChange }) {
@@ -68,6 +69,15 @@ const columnHelperDefs = [
     id: 'vendor',
     header: 'VENDOR',
     accessorFn: (d) => d.vendor_name || '',
+    cell: ({ getValue }) => <span className="text-text-secondary">{getValue() || '—'}</span>,
+  },
+  {
+    id: 'kind',
+    header: 'KIND',
+    // Router's own DHCP-fingerprint classification — 'MISCELLANEOUS' is the
+    // router's own default when it couldn't identify the device, same as no
+    // classification at all, so both render as '—'.
+    accessorFn: (d) => (d.device_type && d.device_type !== 'MISCELLANEOUS' ? d.device_type : ''),
     cell: ({ getValue }) => <span className="text-text-secondary">{getValue() || '—'}</span>,
   },
   {

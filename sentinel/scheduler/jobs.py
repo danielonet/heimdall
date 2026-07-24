@@ -319,6 +319,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 traffic_granularity=traffic_granularity,
                 signal_strength_dbm=snapshot.signal_strength_dbm,
                 signal_rate_mbps=snapshot.signal_rate_mbps,
+                device_type=snapshot.device_type or None,
                 is_trusted=was_trusted,
                 is_online=snapshot.is_online,
                 ever_connected=snapshot.is_online,
@@ -335,6 +336,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             existing.traffic_granularity = traffic_granularity
             existing.signal_strength_dbm = snapshot.signal_strength_dbm
             existing.signal_rate_mbps = snapshot.signal_rate_mbps
+            existing.device_type = snapshot.device_type or None
             existing.is_online = snapshot.is_online
             if snapshot.is_online:
                 existing.ever_connected = True

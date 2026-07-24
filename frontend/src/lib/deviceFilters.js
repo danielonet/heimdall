@@ -7,7 +7,7 @@ export function isDeviceOnline(device) {
   return Boolean(device.is_online)
 }
 
-export function filterDevices(devices, { search, connectivity, network, trust }) {
+export function filterDevices(devices, { search, connectivity, network, trust, presence }) {
   const q = search.trim().toLowerCase()
 
   return devices.filter((d) => {
@@ -24,6 +24,14 @@ export function filterDevices(devices, { search, connectivity, network, trust })
 
     if (trust === 'trusted' && !d.is_trusted) return false
     if (trust === 'suspect' && d.is_trusted) return false
+
+    // ever_connected distinguishes a device that actually joined the network
+    // (got a DHCP lease / associated) from one the router only ever "heard"
+    // — a DHCP/probe attempt, a stale historical entry — without it ever
+    // really connecting. See NewDeviceDetector's docstring and
+    // sentinel/scheduler/jobs.py:_upsert_devices.
+    if (presence === 'connected' && !d.ever_connected) return false
+    if (presence === 'nearby' && d.ever_connected) return false
 
     return true
   })

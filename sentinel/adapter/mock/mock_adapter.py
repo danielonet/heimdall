@@ -191,6 +191,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-45,
                 signal_rate_mbps=300,
                 is_online=True,
+                device_type='Computer',
             ),
             DeviceSnapshot(
                 mac_address='b4:b0:1d:8e:4f:5a',
@@ -201,6 +202,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-68,
                 signal_rate_mbps=130,
                 is_online=True,
+                device_type='Tablet',
             ),
             DeviceSnapshot(
                 mac_address='c8:1c:c3:2d:4b:6e',
@@ -211,6 +213,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-72,
                 signal_rate_mbps=72,
                 is_online=True,
+                device_type='Multimedia device',
             ),
             DeviceSnapshot(
                 mac_address='d4:6e:0e:33:f2:1a',
@@ -221,6 +224,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-55,
                 signal_rate_mbps=200,
                 is_online=False,
+                device_type='Smartphone',
             ),
             # Wired devices
             DeviceSnapshot(
@@ -232,6 +236,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=0,
                 signal_rate_mbps=1000,
                 is_online=True,
+                device_type='Network Attached Storage',
             ),
             DeviceSnapshot(
                 mac_address='f4:75:88:a9:3d:b2',
@@ -242,6 +247,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=0,
                 signal_rate_mbps=100,
                 is_online=True,
+                device_type='Printer',
             ),
             # Wired, sole occupant of PHY2 — exercises the real per-device
             # traffic path for wired devices (see _wired_single_occupant_macs
@@ -272,6 +278,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-78,
                 signal_rate_mbps=24,
                 is_online=True,
+                device_type='MISCELLANEOUS',  # router couldn't classify it — realistic, not a gap
             ),
             # Modern phone with WiFi private-address randomization — the
             # locally-administered MAC means lookup_vendor() correctly
@@ -287,6 +294,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-50,
                 signal_rate_mbps=400,
                 is_online=True,
+                device_type='Smartphone',
             ),
             DeviceSnapshot(
                 mac_address='3c:e1:a1:5f:8a:22',
@@ -297,6 +305,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-80,
                 signal_rate_mbps=36,
                 is_online=True,
+                device_type='IP Camera',
             ),
             DeviceSnapshot(
                 mac_address='4c:aa:16:8b:3e:71',
@@ -307,6 +316,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-60,
                 signal_rate_mbps=270,
                 is_online=True,
+                device_type='Multimedia device',
             ),
             DeviceSnapshot(
                 mac_address='2c:f0:5d:9a:44:e7',
@@ -317,6 +327,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_strength_dbm=-58,
                 signal_rate_mbps=433,
                 is_online=True,
+                device_type='Game Console',
             ),
         ]
 
