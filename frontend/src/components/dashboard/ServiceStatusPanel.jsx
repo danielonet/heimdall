@@ -13,8 +13,8 @@ function Row({ label, ok, detail }) {
   )
 }
 
-// Only real, wired signals — no Suricata/Pi-hole/Zeek/ClamAV rows, since
-// nothing in the backend reports their status. See sentinel/api/routes/system.py.
+// Only real, wired signals — no Suricata/Pi-hole rows, since nothing in the
+// backend reports their status. See sentinel/api/routes/system.py.
 export function ServiceStatusPanel({ health }) {
   if (!health) return <div className="text-[10px] text-text-muted">Loading…</div>
 
@@ -56,6 +56,21 @@ export function ServiceStatusPanel({ health }) {
         label="Threat Intel"
         ok={feedsOk}
         detail={stalestFeedRefresh ? <TimeAgo iso={stalestFeedRefresh} /> : 'PENDING'}
+      />
+      <Row
+        label="Zeek DNS"
+        ok={!!sec.zeek_dns_last_check_at}
+        detail={sec.zeek_dns_last_check_at ? <TimeAgo iso={sec.zeek_dns_last_check_at} /> : 'PENDING'}
+      />
+      <Row
+        label="Zeek Beaconing"
+        ok={!!sec.zeek_beacon_last_scan_at}
+        detail={sec.zeek_beacon_last_scan_at ? <TimeAgo iso={sec.zeek_beacon_last_scan_at} /> : 'PENDING'}
+      />
+      <Row
+        label="ClamAV"
+        ok={!!sec.clamav_reachable}
+        detail={sec.clamav_reachable ? 'REACHABLE' : 'DOWN'}
       />
     </div>
   )

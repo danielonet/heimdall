@@ -33,6 +33,8 @@ services:
     volumes:
       - ml-models:/data/models        # persist trained ML models across restarts
       - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
+      - zeek-logs:/var/log/zeek:ro              # read by zeek_parser.py (dns.log/conn.log)
+      - zeek-extracted:/var/zeek/extracted:ro   # read by zeek_parser.py, scanned via ClamAV
 
   frontend:
     build: ./frontend
@@ -107,6 +109,32 @@ services:
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
+  zeek:
+    image: zeek/zeek:latest
+    network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      # Must match docs/router/network-topology.md's Subnet — without this,
+      # Zeek's file-analysis framework can't tell which connection endpoint
+      # is "local", so files.log's tx_hosts/rx_hosts stay empty and
+      # ZeekFileExtractionWatcher can never attribute an extracted file back
+      # to the LAN device that downloaded it. See zeek/local.zeek.
+      - LAN_SUBNET=${LAN_SUBNET:-10.100.102.0/24}
+    volumes:
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - zeek-logs:/var/log/zeek
+      - zeek-extracted:/var/zeek/extracted
+    # Run standalone (no zeekctl) — logs land directly in the working
+    # directory with no automatic timestamped rotation, unlike a zeekctl
+    # deployment. See sentinel/security/zeek_parser.py's truncation-safety
+    # comment for why the reader still defends against the file shrinking
+    # anyway (e.g. a container restart recreating the log fresh).
+    working_dir: /var/log/zeek
+    command: ["zeek", "-i", "${SNIFF_IFACE:-eth0}", "local"]
+    restart: unless-stopped
+
 secrets:
   router_password: { file: ./secrets/router_password.txt }
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
@@ -120,3 +148,5 @@ volumes:
   suricata-logs:
   clamav-db:
   opencanary-logs:
+  zeek-logs:
+  zeek-extracted:

@@ -92,6 +92,22 @@ services:
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
+  zeek:
+    image: zeek/zeek:latest
+    network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - LAN_SUBNET=${LAN_SUBNET:-10.100.102.0/24}  # see zeek/local.zeek's Site::local_nets comment
+    volumes:
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - zeek-logs:/var/log/zeek
+      - zeek-extracted:/var/zeek/extracted
+    working_dir: /var/log/zeek
+    command: ["zeek", "-i", "eth0", "local"]
+    restart: unless-stopped
+
 secrets:
   router_password: { file: ./secrets/router_password.txt }
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
@@ -105,6 +121,8 @@ volumes:
   suricata-logs:
   clamav-db:
   opencanary-logs:
+  zeek-logs:
+  zeek-extracted:
 ```
 
 ## First-run setup
@@ -195,6 +213,78 @@ Minimal `opencanary/opencanary.conf`:
     "smb.enabled": true
 }
 ```
+
+## Zeek configuration
+
+`zeek/local.zeek` — JSON logging (Zeek's default is TSV), `Site::local_nets`
+(read from `LAN_SUBNET`), plus a curated file-extraction policy feeding
+ClamAV. Extracts only realistic malware-delivery MIME types (executables,
+archives, opaque binaries), not every image/video/web asset a home network
+sees:
+
+```zeek
+redef LogAscii::use_json = T;
+
+# Site::local_nets tells Zeek's file-analysis framework which connection
+# endpoint is "local" — without it, files.log's tx_hosts/rx_hosts fields
+# stay empty (confirmed against a live container), breaking file->device
+# attribution entirely. safe_lan_subnet() falls back to a no-op subnet
+# instead of crashing Zeek when LAN_SUBNET isn't set.
+function safe_lan_subnet(): subnet
+    {
+    local raw = getenv("LAN_SUBNET");
+    if ( raw == "" )
+        return 0.0.0.0/32;
+    return to_subnet(raw);
+    }
+
+redef Site::local_nets += { safe_lan_subnet() };
+
+event zeek_init()
+    {
+    if ( getenv("LAN_SUBNET") == "" )
+        Reporter::warning("LAN_SUBNET is not set — files.log's tx_hosts/rx_hosts " +
+            "will stay empty and extracted files won't be attributable to a device");
+    }
+
+@load base/files/extract
+redef FileExtract::prefix = "/var/zeek/extracted/";
+
+const extract_mime_types: set[string] = {
+    "application/x-dosexec",
+    "application/x-executable",
+    "application/x-sharedlib",
+    "application/zip",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
+    "application/octet-stream",
+} &redef;
+
+event file_sniff(f: fa_file, meta: fa_metadata)
+    {
+    if ( ! meta?$mime_type )
+        return;
+    if ( meta$mime_type in extract_mime_types )
+        Files::add_analyzer(f, Files::ANALYZER_EXTRACT);
+    }
+```
+
+`sentinel/security/zeek_parser.py` reads `dns.log`/`conn.log` (tailed
+incrementally and re-scanned periodically respectively) and cross-
+references extracted files against `files.log`'s `fuid`/`id.orig_h`/
+`id.resp_h`/`is_orig` to attribute a scanned file back to a device.
+Verified against a live `zeek/zeek:latest` container (Zeek 8.2.1): dns.log/
+conn.log field names match the documented schema exactly, but files.log did
+not — it was originally written against `tx_hosts`/`rx_hosts`, a schema
+Zeek replaced in v5.1 with one files.log entry per connection (sharing a
+`fuid`) using `id.orig_h`/`id.resp_h`/`is_orig` instead. `is_orig=false`
+means the file was sent by the connection's responder (a normal download —
+remote server to LAN client), so the receiving device is `id.orig_h`;
+`is_orig=true` means the LAN client uploaded it, so the receiver is
+`id.resp_h`. `Site::local_nets` (set from `LAN_SUBNET` above) is unrelated
+to this — it drives `local_orig`/`local_resp` in conn.log and Zeek's
+notice/weird framework, not file-to-connection attribution — but is still
+worth setting for those other reasons.
 
 ## .gitignore entries (critical)
 

@@ -24,7 +24,7 @@ from sentinel.adapter.factory import create_router_adapter
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
-from sentinel.db.models import Alert, Device, WanStatusHistory
+from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
@@ -36,9 +36,16 @@ from sentinel.notifications.service import NotificationConfig, NotificationServi
 from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
+from sentinel.security.clamav_scanner import ClamAvScanner
 from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.threat_intel import ThreatIntelService
+from sentinel.security.zeek_parser import (
+    ZeekConnBeaconDetector,
+    ZeekDnsIngester,
+    ZeekDnsLogReader,
+    ZeekFileExtractionWatcher,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +71,12 @@ class SentinelScheduler:
         notification_config: NotificationConfig,
         opencanary_log_path: str,
         canary_poll_interval_s: int,
+        zeek_log_dir: str,
+        zeek_extract_dir: str,
+        zeek_dns_poll_interval_s: int,
+        zeek_beacon_scan_interval_s: int,
+        clamav_host: str,
+        clamav_port: int,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
@@ -79,6 +92,12 @@ class SentinelScheduler:
         self._notification_config = notification_config
         self._opencanary_log_path = opencanary_log_path
         self._canary_poll_interval_s = canary_poll_interval_s
+        self._zeek_log_dir = zeek_log_dir
+        self._zeek_extract_dir = zeek_extract_dir
+        self._zeek_dns_poll_interval_s = zeek_dns_poll_interval_s
+        self._zeek_beacon_scan_interval_s = zeek_beacon_scan_interval_s
+        self._clamav_host = clamav_host
+        self._clamav_port = clamav_port
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -97,6 +116,11 @@ class SentinelScheduler:
         self._fingerprinter: PassiveFingerprinter | None = None
         self._canary_reader: OpenCanaryLogReader | None = None
         self._canary_ingester: OpenCanaryIngester | None = None
+        self._zeek_dns_reader: ZeekDnsLogReader | None = None
+        self._zeek_dns_ingester: ZeekDnsIngester | None = None
+        self._zeek_beacon_detector: ZeekConnBeaconDetector | None = None
+        self._zeek_file_watcher: ZeekFileExtractionWatcher | None = None
+        self._clamav: ClamAvScanner | None = None
         # Rules/notifications — RuleEngine tracks per-(rule, device) streak and
         # rate-limit state across polls, so it's built once too.
         self._notifier: NotificationService | None = None
@@ -106,6 +130,10 @@ class SentinelScheduler:
         self._last_poll_error: str | None = None
         self._last_nmap_scan_at: datetime | None = None
         self._last_canary_check_at: datetime | None = None
+        self._last_zeek_dns_check_at: datetime | None = None
+        self._last_zeek_beacon_scan_at: datetime | None = None
+        self._last_zeek_file_scan_at: datetime | None = None
+        self._clamav_reachable: bool | None = None
 
     def start(self) -> None:
         """Start the background thread and begin polling. Safe to call once."""
@@ -161,6 +189,11 @@ class SentinelScheduler:
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
         self._canary_reader = OpenCanaryLogReader(self._opencanary_log_path)
         self._canary_ingester = OpenCanaryIngester()
+        self._zeek_dns_reader = ZeekDnsLogReader(f'{self._zeek_log_dir}/dns.log')
+        self._zeek_dns_ingester = ZeekDnsIngester()
+        self._zeek_beacon_detector = ZeekConnBeaconDetector(self._zeek_log_dir)
+        self._zeek_file_watcher = ZeekFileExtractionWatcher(self._zeek_extract_dir, self._zeek_log_dir)
+        self._clamav = ClamAvScanner(self._clamav_host, self._clamav_port)
         self._notifier = NotificationService(self._notification_config)
         # _rule_engine is constructed lazily in _poll_job, once the adapter
         # exists (BLOCK_DEVICE actions need it) — see _ensure_adapter().
@@ -202,6 +235,24 @@ class SentinelScheduler:
             'interval',
             seconds=self._canary_poll_interval_s,
             id='canary_poll',
+        )
+        self._scheduler.add_job(
+            self._zeek_dns_poll_job,
+            'interval',
+            seconds=self._zeek_dns_poll_interval_s,
+            id='zeek_dns_poll',
+        )
+        self._scheduler.add_job(
+            self._zeek_beacon_scan_job,
+            'interval',
+            seconds=self._zeek_beacon_scan_interval_s,
+            id='zeek_beacon_scan',
+        )
+        self._scheduler.add_job(
+            self._zeek_file_scan_job,
+            'interval',
+            seconds=self._zeek_dns_poll_interval_s,
+            id='zeek_file_scan',
         )
         self._scheduler.add_job(
             self._startup_job,
@@ -375,6 +426,103 @@ class SentinelScheduler:
                 alert.device_mac = result.scalars().first()
             session.add(alert)
         emit_alert(alert_to_dict(alert))
+
+    async def _mac_for_ip(self, ip: str) -> str | None:
+        """Resolve a source IP (as seen in a Zeek log line) to a known device_mac —
+        same lookup _persist_canary_alert uses for OpenCanary's src_host."""
+        async with get_session() as session:
+            result = await session.execute(select(Device.mac_address).where(Device.ip_address == ip))
+            return result.scalars().first()
+
+    async def _zeek_dns_poll_job(self) -> None:
+        """Tail Zeek's dns.log, record every query, and raise an alert for
+        any query against a domain ThreatIntelService's URLhaus feed has
+        flagged as malicious."""
+        self._last_zeek_dns_check_at = datetime.now(timezone.utc)
+        for line in self._zeek_dns_reader.read_new_lines():
+            parsed = self._zeek_dns_ingester.parse_event(line)
+            if parsed is None:
+                continue
+            source_ip, query = parsed
+            try:
+                await self._persist_dns_query(source_ip, query)
+            except Exception:
+                logger.exception('Failed to persist Zeek DNS query')
+
+    async def _persist_dns_query(self, source_ip: str, query: str) -> None:
+        mac = await self._mac_for_ip(source_ip)
+        is_malicious = self._threat_intel.is_domain_malicious(query)
+        async with get_session() as session:
+            session.add(DnsQuery(
+                time=datetime.now(timezone.utc),
+                device_mac=mac,
+                query=query,
+                blocked=is_malicious,
+                list_name='urlhaus' if is_malicious else None,
+            ))
+        if is_malicious:
+            await self._raise_threat_alert(
+                mac, 'DNS_MALICIOUS_QUERY', 'CRITICAL',
+                f'{source_ip} queried {query}, which is on the URLhaus malicious-domain feed',
+                raw_data={'source_ip': source_ip, 'query': query},
+            )
+
+    async def _zeek_beacon_scan_job(self) -> None:
+        """Re-scan Zeek's conn.log for suspiciously regular connection
+        intervals (a common C2 beaconing signature) and alert per offending
+        (source, destination) pair."""
+        try:
+            suspicious = self._zeek_beacon_detector.detect()
+        except Exception:
+            logger.exception('Zeek beacon scan failed')
+            self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
+            return
+
+        for pair in suspicious:
+            mac = await self._mac_for_ip(pair['src'])
+            await self._raise_threat_alert(
+                mac, 'C2_BEACONING', 'CRITICAL',
+                f"{pair['src']} has made {pair['count']} connections to {pair['dst']} "
+                f"at suspiciously regular ~{pair['interval_mean_s']}s intervals "
+                f"(stddev {pair['interval_std_s']}s) — possible C2 beaconing",
+                raw_data=pair,
+            )
+        self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
+
+    async def _zeek_file_scan_job(self) -> None:
+        """Scan every file Zeek's file-extraction analyzer has pulled to disk
+        via ClamAV, alerting (and deleting) on anything infected.
+
+        Also refreshes _clamav_reachable here rather than pinging inside
+        security_services_snapshot() — that method is read synchronously by
+        /api/health, which the frontend polls every 15s per open tab; pinging
+        clamd on every one of those requests would open a lot of avoidable
+        sockets. This job's own interval is a cheap enough cadence for it.
+        """
+        self._clamav_reachable = await self._clamav.ping()
+
+        try:
+            extracted = self._zeek_file_watcher.collect()
+        except Exception:
+            logger.exception('Zeek file-extraction poll failed')
+            self._last_zeek_file_scan_at = datetime.now(timezone.utc)
+            return
+
+        for filename, data, source_ip in extracted:
+            try:
+                result = await self._clamav.scan_bytes(data)
+            except Exception:
+                logger.exception('ClamAV scan failed for extracted file %s', filename)
+                continue
+            if result:
+                mac = await self._mac_for_ip(source_ip) if source_ip else None
+                await self._raise_threat_alert(
+                    mac, 'MALWARE_DETECTED', 'CRITICAL',
+                    f'ClamAV flagged a file downloaded by {source_ip or "an unknown device"} '
+                    f'({filename}): {result}',
+                    raw_data={'filename': filename, 'source_ip': source_ip, 'clamav_result': result},
+                )
+        self._last_zeek_file_scan_at = datetime.now(timezone.utc)
 
     def _on_arp_alert(self, event: dict) -> None:
         """Sync callback invoked from ArpWatcher's own daemon thread."""
@@ -574,8 +722,8 @@ class SentinelScheduler:
 
     def security_services_snapshot(self) -> dict[str, Any]:
         """Real status for the security services that are actually wired — no
-        fabricated rows for services (Suricata/Pi-hole/Zeek/ClamAV) that don't
-        have a live signal to report."""
+        fabricated rows for services (e.g. Suricata/Pi-hole) that don't have a
+        live signal to report yet."""
         return {
             'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
             'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
@@ -586,6 +734,13 @@ class SentinelScheduler:
             'canary_last_check_at': (
                 self._last_canary_check_at.isoformat() if self._last_canary_check_at else None
             ),
+            'zeek_dns_last_check_at': (
+                self._last_zeek_dns_check_at.isoformat() if self._last_zeek_dns_check_at else None
+            ),
+            'zeek_beacon_last_scan_at': (
+                self._last_zeek_beacon_scan_at.isoformat() if self._last_zeek_beacon_scan_at else None
+            ),
+            'clamav_reachable': self._clamav_reachable,
         }
 
     def memory_diagnostics_snapshot(self) -> dict[str, Any]:
@@ -737,6 +892,12 @@ def init_scheduler(app: Flask) -> None:
         notification_config=notification_config,
         opencanary_log_path=app.config['OPENCANARY_LOG_PATH'],
         canary_poll_interval_s=app.config['CANARY_POLL_INTERVAL_SECONDS'],
+        zeek_log_dir=app.config['ZEEK_LOG_DIR'],
+        zeek_extract_dir=app.config['ZEEK_EXTRACT_DIR'],
+        zeek_dns_poll_interval_s=app.config['ZEEK_DNS_POLL_INTERVAL_SECONDS'],
+        zeek_beacon_scan_interval_s=app.config['ZEEK_BEACON_SCAN_INTERVAL_SECONDS'],
+        clamav_host=app.config['CLAMAV_HOST'],
+        clamav_port=app.config['CLAMAV_PORT'],
     )
     _scheduler.start()
 

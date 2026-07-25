@@ -63,6 +63,12 @@ def _scheduler() -> SentinelScheduler:
         notification_config=NotificationConfig(),
         opencanary_log_path='/tmp/heimdall-test-opencanary.log',
         canary_poll_interval_s=10,
+        zeek_log_dir='/tmp/heimdall-test-zeek',
+        zeek_extract_dir='/tmp/heimdall-test-zeek-extracted',
+        zeek_dns_poll_interval_s=10,
+        zeek_beacon_scan_interval_s=300,
+        clamav_host='localhost',
+        clamav_port=3310,
     )
 
 

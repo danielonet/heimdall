@@ -98,6 +98,16 @@ class Settings(BaseSettings):
     THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
     OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'
     CANARY_POLL_INTERVAL_SECONDS: int = 10
+    # See sentinel/security/zeek_parser.py and zeek/local.zeek.
+    ZEEK_LOG_DIR: str = '/var/log/zeek'
+    ZEEK_EXTRACT_DIR: str = '/var/zeek/extracted'
+    ZEEK_DNS_POLL_INTERVAL_SECONDS: int = 10
+    # Beaconing detection needs a window of connection history to compute
+    # interval statistics over, not a per-line reaction — much longer than
+    # the DNS poll interval.
+    ZEEK_BEACON_SCAN_INTERVAL_SECONDS: int = 300
+    CLAMAV_HOST: str = 'localhost'
+    CLAMAV_PORT: int = 3310
 
     # ── Diagnostics ───────────────────────────────────────────────────────────
     # Starts tracemalloc at process boot and enables GET /api/debug/memory.
