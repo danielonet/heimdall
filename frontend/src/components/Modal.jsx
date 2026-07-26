@@ -6,7 +6,12 @@ import { createPortal } from 'react-dom'
  * (e.g. destructive actions). Closes on Escape or backdrop click, both of
  * which call onClose; the caller decides what that means (usually just
  * hiding the modal, not cancelling any in-flight action). */
-export function Modal({ title, tone = 'default', onClose, children }) {
+const SIZES = {
+  md: 'max-w-md',
+  lg: 'max-w-3xl',
+}
+
+export function Modal({ title, tone = 'default', size = 'md', onClose, children }) {
   useEffect(() => {
     function handleKeyDown(e) {
       if (e.key === 'Escape') onClose()
@@ -27,7 +32,7 @@ export function Modal({ title, tone = 'default', onClose, children }) {
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md border ${borderColor} bg-surface-elevated p-5 shadow-[0_0_40px_rgba(0,0,0,0.5)]`}
+        className={`w-full ${SIZES[size]} border ${borderColor} bg-surface-elevated p-5 shadow-[0_0_40px_rgba(0,0,0,0.5)]`}
       >
         {title && (
           <div className={`mb-4 text-[9px] tracking-[3px] ${titleColor}`}>{title}</div>

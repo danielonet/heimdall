@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { logout } from '../../lib/api'
 import { useHealth } from '../../hooks/useHealth'
 import { StatusDot } from '../../components/StatusDot'
+import { CreditsModal } from '../../components/CreditsModal'
 import heimdallLogo from '../../assets/heimdall-icon.png'
 
 const NAV_ITEMS = [
@@ -30,17 +31,28 @@ export function DesktopShell() {
   const navigate = useNavigate()
   const { data: health } = useHealth()
   const schedulerOk = health?.scheduler?.scheduler_running && !health?.scheduler?.last_poll_error
+  const [showCredits, setShowCredits] = useState(false)
 
   async function handleLogout() {
     await logout()
     navigate('/login', { replace: true })
   }
 
+  // Easter egg: Ctrl+Shift + double-click the logo.
+  function handleLogoDoubleClick(e) {
+    if (e.ctrlKey && e.shiftKey) setShowCredits(true)
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-[11px] text-text-secondary">
       <header className="flex h-[52px] flex-shrink-0 items-stretch border-b border-border bg-surface-elevated">
         <div className="flex min-w-[200px] items-center gap-3 border-r border-border px-6">
-          <img src={heimdallLogo} alt="" className="h-9 w-9 flex-shrink-0" />
+          <img
+            src={heimdallLogo}
+            alt=""
+            onDoubleClick={handleLogoDoubleClick}
+            className="h-9 w-9 flex-shrink-0 select-none"
+          />
           <div>
             <div className="font-heading text-lg font-bold tracking-[4px] text-accent-green">SENTINEL</div>
             <div className="mt-0.5 text-[8px] tracking-wide text-text-muted">HOME NET MONITOR</div>
@@ -93,6 +105,8 @@ export function DesktopShell() {
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
+
+      {showCredits && <CreditsModal onClose={() => setShowCredits(false)} />}
     </div>
   )
 }

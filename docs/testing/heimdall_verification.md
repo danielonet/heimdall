@@ -16,6 +16,9 @@
 | Passive Fingerprint Detection | Identifies devices without active scanning |
 | Nmap Scanner | Active port and service detection |
 | ARP Protection | Detects and blocks ARP spoofing attacks |
+| Zeek DNS Visibility | Passive DNS query logging + malicious-domain alerting (URLhaus feed) |
+| Zeek C2 Beaconing Detection | Flags suspiciously regular-interval connections to the same remote host |
+| ClamAV Malware Scanning | Scans files Zeek extracts from observed downloads |
 
 ---
 
@@ -274,6 +277,132 @@ sudo airmon-ng stop wlan0mon
 
 ---
 
+## Test 8 — Malicious Domain DNS Query (Zeek DNS + Threat Intel)
+
+**Objective:** Verify Heimdall's Zeek DNS visibility logs every DNS query it
+observes on the wire, and raises a `DNS_MALICIOUS_QUERY` alert when a query
+resolves against a domain on the URLhaus threat feed.
+
+**Kali Tool:** dig / curl
+
+**Command Line:**
+```bash
+# Baseline: any query should show up in dns-stats and advance the Zeek DNS
+# service-status timestamp, whether or not it's malicious
+dig example.com
+
+# Malicious-domain check: pick a domain CURRENTLY listed at
+# https://urlhaus.abuse.ch/browse/ before testing — entries rotate daily,
+# so a domain from an old test run will no longer be flagged
+dig <current-urlhaus-domain>
+curl -m 5 http://<current-urlhaus-domain>/
+```
+
+**Note:** The Threat Intel panel on the dashboard shows when the `urlhaus`
+feed last refreshed (nightly, `THREAT_FEED_REFRESH_CRON`) — confirm it's
+recent before picking a test domain, otherwise the feed may not yet include
+it. Only cleartext DNS (UDP/53) is visible to Zeek; a device using
+DNS-over-HTTPS/TLS bypasses this test entirely, which is an expected blind
+spot, not a Heimdall bug.
+
+**Expected Heimdall Response:**
+- Zeek DNS row in the dashboard's Service Status panel goes ACTIVE and its
+  timestamp advances
+- `GET /api/threats/dns-stats` shows `total_queries` incrementing
+- For the URLhaus domain specifically: a `DNS_MALICIOUS_QUERY` CRITICAL
+  alert is raised naming the querying device and domain; the query appears
+  in `dns-stats`' `blocked_queries` / `top_blocked_domains`; the device is
+  auto-blocked if `auto_block_on_threat` is armed
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+## Test 9 — C2 Beaconing Simulation (Zeek conn.log Analysis)
+
+**Objective:** Verify Heimdall flags a device making suspiciously
+regular-interval connections to the same remote host — a common command-
+and-control beacon signature — even though no single connection looks
+malicious on its own.
+
+**Kali Tool:** bash loop + curl (or netcat against a listener you control)
+
+**Command Line:**
+```bash
+# 15 connections to the same remote host at a fixed 60s interval — comfortably
+# above the detector's default min_count (10) with low jitter (<2s stddev)
+for i in $(seq 1 15); do
+    curl -s -o /dev/null -m 5 http://<remote_test_host>/
+    sleep 60
+done
+```
+
+**Note:** Runs for ~15 minutes. `<remote_test_host>` needs to be something
+the Kali box can reach reliably every cycle (a host you control is safest —
+this only tests timing regularity, not the destination's reputation). The
+beacon scan itself runs every `ZEEK_BEACON_SCAN_INTERVAL_SECONDS` (default
+300s/5min), so allow up to 5 extra minutes after the loop finishes before
+checking for the alert.
+
+**Expected Heimdall Response:**
+- Zeek Beaconing row's timestamp advances every scan cycle regardless of
+  outcome
+- A `C2_BEACONING` CRITICAL alert is raised naming the source device,
+  destination host, connection count, and interval mean/stddev
+- Device auto-blocked if `auto_block_on_threat` is armed
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+## Test 10 — Malware File Download (Zeek Extraction + ClamAV)
+
+**Objective:** Verify Zeek's file-extraction analyzer captures a downloaded
+file of a curated MIME type and ClamAV flags it as malicious.
+
+**Kali Tool:** curl / a local HTTP server for the test file
+
+**Command Line:**
+```bash
+# EICAR: the industry-standard synthetic AV test string, recognized by every
+# antivirus engine (including ClamAV) as "malware" without being real
+# malware — safe to use even on a live network.
+curl -o eicar.com http://secure.eicar.org/eicar.com
+
+# If external access isn't available, serve it from the Kali box instead:
+python3 -m http.server 8000 --directory /tmp   # with eicar.com placed there
+curl -o eicar.com http://<kali_ip>:8000/eicar.com
+```
+
+**Note:** Must be plain HTTP, not HTTPS — this pipeline inspects cleartext
+file transfers only, no TLS interception is configured (a known, expected
+blind spot). The download's `Content-Type` needs to land in
+`zeek/local.zeek`'s curated extraction set (`application/octet-stream`
+covers most plain test-file downloads); if a test server reports something
+outside that set (e.g. `text/plain`), Zeek won't extract it — that's the
+extraction policy working as designed (see the ClamAV section of
+`docs/architecture/06-security-services.md`), not a failure to fix.
+
+**Expected Heimdall Response:**
+- File appears in `/var/zeek/extracted/` briefly (deleted immediately after
+  scanning, whether clean or infected — check ClamAV row activity, not the
+  directory contents, to confirm the scan ran)
+- ClamAV flags the EICAR signature
+- A `MALWARE_DETECTED` CRITICAL alert is raised naming the filename, source
+  device, and ClamAV's verdict; device auto-blocked if
+  `auto_block_on_threat` is armed
+- ClamAV row in Service Status shows REACHABLE with a recent timestamp
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
 ## Summary Results
 
 | Test | Feature Tested | Result | Notes |
@@ -285,6 +414,9 @@ sudo airmon-ng stop wlan0mon
 | 5 | Traffic Anomaly | ☐ Pass ☐ Fail ☐ Partial | |
 | 6 | DNS Reconnaissance | ☐ Pass ☐ Fail ☐ Partial | |
 | 7 | WiFi Mapping | ☐ Pass ☐ Fail ☐ Partial | |
+| 8 | Zeek DNS / Malicious Domain | ☐ Pass ☐ Fail ☐ Partial | |
+| 9 | Zeek C2 Beaconing | ☐ Pass ☐ Fail ☐ Partial | |
+| 10 | ClamAV Malware Scan | ☐ Pass ☐ Fail ☐ Partial | |
 
 ---
 
@@ -305,6 +437,9 @@ sudo airmon-ng stop wlan0mon
 | p0f | CLI | Passive OS fingerprinting | `sudo p0f` |
 | dnsrecon | CLI | DNS enumeration | `dnsrecon` |
 | Fern WiFi Cracker | GUI | WiFi security testing | `sudo fern-wifi-cracker` |
+| dig | CLI | DNS lookups (Test 8) | `dig <domain>` |
+| curl | CLI | HTTP requests / file downloads (Tests 8-10) | `curl` |
+| EICAR test file | Test file | Safe, industry-standard synthetic malware signature (Test 10) | `curl -o eicar.com http://secure.eicar.org/eicar.com` |
 
 ---
 

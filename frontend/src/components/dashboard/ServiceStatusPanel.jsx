@@ -1,10 +1,26 @@
 import { StatusDot } from '../StatusDot'
 import { TimeAgo } from '../TimeAgo'
+import {
+  CanaryIcon,
+  CrosshairIcon,
+  EyeIcon,
+  FingerprintIcon,
+  PostgresIcon,
+  PulseIcon,
+  RadarIcon,
+  RedisIcon,
+  RouterIcon,
+  ShieldCheckIcon,
+  ShieldIcon,
+} from './ServiceIcons'
 
-function Row({ label, ok, detail }) {
+function Row({ icon: Icon, label, ok, detail }) {
   return (
     <div className="flex items-center justify-between border-b border-border/50 py-1.5 text-[10px] last:border-none">
-      <span className="text-text-secondary">{label}</span>
+      <span className={`flex items-center gap-1.5 ${ok ? 'text-text-secondary' : 'text-text-muted'}`}>
+        <Icon className={`h-3 w-3 flex-shrink-0 ${ok ? 'text-accent-green' : 'text-text-muted'}`} />
+        {label}
+      </span>
       <span className={`flex items-center gap-1.5 ${ok ? 'text-accent-green' : 'text-text-muted'}`}>
         <StatusDot variant={ok ? 'green' : 'muted'} pulse={ok} />
         {detail}
@@ -29,45 +45,68 @@ export function ServiceStatusPanel({ health }) {
   return (
     <div className="border border-border bg-surface p-4">
       <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">SERVICES</div>
-      <Row label="Postgres" ok={health.postgres?.reachable} detail={health.postgres?.reachable ? 'OK' : 'DOWN'} />
-      <Row label="Redis" ok={health.redis?.reachable} detail={health.redis?.reachable ? 'OK' : 'DOWN'} />
       <Row
+        icon={PostgresIcon}
+        label="Postgres"
+        ok={health.postgres?.reachable}
+        detail={health.postgres?.reachable ? 'OK' : 'DOWN'}
+      />
+      <Row
+        icon={RedisIcon}
+        label="Redis"
+        ok={health.redis?.reachable}
+        detail={health.redis?.reachable ? 'OK' : 'DOWN'}
+      />
+      <Row
+        icon={RouterIcon}
         label="XMO Adapter"
         ok={health.scheduler?.scheduler_running && !health.scheduler?.last_poll_error}
         detail={health.scheduler?.scheduler_running ? 'POLLING' : 'STOPPED'}
       />
-      <Row label="ARP Watch" ok={sec.arp_watch_active} detail={sec.arp_watch_active ? 'ACTIVE' : 'OFF'} />
       <Row
+        icon={RadarIcon}
+        label="ARP Watch"
+        ok={sec.arp_watch_active}
+        detail={sec.arp_watch_active ? 'ACTIVE' : 'OFF'}
+      />
+      <Row
+        icon={FingerprintIcon}
         label="Passive Fingerprint"
         ok={sec.fingerprint_active}
         detail={sec.fingerprint_active ? 'ACTIVE' : 'OFF'}
       />
       <Row
+        icon={CrosshairIcon}
         label="Nmap Scanner"
         ok={!!sec.nmap_last_scan_at}
         detail={sec.nmap_last_scan_at ? <TimeAgo iso={sec.nmap_last_scan_at} /> : 'PENDING'}
       />
       <Row
+        icon={CanaryIcon}
         label="OpenCanary"
         ok={!!sec.canary_last_check_at}
         detail={sec.canary_last_check_at ? <TimeAgo iso={sec.canary_last_check_at} /> : 'PENDING'}
       />
       <Row
+        icon={ShieldIcon}
         label="Threat Intel"
         ok={feedsOk}
         detail={stalestFeedRefresh ? <TimeAgo iso={stalestFeedRefresh} /> : 'PENDING'}
       />
       <Row
+        icon={EyeIcon}
         label="Zeek DNS"
         ok={!!sec.zeek_dns_last_check_at}
         detail={sec.zeek_dns_last_check_at ? <TimeAgo iso={sec.zeek_dns_last_check_at} /> : 'PENDING'}
       />
       <Row
+        icon={PulseIcon}
         label="Zeek Beaconing"
         ok={!!sec.zeek_beacon_last_scan_at}
         detail={sec.zeek_beacon_last_scan_at ? <TimeAgo iso={sec.zeek_beacon_last_scan_at} /> : 'PENDING'}
       />
       <Row
+        icon={ShieldCheckIcon}
         label="ClamAV"
         ok={!!sec.clamav_reachable}
         detail={sec.clamav_reachable ? 'REACHABLE' : 'DOWN'}
