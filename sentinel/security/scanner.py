@@ -108,3 +108,26 @@ class NetworkScanner:
         if ip not in self._nm.all_hosts():
             return {}
         return self._nm[ip].get('script', {})
+
+    async def credential_scan(self, ip: str) -> dict:
+        """NSE default/blank-credential scripts. Kept separate from
+        vuln_scan() so a CVE finding and a default-password finding aren't
+        conflated under one alert type. Same empty-dict-on-failure contract
+        as vuln_scan() — this also runs unattended on a nightly schedule."""
+        try:
+            return await asyncio.to_thread(self._credential_scan_sync, ip)
+        except Exception as exc:
+            logger.warning('nmap credential scan failed for %s: %s', ip, exc)
+            return {}
+
+    def _credential_scan_sync(self, ip: str) -> dict:
+        self._nm.scan(
+            ip,
+            arguments=(
+                '--script default-accounts,http-default-accounts,'
+                'ftp-anon,mongodb-info,mysql-empty-password'
+            ),
+        )
+        if ip not in self._nm.all_hosts():
+            return {}
+        return self._nm[ip].get('script', {})

@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import datetime, timezone
 
 import pytest
@@ -103,3 +104,41 @@ class TestInspectTraffic:
     async def test_inspect_device_always_returns_none(self):
         detector = HighUploadDetector()
         assert await detector.inspect_device(_SNAPSHOT) is None
+
+
+class TestDeviceTypeAwareThreshold:
+    async def test_ip_camera_tolerates_a_ratio_that_would_alert_by_default(self):
+        """IP cameras legitimately sustain a high upload/download ratio
+        (streaming out) — device_profiles.py raises their threshold to 10:1,
+        so a 5:1 ratio (well above the 3:1 default) must not alert."""
+        camera_snapshot = dataclasses.replace(_SNAPSHOT, device_type='IP Camera')
+        detector = HighUploadDetector()
+        sample = _sample(sent=50_000, recv=10_000)  # 5:1 ratio
+        for _ in range(5):
+            assert await detector.inspect_traffic(sample, camera_snapshot) is None
+
+    async def test_printer_alerts_at_a_ratio_the_default_threshold_would_ignore(self):
+        """A 2.5:1 ratio never counts as 'high' under the flat default
+        threshold (3.0), but device_profiles.py tightens Printer's threshold
+        to 2.0 — printers have almost no legitimate reason to sustain any
+        elevated upload ratio. Still needs the same SUSTAINED_POLLS streak
+        as any device (only the ratio threshold varies here, not the
+        streak length — that's AnomalousVolumeDetector's lever, see
+        test_anomalous_volume.py's TestDeviceTypeAwareStreak)."""
+        printer_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Printer')
+        detector = HighUploadDetector()
+        sample = _sample(sent=25_000, recv=10_000)  # 2.5:1
+        assert await detector.inspect_traffic(sample, printer_snapshot) is None
+        assert await detector.inspect_traffic(sample, printer_snapshot) is None
+        alert = await detector.inspect_traffic(sample, printer_snapshot)
+        assert alert is not None
+        assert alert.alert_type == 'HIGH_UPLOAD'
+
+    async def test_unrecognized_device_type_behaves_like_default(self):
+        weird_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Some Router String We Have Never Seen')
+        detector = HighUploadDetector()
+        sample = _sample(sent=100_000, recv=1_000)
+        assert await detector.inspect_traffic(sample, weird_snapshot) is None
+        assert await detector.inspect_traffic(sample, weird_snapshot) is None
+        alert = await detector.inspect_traffic(sample, weird_snapshot)
+        assert alert is not None

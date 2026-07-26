@@ -43,6 +43,12 @@ async def _init_db():
     yield
     async with get_session() as session:
         await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
+        # test_alert_with_no_mac_is_never_blocked deliberately raises an
+        # alert with device_mac=None (no device to attribute it to) — clean
+        # that up too, or it leaks into the shared sentinel_test DB forever
+        # and trips other tests (e.g. test_api/test_alerts.py's
+        # empty-list assertion) whenever they happen to run afterward.
+        await session.execute(delete(Alert).where(Alert.device_mac.is_(None)))
         await session.execute(delete(Device).where(Device.mac_address == _MAC))
     await get_engine().dispose()
 

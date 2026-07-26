@@ -1,11 +1,15 @@
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
-from sentinel.detection.detectors.anomalous_volume import SUSTAINED_POLLS, AnomalousVolumeDetector
+from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
+from sentinel.detection.device_profiles import DEFAULT_PROFILE, get_profile
 
 pytestmark = pytest.mark.asyncio
+
+_SUSTAINED_POLLS = DEFAULT_PROFILE['volume_sustained_polls']  # blank device_type resolves to this
 
 _SNAPSHOT = DeviceSnapshot(
     mac_address='aa:bb:cc:dd:ee:ff',
@@ -69,7 +73,7 @@ def _detector(
 class TestInspectTraffic:
     async def test_sustained_anomalous_samples_produce_warning_alert(self):
         detector = _detector(anomalous=True)
-        for _ in range(SUSTAINED_POLLS - 1):
+        for _ in range(_SUSTAINED_POLLS - 1):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is not None
@@ -81,18 +85,18 @@ class TestInspectTraffic:
         """Regression: contamination=0.05 means ~5% of samples are *expected*
         to score as outliers even on a correctly-calibrated model — a single
         sample being enough turned into a real incident (68k alerts in 4
-        days). Must be sustained across SUSTAINED_POLLS in a row."""
+        days). Must be sustained across _SUSTAINED_POLLS in a row."""
         detector = _detector(anomalous=True)
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
 
     async def test_streak_resets_on_a_non_anomalous_sample(self):
         detector = _detector(anomalous=True)
-        for _ in range(SUSTAINED_POLLS - 1):
+        for _ in range(_SUSTAINED_POLLS - 1):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
         detector._engine._anomalous = False
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # breaks the streak
         detector._engine._anomalous = True
-        for _ in range(SUSTAINED_POLLS - 1):
+        for _ in range(_SUSTAINED_POLLS - 1):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # needs a fresh streak
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None
 
@@ -100,20 +104,20 @@ class TestInspectTraffic:
         """Regression: previously nothing stopped a sustained condition from
         re-firing every single poll for its whole duration."""
         detector = _detector(anomalous=True)
-        for _ in range(SUSTAINED_POLLS):
+        for _ in range(_SUSTAINED_POLLS):
             first = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert first is not None
-        for _ in range(SUSTAINED_POLLS + 2):
+        for _ in range(_SUSTAINED_POLLS + 2):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # still in cooldown
 
     async def test_non_anomalous_sample_produces_no_alert(self):
         detector = _detector(anomalous=False)
-        for _ in range(SUSTAINED_POLLS + 2):
+        for _ in range(_SUSTAINED_POLLS + 2):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
 
     async def test_per_port_samples_are_skipped_even_if_anomalous(self):
         detector = _detector(anomalous=True)
-        for _ in range(SUSTAINED_POLLS + 2):
+        for _ in range(_SUSTAINED_POLLS + 2):
             alert = await detector.inspect_traffic(_sample(granularity=TrafficGranularity.PER_PORT), _SNAPSHOT)
             assert alert is None
 
@@ -136,7 +140,7 @@ class TestLearningPeriod:
 
     async def test_fires_once_the_learning_period_has_elapsed(self):
         detector = _detector(anomalous=True, first_seen=_LONG_AGO, learning_period_hours=72)
-        for _ in range(SUSTAINED_POLLS - 1):
+        for _ in range(_SUSTAINED_POLLS - 1):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
         alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert alert is not None
@@ -167,6 +171,30 @@ class TestLearningPeriod:
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # 10h < 72h
 
         detector._settings_repo = _FakeSettingsRepository(ml_learning_period_hours=5)
-        for _ in range(SUSTAINED_POLLS - 1):
+        for _ in range(_SUSTAINED_POLLS - 1):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # 10h >= 5h now, building streak
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None
+
+
+class TestDeviceTypeAwareStreak:
+    async def test_nas_requires_a_longer_streak_than_default(self):
+        """A NAS's traffic pattern is naturally more variable — device_profiles.py
+        requires a longer sustained streak before trusting the ML agreement
+        enough to alert, vs. the default streak length."""
+        nas_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Network Attached Storage')
+        nas_sustained_polls = get_profile('Network Attached Storage')['volume_sustained_polls']
+        assert nas_sustained_polls > _SUSTAINED_POLLS  # otherwise this test proves nothing
+        detector = _detector(anomalous=True)
+        for _ in range(nas_sustained_polls - 1):
+            # Would have already fired under the default (shorter) streak.
+            assert await detector.inspect_traffic(_sample(), nas_snapshot) is None
+        alert = await detector.inspect_traffic(_sample(), nas_snapshot)
+        assert alert is not None
+
+    async def test_printer_alerts_with_a_shorter_streak_than_default(self):
+        printer_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Printer')
+        detector = _detector(anomalous=True)
+        alert = await detector.inspect_traffic(_sample(), printer_snapshot)
+        assert alert is None  # 1 poll still isn't enough even for Printer's shorter streak (2)
+        alert = await detector.inspect_traffic(_sample(), printer_snapshot)
+        assert alert is not None

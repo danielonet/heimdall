@@ -38,6 +38,7 @@ from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.clamav_scanner import ClamAvScanner
 from sentinel.security.fingerprint import PassiveFingerprinter
+from sentinel.security.os_classification import os_family
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.threat_intel import ThreatIntelService
 from sentinel.security.zeek_parser import (
@@ -299,13 +300,19 @@ class SentinelScheduler:
     async def _nmap_scan_job(self) -> None:
         """Nightly OS/service scan of every known device, stored in devices.nmap_profile.
 
-        Also treats two nmap findings as an attack rather than routine profile
-        data: a high-risk port (see HIGH_RISK_PORTS) that was closed on the
-        previous scan and is open now — a common sign a device has been
-        compromised and is now running a backdoor/remote-admin service — and
-        any finding at all from nmap's `--script vuln` NSE category. Both
-        route through _raise_threat_alert, which auto-blocks the device if
-        auto_block_on_threat is armed.
+        Also treats several nmap findings as an attack rather than routine
+        profile data: a high-risk port (see HIGH_RISK_PORTS) that was closed
+        on the previous scan and is open now — a common sign a device has
+        been compromised and is now running a backdoor/remote-admin service;
+        any finding from nmap's `--script vuln` NSE category; any finding
+        from a curated default/blank-credential NSE script set (kept as a
+        separate alert type from vuln findings — a CVE and an exposed
+        default password are different kinds of problem); and a disagreement
+        between this scan's active OS detection and PassiveFingerprinter's
+        most recent passive guess (both write to Device.os_fingerprint, so
+        without this check they'd silently clobber each other with no
+        cross-reference at all). All four route through _raise_threat_alert,
+        which auto-blocks the device if auto_block_on_threat is armed.
         """
         try:
             async with get_session() as session:
@@ -337,9 +344,12 @@ class SentinelScheduler:
                 async with get_session() as session:
                     device = await session.get(Device, mac)
                     if device is not None:
+                        previous_passive_os = device.os_fingerprint
                         device.nmap_profile = profile
                         if scan.os != 'Unknown':
                             device.os_fingerprint = scan.os
+                    else:
+                        previous_passive_os = None
 
                 for port, service in newly_opened_high_risk.items():
                     await self._raise_threat_alert(
@@ -349,12 +359,36 @@ class SentinelScheduler:
                         raw_data={'ip': ip, 'port': port, 'service': service},
                     )
 
+                if scan.os != 'Unknown' and previous_passive_os:
+                    passive_family = os_family(previous_passive_os)
+                    active_family = os_family(scan.os)
+                    if (
+                        passive_family != 'unknown'
+                        and active_family != 'unknown'
+                        and passive_family != active_family
+                    ):
+                        await self._raise_threat_alert(
+                            mac, 'OS_FINGERPRINT_CONFLICT', 'WARNING',
+                            f'{ip} was passively fingerprinted as "{previous_passive_os}" but '
+                            f'nmap\'s active scan identifies it as "{scan.os}" — possible MAC '
+                            f'spoofing or misclassification',
+                            raw_data={'ip': ip, 'passive_os': previous_passive_os, 'active_os': scan.os},
+                        )
+
                 vuln_findings = await self._scanner.vuln_scan(ip)
                 if vuln_findings:
                     await self._raise_threat_alert(
                         mac, 'VULNERABILITY_DETECTED', 'CRITICAL',
                         f'nmap vulnerability scan flagged {ip}: {", ".join(vuln_findings.keys())}',
                         raw_data={'ip': ip, 'findings': vuln_findings},
+                    )
+
+                credential_findings = await self._scanner.credential_scan(ip)
+                if credential_findings:
+                    await self._raise_threat_alert(
+                        mac, 'CREDENTIAL_EXPOSURE_DETECTED', 'CRITICAL',
+                        f'nmap credential scan flagged {ip}: {", ".join(credential_findings.keys())}',
+                        raw_data={'ip': ip, 'findings': credential_findings},
                     )
             except Exception:
                 logger.exception('nmap scan failed for %s (%s)', mac, ip)

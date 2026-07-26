@@ -13,26 +13,33 @@ from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficS
 from sentinel.db.models import Alert
 from sentinel.db.repositories import DeviceRepository, SettingsRepository
 from sentinel.detection.detectors.base import BaseDetector
+from sentinel.detection.device_profiles import get_profile
 from sentinel.ml.anomaly_engine import AnomalyEngine
 
 
-SUSTAINED_POLLS = 3  # consecutive agreeing samples required before firing (45s at the default 15s interval)
 COOLDOWN_MINUTES = 30  # quiet period per device after a fire, even if the condition persists
 
 
 class AnomalousVolumeDetector(BaseDetector):
     """Fires when both IsolationForest and LOF agree a PER_DEVICE sample is an
-    outlier, sustained across SUSTAINED_POLLS consecutive samples, then goes
-    quiet for COOLDOWN_MINUTES.
+    outlier, sustained across several consecutive samples, then goes quiet
+    for COOLDOWN_MINUTES.
 
-    Both exist for the same reason: even a correctly-calibrated model with
-    contamination=0.05 is *designed* to flag ~5% of samples — at a 15s poll
-    interval that's still roughly one alert every 5 minutes per device from
-    statistical noise alone if a single sample were enough, and once a
-    device is flagged nothing stopped it from re-firing every poll for as
-    long as the underlying condition lasted. Both match patterns already
-    used elsewhere: SUSTAINED_POLLS mirrors HighUploadDetector's streak
-    check; the cooldown mirrors RuleEngine's RATE_LIMIT action.
+    The number of consecutive samples required is looked up per
+    snapshot.device_type via device_profiles.get_profile()
+    ('volume_sustained_polls') — a NAS's traffic pattern is naturally more
+    variable than a printer's, so it takes a longer streak before a NAS's
+    anomaly is trusted enough to alert on.
+
+    Both this streak requirement and the cooldown exist for the same
+    reason: even a correctly-calibrated model with contamination=0.05 is
+    *designed* to flag ~5% of samples — at a 15s poll interval that's still
+    roughly one alert every 5 minutes per device from statistical noise
+    alone if a single sample were enough, and once a device is flagged
+    nothing stopped it from re-firing every poll for as long as the
+    underlying condition lasted. Both match patterns already used
+    elsewhere: the streak mirrors HighUploadDetector's; the cooldown
+    mirrors RuleEngine's RATE_LIMIT action.
 
     Suppressed for SettingsRepository's ml_learning_period_hours after a
     device's first_seen — a model trained on as few as ML_MIN_SAMPLES_TO_TRAIN
@@ -81,7 +88,8 @@ class AnomalousVolumeDetector(BaseDetector):
 
         streak = self._consecutive_anomalous.get(mac, 0) + 1
         self._consecutive_anomalous[mac] = streak
-        if streak < SUSTAINED_POLLS:
+        sustained_polls = get_profile(snapshot.device_type)['volume_sustained_polls']
+        if streak < sustained_polls:
             return None  # matched, but not sustained long enough yet
         self._consecutive_anomalous[mac] = 0  # reset so the next fire needs its own fresh streak
 
@@ -96,7 +104,7 @@ class AnomalousVolumeDetector(BaseDetector):
             severity=self.severity,
             description=(
                 f'{snapshot.hostname or mac} traffic pattern flagged as '
-                f'anomalous by both anomaly models for {SUSTAINED_POLLS} consecutive polls '
+                f'anomalous by both anomaly models for {sustained_polls} consecutive polls '
                 f'(up {sample.throughput_up_kbps} kbps / down {sample.throughput_dn_kbps} kbps)'
             ),
             raw_data={

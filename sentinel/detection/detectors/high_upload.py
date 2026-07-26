@@ -21,15 +21,19 @@ from typing import Optional
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample, TrafficGranularity
 from sentinel.db.models import Alert
 from sentinel.detection.detectors.base import BaseDetector
+from sentinel.detection.device_profiles import get_profile
 
-RATIO_THRESHOLD = 3.0
 SUSTAINED_POLLS = 3
 MIN_BYTES_TO_EVALUATE = 10_000  # ignore idle/noise-level traffic
 COOLDOWN_MINUTES = 30
 
 
 class HighUploadDetector(BaseDetector):
-    """Fires when upload/download ratio exceeds RATIO_THRESHOLD for SUSTAINED_POLLS in a row."""
+    """Fires when upload/download ratio exceeds a threshold for SUSTAINED_POLLS
+    in a row. The ratio threshold is looked up per snapshot.device_type via
+    device_profiles.get_profile() — a NAS or IP camera legitimately sustains
+    a high ratio (backups, streaming out), so it gets a more lenient
+    threshold than a printer or smartphone doing the same."""
 
     severity = 'WARNING'
 
@@ -51,7 +55,8 @@ class HighUploadDetector(BaseDetector):
             return None
 
         ratio = sample.bytes_sent_delta / max(sample.bytes_recv_delta, 1)
-        if ratio <= RATIO_THRESHOLD:
+        ratio_threshold = get_profile(snapshot.device_type)['high_upload_ratio_threshold']
+        if ratio <= ratio_threshold:
             self._consecutive_high[mac] = 0
             return None
 

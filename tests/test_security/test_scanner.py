@@ -115,6 +115,65 @@ class TestVulnScan:
         assert await scanner.vuln_scan('10.0.0.5') == {}
 
 
+class TestCredentialScanSyncParsing:
+    def test_uses_a_curated_credential_script_set(self):
+        scanner = NetworkScanner()
+        fake_nm = _FakePortScanner({})
+        scanner._nm = fake_nm
+
+        scanner._credential_scan_sync('10.0.0.5')
+
+        assert fake_nm.scanned_ip == '10.0.0.5'
+        assert '--script' in fake_nm.scanned_arguments
+        assert 'default-accounts' in fake_nm.scanned_arguments
+        assert 'http-default-accounts' in fake_nm.scanned_arguments
+
+    def test_parses_script_findings_for_a_known_host(self):
+        # _FakeHost only special-cases 'osmatch' in .get(); 'script' falls
+        # through to the underlying dict, matching python-nmap's real shape.
+        scanner = NetworkScanner()
+        scanner._nm = _FakePortScanner({
+            '10.0.0.5': _FakeHost(
+                protocols={'script': {'ftp-anon': 'Anonymous FTP login allowed'}},
+                osmatch=[],
+            )
+        })
+
+        result = scanner._credential_scan_sync('10.0.0.5')
+        assert result == {'ftp-anon': 'Anonymous FTP login allowed'}
+
+    def test_host_not_found_returns_empty_dict(self):
+        scanner = NetworkScanner()
+        scanner._nm = _FakePortScanner({})
+        assert scanner._credential_scan_sync('10.0.0.9') == {}
+
+
+class TestCredentialScan:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_returns_empty_dict_on_failure(self, monkeypatch):
+        scanner = NetworkScanner()
+
+        def fake_credential_scan_sync(ip):
+            raise RuntimeError('boom')
+
+        monkeypatch.setattr(scanner, '_credential_scan_sync', fake_credential_scan_sync)
+        assert await scanner.credential_scan('10.0.0.5') == {}
+
+    async def test_delegates_to_sync_scan_in_a_thread(self, monkeypatch):
+        scanner = NetworkScanner()
+        calls = []
+
+        def fake_credential_scan_sync(ip):
+            calls.append(ip)
+            return {'default-accounts': 'admin:admin'}
+
+        monkeypatch.setattr(scanner, '_credential_scan_sync', fake_credential_scan_sync)
+        result = await scanner.credential_scan('10.0.0.5')
+        assert calls == ['10.0.0.5']
+        assert result == {'default-accounts': 'admin:admin'}
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason='fallback behaviour only observable when not root')
 class TestRealScanAgainstLocalhost:
     pytestmark = pytest.mark.asyncio
