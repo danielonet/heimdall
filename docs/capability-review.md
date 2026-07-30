@@ -26,6 +26,12 @@ reflected in each item below.
 - Dependencies installed but with no callers found: `pyclamd`, `pyshark`, `dpkt`, `pandas` (Zeek-only use case, never built).
 - Router capabilities never probed at all (not even flagged TBD in the XMO docs): QoS, port forwarding, DDNS, VPN passthrough, guest-network isolation enforcement, WiFi channel/interference monitoring.
 - A possible existing bug: wired Ethernet PHY stats may have the same Sent/Received direction swap that was found and fixed for WiFi `AssociatedDevices` — flagged as untested in the docs, never verified.
+- A `suricata` service now exists in `docker-compose.yml` (with a `suricata-logs` volume) but has **no Python integration** yet — the only reference in code is a comment in `scheduler.py` listing it among services that get a fabricated health-status row. Wiring a Suricata EVE-JSON log parser (same pattern as the Zeek and OpenCanary ingestion) is an unlisted follow-up.
+
+**Implementation status of the items below** (updated after re-surveying the code):
+- ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE).
+- ⬜ Not yet built: #4, #5, #6, #7, #8, #9, #13, #14, #15, #16, #17, #18, #19.
+- ◐ Partial: #20 (dependency cleanup — `pyclamd`/`pandas` now in use; `pyshark`/`dpkt` still have no callers).
 
 ---
 
@@ -61,11 +67,11 @@ reflected in each item below.
 
 ## C. New detection logic using data you already collect (no new libraries)
 
-10. **Device-type-aware thresholds.** The `device_type` field just shipped opens this up directly: `AnomalousVolumeDetector`/`HighUploadDetector` currently use one flat threshold for every device. A "Smart Plug" or "IP Camera" suddenly generating PC-level upload volume is far more suspicious than the same from a "Computer" — per-category baseline tuning would meaningfully cut both false positives (cameras streaming is normal) and false negatives (a smart plug should basically never have high volume).
+10. **Device-type-aware thresholds.** ✅ *Done — `sentinel/detection/device_profiles.py` defines per-type profiles (NAS, IP Camera, Printer, Smartphone) and both `AnomalousVolumeDetector` and `HighUploadDetector` look up their thresholds via `get_profile(snapshot.device_type)` (shipped in commit `65cd50f`).* The `device_type` field opened this up directly: `AnomalousVolumeDetector`/`HighUploadDetector` previously used one flat threshold for every device. A "Smart Plug" or "IP Camera" suddenly generating PC-level upload volume is far more suspicious than the same from a "Computer" — per-category baseline tuning meaningfully cuts both false positives (cameras streaming is normal) and false negatives (a smart plug should basically never have high volume).
 
-11. **Active/passive OS-fingerprint cross-check.** You already have two independent OS signals per device: nmap's active `-O` detection (`NetworkScanner`, nightly) and the passive TCP fingerprint (`PassiveFingerprinter`). Currently only passive-vs-passive drift is checked (`FINGERPRINT_MISMATCH`). Cross-checking active vs. passive results (do they agree?) is a free additional spoofing signal from data you already gather nightly.
+11. **Active/passive OS-fingerprint cross-check.** ✅ *Done — the nightly nmap job (`sentinel/scheduler/scheduler.py`, `_nmap_scan_job`) now raises an alert when nmap's active OS detection disagrees with `PassiveFingerprinter`'s most recent passive guess.* You already have two independent OS signals per device: nmap's active `-O` detection (`NetworkScanner`, nightly) and the passive TCP fingerprint (`PassiveFingerprinter`). Previously only passive-vs-passive drift was checked (`FINGERPRINT_MISMATCH`); active-vs-passive is now cross-checked as a free additional spoofing signal from data already gathered nightly.
 
-12. **Expand nmap NSE script coverage for credential exposure.** `NetworkScanner.vuln_scan()` already runs `--script vuln`; adding `--script default-accounts` (or a curated auth-focused script list — `http-default-accounts`, `mysql-empty-password`, etc.) would catch devices exposing default/blank credentials, a very common real-world IoT compromise vector, using infrastructure you already have.
+12. **Expand nmap NSE script coverage for credential exposure.** ✅ *Done — `NetworkScanner` now runs `--script default-accounts,http-default-accounts,...` (`sentinel/security/scanner.py`), raised as a distinct alert type from `--script vuln` findings.* This catches devices exposing default/blank credentials, a very common real-world IoT compromise vector, using infrastructure already in place.
 
 ---
 
@@ -101,9 +107,11 @@ reflected in each item below.
 
 This is a menu, not a queue — recommend picking a small number of items (2-4)
 to scope as actual implementation plans, rather than attempting all of this
-at once. The strongest "quick win" cluster, if the user wants a starting
-point: **#10 (device-type-aware thresholds)** and **#11 (active/passive OS
-cross-check)** use only data already being collected, no new infra, and
-directly extend detectors already fixed this session. **#4/#5 (rogue AP /
-rogue DHCP)** are the highest-impact *new* capability for a home security
-tool specifically, contingent on confirming monitor-mode hardware support.
+at once. The original "quick win" cluster (**#10 device-type thresholds**,
+**#11 active/passive OS cross-check**, plus **#12 default-accounts NSE**) has
+now shipped. With those done, the strongest remaining candidates are:
+**#4/#5 (rogue AP / rogue DHCP)** — the highest-impact *new* capability for a
+home security tool specifically, contingent on confirming monitor-mode
+hardware support; **#15 (cross-alert correlation)** — turns the isolated
+alerts these new detectors produce into correlated incidents; and wiring the
+**Suricata** service that's already in the Compose file but has no parser yet.
