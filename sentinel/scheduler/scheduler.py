@@ -17,7 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import Flask
 from redis.asyncio import Redis, from_url
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip
@@ -29,6 +29,7 @@ from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
+from sentinel.detection.correlation import CrossAlertCorrelator
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
 from sentinel.detection.wan_bandwidth import WanBandwidthDetector
@@ -82,6 +83,9 @@ class SentinelScheduler:
         zeek_beacon_scan_interval_s: int,
         clamav_host: str,
         clamav_port: int,
+        block_expiry_check_interval_s: int,
+        correlation_scan_interval_s: int,
+        security_digest_cron: str,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
@@ -104,6 +108,9 @@ class SentinelScheduler:
         self._zeek_beacon_scan_interval_s = zeek_beacon_scan_interval_s
         self._clamav_host = clamav_host
         self._clamav_port = clamav_port
+        self._block_expiry_check_interval_s = block_expiry_check_interval_s
+        self._correlation_scan_interval_s = correlation_scan_interval_s
+        self._security_digest_cron = security_digest_cron
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -118,6 +125,7 @@ class SentinelScheduler:
         # Tracks a rolling throughput baseline across polls — same
         # once-per-process-and-reused reasoning as _pipeline/_anomaly_engine.
         self._wan_bandwidth_detector: WanBandwidthDetector | None = None
+        self._correlator: CrossAlertCorrelator | None = None
         # Security services — also built once per process, same reasoning.
         self._threat_intel: ThreatIntelService | None = None
         self._scanner: NetworkScanner | None = None
@@ -200,6 +208,7 @@ class SentinelScheduler:
         )
         self._pipeline = create_default_pipeline(self._anomaly_engine)
         self._wan_bandwidth_detector = WanBandwidthDetector()
+        self._correlator = CrossAlertCorrelator()
         self._threat_intel = ThreatIntelService(self._otx_api_key)
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
@@ -271,6 +280,24 @@ class SentinelScheduler:
             'interval',
             seconds=self._zeek_dns_poll_interval_s,
             id='zeek_file_scan',
+        )
+        self._scheduler.add_job(
+            self._block_expiry_job,
+            'interval',
+            seconds=self._block_expiry_check_interval_s,
+            id='block_expiry',
+        )
+        self._scheduler.add_job(
+            self._correlation_job,
+            'interval',
+            seconds=self._correlation_scan_interval_s,
+            id='correlation_scan',
+        )
+        self._scheduler.add_job(
+            self._security_digest_job,
+            CronTrigger.from_crontab(self._security_digest_cron),
+            id='security_digest',
+            replace_existing=True,
         )
         self._scheduler.add_job(
             self._startup_job,
@@ -462,6 +489,145 @@ class SentinelScheduler:
             logger.info('Data retention cleanup complete (cutoff: %s, retention: %d days)', cutoff, days)
         except Exception:
             logger.exception('Data retention cleanup failed')
+
+    async def _block_expiry_job(self) -> None:
+        """Auto-unblocks devices whose auto-block passed its configured
+        expiry (AppSettings.auto_block_expiry_hours), notifies for review,
+        and records a low-severity AUTO_BLOCK_EXPIRED alert so the event is
+        visible in the Alerts history, not just a transient notification.
+
+        Only ever touches devices with blocked_until set — manual blocks
+        (POST /devices/<mac>/block) leave it NULL and are never auto-expired.
+        Runs on an interval (not a nightly cron) so a 24h SLA doesn't slip
+        by up to a full day; see Settings.BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Device.mac_address, Device.hostname).where(
+                        Device.is_blocked.is_(True),
+                        Device.blocked_until.isnot(None),
+                        Device.blocked_until < now,
+                    )
+                )
+                expired = result.all()
+            if not expired:
+                return
+
+            expiry_hours = await SettingsRepository().get_auto_block_expiry_hours()
+            for mac, hostname in expired:
+                try:
+                    adapter = await self._ensure_adapter()
+                    unblocked = await adapter.unblock_device(mac)
+                except Exception:
+                    logger.exception('Failed to auto-unblock expired block for %s', mac)
+                    continue
+                if not unblocked:
+                    logger.warning('Router rejected auto-unblock for expired block on %s', mac)
+                    continue
+
+                label = hostname or mac
+                description = (
+                    f'{label} was auto-unblocked after {expiry_hours}h — '
+                    f'review and re-block if still suspicious'
+                )
+                async with get_session() as session:
+                    device = await session.get(Device, mac)
+                    if device is not None:
+                        device.is_blocked = False
+                        device.blocked_at = None
+                        device.blocked_until = None
+                    alert = Alert(
+                        device_mac=mac, alert_type='AUTO_BLOCK_EXPIRED', severity='INFO',
+                        description=description, raw_data={'expiry_hours': expiry_hours},
+                    )
+                    session.add(alert)
+                emit_alert(alert_to_dict(alert))
+                if self._notifier is not None:
+                    await self._notifier.notify(
+                        title='Auto-block expired', message=description, severity='WARNING',
+                    )
+        except Exception:
+            logger.exception('Block expiry check failed')
+
+    async def _correlation_job(self) -> None:
+        """Scans recent alerts for the curated cross-alert patterns in
+        sentinel/detection/correlation.py (e.g. NEW_DEVICE immediately
+        followed by ARP_SPOOF) and escalates matches to a single
+        COMPROMISE_CHAIN_DETECTED incident, routed through
+        _raise_threat_alert like any other high-confidence finding (so it's
+        eligible for auto-block the same way, and reuses the same
+        alert-persist + websocket-broadcast path)."""
+        try:
+            async with get_session() as session:
+                incidents = await self._correlator.find_new_incidents(session)
+            for incident in incidents:
+                await self._raise_threat_alert(
+                    incident['mac'], 'COMPROMISE_CHAIN_DETECTED', 'CRITICAL',
+                    f"{incident['mac']} {incident['description']}",
+                    raw_data={
+                        'pattern': incident['pattern_name'],
+                        'trigger_alert_id': incident['trigger_alert_id'],
+                        'follow_alert_id': incident['follow_alert_id'],
+                    },
+                )
+        except Exception:
+            logger.exception('Cross-alert correlation scan failed')
+
+    async def _security_digest_job(self) -> None:
+        """Periodic 'here's what happened' summary. Unlike live per-alert
+        notifications (which only fire for alerts matched by an admin-
+        defined NOTIFY rule — see RuleEngine._fire), this is the first
+        mechanism that reports on every alert type uniformly, since it
+        reads the alerts table directly rather than riding along with rule
+        evaluation. Sent unconditionally on every cron fire, including a
+        calmer "all clear" framing when the window is empty — a periodic
+        "still watching, nothing to report" is itself reassurance for a
+        home security tool, not noise.
+        """
+        try:
+            settings_repo = SettingsRepository()
+            last_sent = await settings_repo.get_last_digest_sent_at()
+            now = datetime.now(timezone.utc)
+            cutoff = last_sent or (now - timedelta(days=1))
+
+            async with get_session() as session:
+                rows = (await session.execute(
+                    select(Alert.severity, Alert.alert_type, func.count().label('count'))
+                    .where(Alert.created_at >= cutoff)
+                    .group_by(Alert.severity, Alert.alert_type)
+                    .order_by(func.count().desc())
+                )).all()
+
+            total = sum(r.count for r in rows)
+            if total == 0:
+                message = f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.'
+                severity = 'INFO'
+            else:
+                severity_counts: dict[str, int] = {}
+                for r in rows:
+                    severity_counts[r.severity] = severity_counts.get(r.severity, 0) + r.count
+                severity_line = ', '.join(
+                    f'{count} {sev}' for sev, count in
+                    sorted(severity_counts.items(), key=lambda kv: -kv[1])
+                )
+                top_types = ', '.join(f'{r.alert_type} ({r.count})' for r in rows[:5])
+                message = (
+                    f'{total} alert(s) since {cutoff:%Y-%m-%d %H:%M} UTC — {severity_line}.\n'
+                    f'Top types: {top_types}'
+                )
+                severity = (
+                    'CRITICAL' if severity_counts.get('CRITICAL')
+                    else 'WARNING' if severity_counts.get('WARNING')
+                    else 'INFO'
+                )
+
+            if self._notifier is not None:
+                await self._notifier.notify(title='Heimdall security digest', message=message, severity=severity)
+            await settings_repo.set_last_digest_sent_at(now)
+        except Exception:
+            logger.exception('Security digest job failed')
 
     async def _canary_poll_job(self) -> None:
         """Tail the OpenCanary log and persist any new honeypot-interaction alerts."""
@@ -665,6 +831,14 @@ class SentinelScheduler:
         itself confirmed success — a False return (or a raised exception) is
         surfaced as "AUTO-BLOCK FAILED" instead, never silently swallowed, so
         the alert never lies about a device having been removed from the network.
+
+        Every successful auto-block also (re-)stamps blocked_at/blocked_until,
+        even if the device was already blocked — a fresh threat always resets
+        the expiry clock, so _block_expiry_job can never unblock a device
+        moments after it was legitimately re-blocked for a new reason. See
+        AppSettings.auto_block_expiry_hours (0 = auto-blocks never expire).
+        Manual blocks (POST /devices/<mac>/block) never go through this
+        method, so blocked_until stays NULL for them — indefinite by design.
         """
         blocked_now = False
         block_failed = False
@@ -688,6 +862,10 @@ class SentinelScheduler:
                 device = await session.get(Device, mac)
                 if device is not None:
                     device.is_blocked = True
+                    expiry_hours = await SettingsRepository().get_auto_block_expiry_hours()
+                    now = datetime.now(timezone.utc)
+                    device.blocked_at = now
+                    device.blocked_until = now + timedelta(hours=expiry_hours) if expiry_hours > 0 else None
             alert = Alert(
                 device_mac=mac, alert_type=alert_type, severity=severity,
                 description=description, raw_data=raw_data or {},
@@ -786,6 +964,14 @@ class SentinelScheduler:
         """Thread-safe: unblock a device via the router adapter."""
         return self.call_adapter(self._unblock_device(mac), timeout)
 
+    def quarantine_device(self, mac: str, timeout: float = DEFAULT_ADAPTER_CALL_TIMEOUT_S) -> bool:
+        """Thread-safe: quarantine (WAN-only block) a device via the router adapter."""
+        return self.call_adapter(self._quarantine_device(mac), timeout)
+
+    def unquarantine_device(self, mac: str, timeout: float = DEFAULT_ADAPTER_CALL_TIMEOUT_S) -> bool:
+        """Thread-safe: remove a device's quarantine via the router adapter."""
+        return self.call_adapter(self._unquarantine_device(mac), timeout)
+
     def get_router_info(self, timeout: float = DEFAULT_ADAPTER_CALL_TIMEOUT_S) -> RouterInfo:
         """Thread-safe: fetch live router info via the router adapter."""
         return self.call_adapter(self._get_router_info(), timeout)
@@ -797,6 +983,14 @@ class SentinelScheduler:
     async def _unblock_device(self, mac: str) -> bool:
         adapter = await self._ensure_adapter()
         return await adapter.unblock_device(mac)
+
+    async def _quarantine_device(self, mac: str) -> bool:
+        adapter = await self._ensure_adapter()
+        return await adapter.quarantine_device(mac)
+
+    async def _unquarantine_device(self, mac: str) -> bool:
+        adapter = await self._ensure_adapter()
+        return await adapter.unquarantine_device(mac)
 
     async def _get_router_info(self) -> RouterInfo:
         adapter = await self._ensure_adapter()
@@ -996,6 +1190,9 @@ def init_scheduler(app: Flask) -> None:
         zeek_beacon_scan_interval_s=app.config['ZEEK_BEACON_SCAN_INTERVAL_SECONDS'],
         clamav_host=app.config['CLAMAV_HOST'],
         clamav_port=app.config['CLAMAV_PORT'],
+        block_expiry_check_interval_s=app.config['BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS'],
+        correlation_scan_interval_s=app.config['CORRELATION_SCAN_INTERVAL_SECONDS'],
+        security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
     )
     _scheduler.start()
 

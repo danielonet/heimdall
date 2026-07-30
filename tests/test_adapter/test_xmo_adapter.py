@@ -776,3 +776,207 @@ class TestGetWanStats:
         stats = await adapter.get_wan_stats()
         assert stats.bytes_sent_delta == 500
         assert stats.bytes_recv_delta == 300
+
+
+def _hosts_response(hosts: list) -> dict:
+    """Matches _get_hosts()'s expected double-nesting under the 'Hosts' key."""
+    return {
+        'reply': {'actions': [{
+            'id': 0,
+            'callbacks': [{
+                'xpath': 'Device/Hosts',
+                'parameters': {'value': {'Hosts': {'Hosts': hosts}}},
+            }],
+        }]},
+    }
+
+
+def _no_err_reply() -> dict:
+    return {'reply': {'actions': [{'id': 0, 'error': {'code': 16777239}}]}}
+
+
+def _err_reply() -> dict:
+    return {'reply': {'actions': [{'id': 0, 'error': {'code': 1}}]}}
+
+
+@pytest.mark.asyncio
+class TestBlockUnblockDevice:
+    async def test_block_device_no_matching_host_returns_false(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value=_hosts_response([]))
+        assert await adapter.block_device('aa:bb:cc:dd:ee:ff') is False
+
+    async def test_block_device_sets_every_hour_of_every_day(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        adapter._client.get_value = AsyncMock(
+            return_value=_hosts_response([_wifi_host(PhysAddress=mac.upper(), **{'uid': 93})])
+        )
+        posted_batches = []
+
+        async def fake_post(actions):
+            posted_batches.extend(actions)
+            return {'reply': {'actions': [{'id': a['id'], 'error': {'code': 16777239}} for a in actions]}}
+
+        adapter._client.post = fake_post
+        assert await adapter.block_device(mac) is True
+        assert len(posted_batches) == 168  # 7 days x 24 hours
+        assert all(a['parameters']['value'] is True for a in posted_batches)
+        assert all('Host[@uid="93"]' in a['xpath'] for a in posted_batches)
+
+    async def test_unblock_device_sets_value_false(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        adapter._client.get_value = AsyncMock(
+            return_value=_hosts_response([_wifi_host(PhysAddress=mac.upper(), **{'uid': 93})])
+        )
+        posted_batches = []
+
+        async def fake_post(actions):
+            posted_batches.extend(actions)
+            return {'reply': {'actions': [{'id': a['id'], 'error': {'code': 16777239}} for a in actions]}}
+
+        adapter._client.post = fake_post
+        assert await adapter.unblock_device(mac) is True
+        assert all(a['parameters']['value'] is False for a in posted_batches)
+
+    async def test_block_device_batch_failure_returns_false(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        adapter._client.get_value = AsyncMock(
+            return_value=_hosts_response([_wifi_host(PhysAddress=mac.upper(), **{'uid': 93})])
+        )
+        adapter._client.post = AsyncMock(return_value=_err_reply())
+        assert await adapter.block_device(mac) is False
+
+
+@pytest.mark.asyncio
+class TestQuarantineDevice:
+    """Covers the WAN-only Firewall Custom-chain rule mechanism — see the
+    module-level comment above _QUARANTINE_CHAIN_XPATH in xmo_adapter.py for
+    why this is the right chain to use here (opposite of block_device)."""
+
+    async def test_no_matching_host_returns_false(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value=_hosts_response([]))
+        assert await adapter.quarantine_device('aa:bb:cc:dd:ee:ff') is False
+
+    async def test_creates_rule_scoped_to_device_ip(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _hosts_response([host]),
+            {'reply': {'actions': [{'id': 0, 'callbacks': [{
+                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
+                'parameters': {'value': 'DROP'},
+            }]}]}},
+        ])
+        adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
+
+        assert await adapter.quarantine_device(mac) is True
+        adapter._client.add_child.assert_awaited_once()
+        called_xpath, called_params = adapter._client.add_child.call_args[0]
+        assert called_xpath == 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules'
+        assert called_params['Rule']['SourceIP'] == '10.100.102.10'
+        assert called_params['Rule']['Description'] == f'heimdall-quarantine-{mac}'
+
+    async def test_add_child_failure_returns_false(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
+        adapter._client.get_value = AsyncMock(return_value=_hosts_response([host]))
+        adapter._client.add_child = AsyncMock(return_value=_err_reply())
+        assert await adapter.quarantine_device(mac) is False
+
+    async def test_warns_when_custom_chain_not_active(self, adapter, caplog):
+        mac = 'da:d4:19:31:c0:e9'
+        host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _hosts_response([host]),
+            {'reply': {'actions': [{'id': 0, 'callbacks': [{
+                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
+                'parameters': {'value': 'DROP'},
+            }]}]}},
+        ])
+        adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
+        with caplog.at_level('WARNING'):
+            result = await adapter.quarantine_device(mac)
+        assert result is True  # rule was still created — this is a warning, not a failure
+        assert any('not "Custom"' in r.message for r in caplog.records)
+
+    async def test_does_not_warn_when_custom_chain_active(self, adapter, caplog):
+        mac = 'da:d4:19:31:c0:e9'
+        host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _hosts_response([host]),
+            {'reply': {'actions': [{'id': 0, 'callbacks': [{
+                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
+                'parameters': {'value': 'Custom'},
+            }]}]}},
+        ])
+        adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
+        with caplog.at_level('WARNING'):
+            await adapter.quarantine_device(mac)
+        assert not any('not "Custom"' in r.message for r in caplog.records)
+
+    async def test_never_writes_default_policy(self, adapter):
+        """Safety invariant: quarantine_device must only ever read
+        DefaultPolicy, never call setValue/addChild/addObject on it."""
+        mac = 'da:d4:19:31:c0:e9'
+        host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _hosts_response([host]),
+            {'reply': {'actions': [{'id': 0, 'callbacks': [{
+                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
+                'parameters': {'value': 'DROP'},
+            }]}]}},
+        ])
+        adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
+        adapter._client.post = AsyncMock(side_effect=AssertionError('must not call post() directly'))
+        await adapter.quarantine_device(mac)  # would raise if DefaultPolicy were ever written via post()
+
+
+@pytest.mark.asyncio
+class TestUnquarantineDevice:
+    async def test_removes_matching_rule_by_description(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        adapter._client.get_value = AsyncMock(return_value={
+            'reply': {'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules',
+                    'parameters': {'value': [
+                        {'uid': 7, 'Description': f'heimdall-quarantine-{mac}', 'SourceIP': '10.100.102.10'},
+                        {'uid': 8, 'Description': 'heimdall-quarantine-11:22:33:44:55:66', 'SourceIP': '10.0.0.5'},
+                    ]},
+                }],
+            }]},
+        })
+        adapter._client.delete_object = AsyncMock(return_value=_no_err_reply())
+
+        assert await adapter.unquarantine_device(mac) is True
+        adapter._client.delete_object.assert_awaited_once_with(
+            'Device/Firewall/Chains/Chain[Name="Custom"]/Rules/Rule[@uid="7"]'
+        )
+
+    async def test_no_matching_rule_returns_false(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value={
+            'reply': {'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules',
+                    'parameters': {'value': []},
+                }],
+            }]},
+        })
+        assert await adapter.unquarantine_device('aa:bb:cc:dd:ee:ff') is False
+
+    async def test_delete_failure_returns_false(self, adapter):
+        mac = 'da:d4:19:31:c0:e9'
+        adapter._client.get_value = AsyncMock(return_value={
+            'reply': {'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules',
+                    'parameters': {'value': [
+                        {'uid': 7, 'Description': f'heimdall-quarantine-{mac}', 'SourceIP': '10.100.102.10'},
+                    ]},
+                }],
+            }]},
+        })
+        adapter._client.delete_object = AsyncMock(return_value=_err_reply())
+        assert await adapter.unquarantine_device(mac) is False

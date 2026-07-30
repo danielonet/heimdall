@@ -5,6 +5,19 @@ import { MacAddress } from '../MacAddress'
 import { Badge } from '../Badge'
 import { BlockButton } from '../BlockButton'
 import { UnblockButton } from '../UnblockButton'
+import { QuarantineButton } from '../QuarantineButton'
+import { UnquarantineButton } from '../UnquarantineButton'
+
+// device.blocked_until is only set for auto-blocks (see
+// SentinelScheduler._raise_threat_alert/_block_expiry_job) — manual blocks
+// stay indefinite (NULL) and render nothing extra here.
+function autoUnblockLabel(blockedUntil) {
+  const ms = new Date(blockedUntil).getTime() - Date.now()
+  if (ms <= 0) return 'auto-unblocking shortly'
+  const hours = Math.floor(ms / 3_600_000)
+  const minutes = Math.floor((ms % 3_600_000) / 60_000)
+  return `auto-unblocks in ${hours}h ${minutes}m`
+}
 
 export function DeviceHeader({ device }) {
   const qc = useQueryClient()
@@ -39,6 +52,9 @@ export function DeviceHeader({ device }) {
             {device.vendor_name && <span>{device.vendor_name}</span>}
             {device.device_type && device.device_type !== 'MISCELLANEOUS' && <span>{device.device_type}</span>}
             {device.os_fingerprint && <span>{device.os_fingerprint}</span>}
+            {device.is_blocked && device.blocked_until && (
+              <span className="text-accent-amber">{autoUnblockLabel(device.blocked_until)}</span>
+            )}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Badge variant="info">
@@ -50,6 +66,11 @@ export function DeviceHeader({ device }) {
                 title="Which access point this device is associated with"
               >
                 {device.ap_alias}
+              </Badge>
+            )}
+            {device.is_quarantined && (
+              <Badge variant="warning" title="Internet access cut, still reachable on the LAN">
+                QUARANTINED
               </Badge>
             )}
             <button
@@ -73,11 +94,18 @@ export function DeviceHeader({ device }) {
           </div>
         </div>
 
-        {device.is_blocked ? (
-          <UnblockButton mac={device.mac_address} />
-        ) : (
-          <BlockButton mac={device.mac_address} />
-        )}
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          {device.is_quarantined ? (
+            <UnquarantineButton mac={device.mac_address} />
+          ) : (
+            <QuarantineButton mac={device.mac_address} disabled={device.is_blocked} />
+          )}
+          {device.is_blocked ? (
+            <UnblockButton mac={device.mac_address} />
+          ) : (
+            <BlockButton mac={device.mac_address} />
+          )}
+        </div>
       </div>
     </div>
   )

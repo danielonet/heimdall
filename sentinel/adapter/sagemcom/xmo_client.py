@@ -113,6 +113,20 @@ class XmoClient:
         """Remove a list entry (e.g. remove a block rule)."""
         return await self.post([{'id': 0, 'method': 'deleteObject', 'xpath': xpath}])
 
+    async def add_child(self, xpath: str, params: dict) -> dict:
+        """Create a new child list entry via addChild.
+
+        Some list-type objects (e.g. the Firewall Custom chain's Rules)
+        require this method instead of addObject — addObject is rejected
+        for them, confirmed live (docs/router/sagemcom-xmo-api.md:207).
+        """
+        return await self.post([{
+            'id': 0,
+            'method': 'addChild',
+            'xpath': xpath,
+            'parameters': params,
+        }])
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()

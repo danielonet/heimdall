@@ -29,8 +29,8 @@ reflected in each item below.
 - A `suricata` service now exists in `docker-compose.yml` (with a `suricata-logs` volume) but has **no Python integration** yet — the only reference in code is a comment in `scheduler.py` listing it among services that get a fabricated health-status row. Wiring a Suricata EVE-JSON log parser (same pattern as the Zeek and OpenCanary ingestion) is an unlisted follow-up.
 
 **Implementation status of the items below** (updated after re-surveying the code):
-- ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE).
-- ⬜ Not yet built: #4, #5, #6, #7, #8, #9, #13, #14, #15, #16, #17, #18, #19.
+- ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #5 (rogue DHCP), #6 (WAN bandwidth), #7 (AP-alias visibility, descoped), #8 (WiFi channel visibility), #9 (wired-PHY direction fix), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE), #13 (time-limited auto-block), #14 (quarantine tier), #15 (cross-alert correlation), #16 (security digest).
+- ⬜ Not yet built: #4, #17, #18, #19.
 - ◐ Partial: #20 (dependency cleanup — `pyclamd`/`pandas` now in use; `pyshark`/`dpkt` still have no callers).
 
 ---
@@ -77,13 +77,13 @@ reflected in each item below.
 
 ## D. Extra defenses / response tooling
 
-13. **Time-limited auto-block with review.** Blocks are currently indefinite. A block that auto-expires (e.g. 24h) with a review notification would reduce the blast radius of a false positive while still giving the same immediate response.
+13. **Time-limited auto-block with review.** ✅ *Done — `Device.blocked_at`/`blocked_until` + `AppSettings.auto_block_expiry_hours` (default 24h, `0` = never expires).* `_raise_threat_alert` (re-)stamps the expiry timer on every successful auto-block, including a re-block of an already-blocked device (the fix for a real race: a fresh threat must always reset the clock). A new interval job, `_block_expiry_job`, sweeps overdue auto-blocks, unblocks them via the adapter, raises a low-severity `AUTO_BLOCK_EXPIRED` alert, and sends a review notification. Manual blocks (`POST /devices/<mac>/block`) never set `blocked_until`, so they stay indefinite by design.
 
-14. **Repurpose the original (wrong-for-blocking) firewall-rule mechanism as a "quarantine" tier.** The `Device/Firewall/Chains/Chain[Name="Custom"]` rule mechanism discovered earlier doesn't stop LAN-local traffic — which made it *wrong* for the full-block use case, but makes it *exactly right* for a softer "cut internet, allow LAN" quarantine response for suspect-but-unconfirmed devices, as a middle ground below full `BlacklistedSchedule` block.
+14. **Repurpose the original (wrong-for-blocking) firewall-rule mechanism as a "quarantine" tier.** ✅ *Done — `SagemcomXmoAdapter.quarantine_device`/`unquarantine_device`.* Confirmed there was no dead code to resurrect (the mechanism was previously rejected and removed, only the xpath/payload shape survived in the docs) — this is new adapter code using `addChild` on `Device/Firewall/Chains/Chain[Name="Custom"]/Rules`, scoped to the device's IP. Read-only safety check on `Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy` warns (never writes) if the rule won't actually enforce yet — flipping the router's whole active firewall posture is deliberately out of scope for a per-device action. New `Device.is_quarantined` column, `POST /devices/<mac>/quarantine`/`/unquarantine` routes (manual-only — no detector auto-triggers it), and a QUARANTINE/UNQUARANTINE button + badge on the device header, distinct from BLOCKED.
 
-15. **Cross-alert correlation.** `RuleEngine` already has a condition/action framework; extending it (or adding a small correlation layer) to recognize patterns like "NEW_DEVICE immediately followed by ARP_SPOOF from the same MAC" and escalate to a single higher-severity incident would cut noise and surface real compromise chains instead of isolated alerts.
+15. **Cross-alert correlation.** ✅ *Done — new standalone `sentinel/detection/correlation.py`, not a `RuleEngine` extension.* Confirmed `RuleEngine`'s condition model has no concept of the `alerts` table at all (it evaluates one live poll snapshot at a time) and that `_raise_threat_alert` is only one of four alert-creation paths — a correlator hooked only into `_raise_threat_alert` would miss `NEW_DEVICE` entirely, the exact pattern named in this item. `CrossAlertCorrelator` instead queries the persisted `alerts` table directly on its own interval job (`_correlation_job`), against a small curated pattern list (`NEW_DEVICE` → spoofing/mismatch within 60min; known exposure → compromise signs within 24h). Matches escalate to a single `COMPROMISE_CHAIN_DETECTED` incident routed through the normal `_raise_threat_alert` path (so it's auto-blockable like any other high-confidence finding), with per-follow-alert dedup so the same pair never re-fires.
 
-16. **Daily/weekly security digest notification.** `NotificationService` (ntfy + SMTP) already exists for live alerts; a scheduled summary job (reuses existing scheduler + notification infra, zero new dependencies) would give a periodic "here's what happened" digest distinct from real-time pings.
+16. **Daily/weekly security digest notification.** ✅ *Done — new cron job `_security_digest_job` (`SECURITY_DIGEST_CRON`, default daily 07:00).* Confirmed `NotificationService.notify()` wasn't wired to fire for every alert today — only for alerts matched by an admin-defined `NOTIFY` rule — so this is the first mechanism that reports on every alert type uniformly, reading the `alerts` table directly. Sent unconditionally on every cron fire, with a calmer "all clear" framing when nothing happened since the last digest (tracked via `AppSettings.last_digest_sent_at`).
 
 ---
 
@@ -107,15 +107,17 @@ reflected in each item below.
 
 This is a menu, not a queue — recommend picking a small number of items (2-4)
 to scope as actual implementation plans, rather than attempting all of this
-at once. Both "quick win" clusters have now shipped: **#10/#11/#12** (device-
-type thresholds, active/passive OS cross-check, default-accounts NSE) and
+at once. Every "quick win" cluster has now shipped: **#10/#11/#12** (device-
+type thresholds, active/passive OS cross-check, default-accounts NSE),
 **#5/#6/#7/#8/#9** (rogue DHCP, WAN bandwidth, AP-alias visibility, WiFi
-channel visibility, wired-PHY direction fix) — see each item's status note
-above. **#4 (rogue AP)** was evaluated and skipped: it needs a monitor-mode-
-capable WiFi radio this deployment doesn't have. With all of Section B/C
-done, the strongest remaining candidates are: **#15 (cross-alert
-correlation)** — turns the isolated alerts these new detectors produce into
-correlated incidents; wiring the **Suricata** service that's already in the
-Compose file but has no parser yet; and live-verifying the two best-guess
-integrations from this round (**#6** WAN stats' `IP_DATA/Stats` xpath and
-**#8** WiFi radios' TR-181 field names) against the real router.
+channel visibility, wired-PHY direction fix), and **#13/#14/#15/#16**
+(time-limited auto-block, quarantine tier, cross-alert correlation, security
+digest) — see each item's status note above. **#4 (rogue AP)** was evaluated
+and skipped: it needs a monitor-mode-capable WiFi radio this deployment
+doesn't have. With Sections B/C/D all done, the strongest remaining
+candidates are: wiring the **Suricata** service that's already in the
+Compose file but has no parser yet; live-verifying the best-guess
+integrations from earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath,
+**#8** WiFi radios' TR-181 field names, and now **#14**'s quarantine `Rule`
+object field names) against the real router; and **#17-19** (metrics
+endpoint, alert export, AP/band visualization) for observability polish.

@@ -138,6 +138,8 @@ class SettingsRepository:
                     row.smtp_use_tls if row and row.smtp_use_tls is not None else settings.SMTP_USE_TLS
                 ),
                 'auto_block_on_threat': row.auto_block_on_threat if row else True,
+                'auto_block_expiry_hours': row.auto_block_expiry_hours if row else 24,
+                'last_digest_sent_at': row.last_digest_sent_at if row else None,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -214,6 +216,22 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.auto_block_on_threat = enabled
+
+    async def get_auto_block_expiry_hours(self) -> int:
+        return (await self.get_all())['auto_block_expiry_hours']
+
+    async def set_auto_block_expiry_hours(self, hours: int) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.auto_block_expiry_hours = hours
+
+    async def get_last_digest_sent_at(self) -> datetime | None:
+        return (await self.get_all())['last_digest_sent_at']
+
+    async def set_last_digest_sent_at(self, ts: datetime | None) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.last_digest_sent_at = ts
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

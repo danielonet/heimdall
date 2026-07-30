@@ -43,6 +43,17 @@ class Device(Base):
     nmap_profile: Mapped[dict | None] = mapped_column(JSONB)
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     is_blocked: Mapped[bool] = mapped_column(Boolean, server_default='false')
+    # Set/refreshed by _raise_threat_alert on every successful auto-block —
+    # NULL for a manual admin block (via POST /devices/<mac>/block), which
+    # stays indefinite by design. blocked_until NULL also means "no expiry"
+    # (either never blocked, or AppSettings.auto_block_expiry_hours was 0
+    # when this block was applied). See SentinelScheduler._block_expiry_job.
+    blocked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    blocked_until: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # WAN-only "cut internet, allow LAN" tier — a softer response than
+    # is_blocked's full BlacklistedSchedule removal. See
+    # SagemcomXmoAdapter.quarantine_device.
+    is_quarantined: Mapped[bool] = mapped_column(Boolean, server_default='false')
     is_trusted: Mapped[bool] = mapped_column(Boolean, server_default='false')
     is_online: Mapped[bool] = mapped_column(Boolean, server_default='false')
     # True once this MAC has ever been seen with is_online=True — distinct
@@ -112,6 +123,14 @@ class AppSettings(Base):
     # newly-opened high-risk port, nmap vuln finding), instead of only
     # raising an alert. See docs/architecture/06-security-services.md.
     auto_block_on_threat: Mapped[bool] = mapped_column(Boolean, server_default='true')
+    # Hours an auto-block (not a manual one) stays in effect before
+    # SentinelScheduler._block_expiry_job auto-unblocks and notifies for
+    # review — 0 means auto-blocks never expire. See Device.blocked_until.
+    auto_block_expiry_hours: Mapped[int] = mapped_column(Integer, server_default='24')
+
+    # When the last security digest notification was sent — NULL means
+    # never sent yet. See SentinelScheduler._security_digest_job.
+    last_digest_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
 class TrustedMac(Base):

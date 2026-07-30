@@ -162,3 +162,21 @@ class TestBlockUnblockWithScheduler:
         unblock_status, unblock_body = _request('POST', f'/api/devices/{MOCK_MAC}/unblock', token=access_token)
         assert unblock_status == 200
         assert unblock_body['is_blocked'] is False
+
+
+class TestQuarantineUnquarantineWithScheduler:
+    def test_quarantine_then_unquarantine_a_mock_device(self, live_server, access_token):
+        quarantine_status, quarantine_body = _request(
+            'POST', f'/api/devices/{MOCK_MAC}/quarantine', token=access_token
+        )
+        assert quarantine_status == 200
+        assert quarantine_body['is_quarantined'] is True
+
+        _, device_body = _request('GET', f'/api/devices/{MOCK_MAC}')
+        assert device_body['is_quarantined'] is True
+
+        unquarantine_status, unquarantine_body = _request(
+            'POST', f'/api/devices/{MOCK_MAC}/unquarantine', token=access_token
+        )
+        assert unquarantine_status == 200
+        assert unquarantine_body['is_quarantined'] is False

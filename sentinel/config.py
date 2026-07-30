@@ -108,6 +108,17 @@ class Settings(BaseSettings):
     ZEEK_BEACON_SCAN_INTERVAL_SECONDS: int = 300
     CLAMAV_HOST: str = 'localhost'
     CLAMAV_PORT: int = 3310
+    # How often to check for auto-blocks past their AppSettings.
+    # auto_block_expiry_hours — an interval, not a nightly cron, so a 24h
+    # SLA doesn't slip by up to a full day. See SentinelScheduler._block_expiry_job.
+    BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS: int = 900
+    # How often to scan recent alerts for cross-alert correlation patterns
+    # (e.g. NEW_DEVICE immediately followed by ARP_SPOOF). See
+    # sentinel/detection/correlation.py.
+    CORRELATION_SCAN_INTERVAL_SECONDS: int = 300
+    # Daily by default — edit for weekly (e.g. '0 7 * * 1' for Monday).
+    # Env-only, like every other *_CRON setting (not SettingsRepository-backed).
+    SECURITY_DIGEST_CRON: str = '0 7 * * *'
 
     # ── Diagnostics ───────────────────────────────────────────────────────────
     # Starts tracemalloc at process boot and enables GET /api/debug/memory.

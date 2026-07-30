@@ -8,6 +8,7 @@ any of the other constructor-wired state), so __init__'s many unrelated
 kwargs (poll interval, ML config, cron strings, ...) would just be noise here.
 """
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -150,6 +151,70 @@ class TestRaiseThreatAlert:
         await SettingsRepository().set_auto_block_on_threat(True)
         await scheduler._raise_threat_alert(None, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected, no known MAC')
         # Must not raise — the assertion here is simply that this completes.
+
+
+class TestRaiseThreatAlertBlockExpiry:
+    """blocked_at/blocked_until — see _raise_threat_alert's docstring for
+    why these must be (re-)stamped on every successful auto-block, not just
+    the first one."""
+
+    async def test_sets_blocked_at_and_blocked_until_on_auto_block(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        await SettingsRepository().set_auto_block_expiry_hours(24)
+
+        before = datetime.now(timezone.utc)
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+        after = datetime.now(timezone.utc)
+
+        device = await _get_device()
+        assert before <= device.blocked_at <= after
+        assert abs((device.blocked_until - device.blocked_at) - timedelta(hours=24)) < timedelta(seconds=5)
+
+    async def test_expiry_hours_zero_means_no_expiry(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        await SettingsRepository().set_auto_block_expiry_hours(0)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+
+        device = await _get_device()
+        assert device.blocked_at is not None
+        assert device.blocked_until is None
+
+    async def test_reblock_refreshes_the_expiry_timer(self, scheduler):
+        """The race flagged in docs/section-b.../section-d plan: a fresh
+        threat must always reset the clock, or the expiry job could unblock
+        a device moments after a legitimate re-block for a NEW reason."""
+        await _seed_device(is_blocked=True)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        await SettingsRepository().set_auto_block_expiry_hours(24)
+
+        stale_time = datetime.now(timezone.utc) - timedelta(hours=23)
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+            device.blocked_at = stale_time
+            device.blocked_until = stale_time + timedelta(hours=1)  # due in ~1h
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected again')
+
+        device = await _get_device()
+        assert device.blocked_at > stale_time
+        assert device.blocked_until > stale_time + timedelta(hours=1)
+
+    async def test_failed_block_does_not_set_expiry_fields(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        async def _fake_block_device(mac):
+            return False
+
+        monkeypatch.setattr(scheduler._adapter, 'block_device', _fake_block_device)
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+
+        device = await _get_device()
+        assert device.blocked_at is None
+        assert device.blocked_until is None
 
 
 class TestPersistArpAlert:

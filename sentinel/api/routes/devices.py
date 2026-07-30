@@ -148,3 +148,44 @@ async def _set_blocked(mac: str, blocked: bool):
             device.is_blocked = blocked
 
     return jsonify(mac_address=mac, is_blocked=blocked)
+
+
+@bp.route('/<mac>/quarantine', methods=['POST'])
+@jwt_required()
+async def quarantine_device(mac: str):
+    """Cut this MAC's WAN/internet access while leaving it reachable on the
+    LAN — a softer response tier than /block. Manual-only: no detector
+    triggers this automatically."""
+    return await _set_quarantined(mac, quarantined=True)
+
+
+@bp.route('/<mac>/unquarantine', methods=['POST'])
+@jwt_required()
+async def unquarantine_device(mac: str):
+    """Remove a quarantine previously set via /quarantine."""
+    return await _set_quarantined(mac, quarantined=False)
+
+
+async def _set_quarantined(mac: str, quarantined: bool):
+    try:
+        scheduler = get_scheduler()
+    except RuntimeError:
+        return jsonify(error='Scheduler is not running'), 503
+
+    try:
+        adapter_method = scheduler.quarantine_device if quarantined else scheduler.unquarantine_device
+        success = await asyncio.to_thread(adapter_method, mac)
+    except TimeoutError:
+        return jsonify(error='Router did not respond in time'), 504
+    except Exception as exc:
+        return jsonify(error=f'Router call failed: {exc}'), 502
+
+    if not success:
+        return jsonify(error='Router rejected the request'), 502
+
+    async with get_session() as session:
+        device = await session.get(Device, mac)
+        if device is not None:
+            device.is_quarantined = quarantined
+
+    return jsonify(mac_address=mac, is_quarantined=quarantined)

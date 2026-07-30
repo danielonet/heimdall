@@ -69,6 +69,9 @@ def _scheduler() -> SentinelScheduler:
         zeek_beacon_scan_interval_s=300,
         clamav_host='localhost',
         clamav_port=3310,
+        block_expiry_check_interval_s=900,
+        correlation_scan_interval_s=300,
+        security_digest_cron='0 7 * * *',
     )
 
 

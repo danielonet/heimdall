@@ -216,7 +216,7 @@ class TestSettingsRepository:
             'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at',
             'armed_retrain_done', 'sniff_iface', 'router_username', 'ntfy_url', 'smtp_host',
             'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
-            'auto_block_on_threat',
+            'auto_block_on_threat', 'auto_block_expiry_hours', 'last_digest_sent_at',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):

@@ -35,6 +35,7 @@ class MockSagemcomAdapter(RouterAdapter):
         self._port_stats = self._generate_mock_port_stats()
         self._call_count = 0
         self._blocked_macs: set[str] = set()
+        self._quarantined_macs: set[str] = set()
 
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
         """Return a static list of mock devices with simulated signal variations."""
@@ -158,6 +159,18 @@ class MockSagemcomAdapter(RouterAdapter):
         """Simulate unblocking a device."""
         self._blocked_macs.discard(mac.lower())
         logger.info('Mock: unblocked device %s', mac)
+        return True
+
+    async def quarantine_device(self, mac: str) -> bool:
+        """Simulate WAN-only quarantine of a device."""
+        self._quarantined_macs.add(mac.lower())
+        logger.info('Mock: quarantined device %s', mac)
+        return True
+
+    async def unquarantine_device(self, mac: str) -> bool:
+        """Simulate removing a device's quarantine."""
+        self._quarantined_macs.discard(mac.lower())
+        logger.info('Mock: unquarantined device %s', mac)
         return True
 
     async def get_router_info(self) -> RouterInfo:

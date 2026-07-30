@@ -41,6 +41,19 @@ _MANAGEMENT_DAY_UIDS = list(range(1, 8))  # 1=SUNDAY .. 7=SATURDAY, confirmed li
 _SCHEDULE_SETVALUE_BATCH_SIZE = 100  # the router's own UI batches ~90 setValue actions per request
 _XMO_NO_ERR = 16777239
 
+# Quarantine tier: unlike block_device, this deliberately DOES use the
+# Firewall Custom chain — confirmed live (docs/router/sagemcom-xmo-api.md:206)
+# that a Custom-chain rule only affects routed/WAN-bound traffic and has no
+# effect on purely-local LAN traffic, which is exactly the "cut internet,
+# keep LAN reachable" distinction a quarantine tier needs (the opposite of
+# why that chain was rejected for block_device). The xpath and addChild
+# method are confirmed live; the Rule object's own field names below
+# (Enable/SourceIP/SourcePrefixLength/TargetAction) are a best-effort
+# TR-181-style guess, NOT a confirmed live capture — no admin UI form exists
+# for the Custom chain to click through and observe, unlike BlacklistedSchedule.
+_QUARANTINE_CHAIN_XPATH = 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules'
+_QUARANTINE_RULE_DESCRIPTION_PREFIX = 'heimdall-quarantine-'
+
 
 class SagemcomXmoAdapter(RouterAdapter):
     """RouterAdapter implementation for the Sagemcom F@st 5670 via its XMO JSON API.
@@ -263,13 +276,107 @@ class SagemcomXmoAdapter(RouterAdapter):
             return False
         return await self._set_blacklist_schedule(mac, host_uid, blacklisted=False)
 
-    async def _find_host_uid(self, mac: str) -> Optional[int]:
-        """Resolve a MAC to its Device/Hosts/Hosts/Host[@uid=...] uid."""
+    async def quarantine_device(self, mac: str) -> bool:
+        """Add a WAN-only DROP rule to the Firewall Custom chain, scoped to
+        this device's current IP — see the module-level comment above
+        _QUARANTINE_CHAIN_XPATH for why this chain (rejected for
+        block_device) is the right mechanism here. Returns False if the MAC
+        has no matching Host entry with a known IP, or if the router
+        rejects the addChild call.
+        """
+        mac = _norm_mac(mac)
+        host = await self._find_host(mac)
+        ip = host.get('IPAddress') if host else ''
+        if not ip:
+            logger.error('quarantine_device(%s): no matching Host entry with an IP — cannot quarantine', mac)
+            return False
+
+        resp = await self._client.add_child(_QUARANTINE_CHAIN_XPATH, {
+            'Rule': {
+                'Enable': True,
+                'Description': f'{_QUARANTINE_RULE_DESCRIPTION_PREFIX}{mac}',
+                'SourceIP': ip,
+                'SourcePrefixLength': 32,
+                'TargetAction': 'Drop',
+            },
+        })
+        action = (resp.get('reply', {}).get('actions') or [{}])[0]
+        if action.get('error', {}).get('code') != _XMO_NO_ERR:
+            logger.error('quarantine_device(%s): addChild failed: %s', mac, resp)
+            return False
+
+        await self._warn_if_custom_chain_inactive(mac)
+        logger.info('Quarantined device %s (ip=%s) via Firewall Custom chain', mac, ip)
+        return True
+
+    async def unquarantine_device(self, mac: str) -> bool:
+        """Remove the Firewall Custom-chain rule created by quarantine_device.
+
+        The rule's own uid isn't persisted anywhere outside the router
+        (Device.is_quarantined is just a boolean), so it's resolved the same
+        way block_device resolves a host uid: looked up fresh by matching
+        the Description this adapter stamped on it at creation time.
+        """
+        mac = _norm_mac(mac)
+        resp = await self._client.get_value(_QUARANTINE_CHAIN_XPATH)
+        rules = self._client._extract_result(resp, 0) or []
+        if isinstance(rules, dict):
+            rules = [rules]
+
+        target_uid = next(
+            (
+                r.get('uid') for r in rules
+                if isinstance(r, dict) and r.get('Description') == f'{_QUARANTINE_RULE_DESCRIPTION_PREFIX}{mac}'
+            ),
+            None,
+        )
+        if target_uid is None:
+            logger.warning('unquarantine_device(%s): no matching Custom-chain rule found', mac)
+            return False
+
+        resp = await self._client.delete_object(f'{_QUARANTINE_CHAIN_XPATH}/Rule[@uid="{target_uid}"]')
+        action = (resp.get('reply', {}).get('actions') or [{}])[0]
+        if action.get('error', {}).get('code') != _XMO_NO_ERR:
+            logger.error('unquarantine_device(%s): deleteObject failed: %s', mac, resp)
+            return False
+
+        logger.info('Unquarantined device %s', mac)
+        return True
+
+    async def _warn_if_custom_chain_inactive(self, mac: str) -> None:
+        """Read-only check: a Custom-chain rule reports Status: DISABLED
+        unless the router's active firewall security level is itself set to
+        "Custom" (docs/router/sagemcom-xmo-api.md:207) — confirmed DROP, never
+        Custom, on this unit, and the exact live semantics of this field
+        (level-selector vs. the Custom level's own default policy) were not
+        fully disambiguated during research. This never writes DefaultPolicy —
+        flipping the router's whole active firewall posture is out of scope
+        for a per-device action — it only reads it, to warn the admin that
+        the rule that was just created may not actually enforce yet.
+        """
+        resp = await self._client.get_value('Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy')
+        policy = self._client._extract_result(resp, 0)
+        if policy != 'Custom':
+            logger.warning(
+                'quarantine_device(%s): Custom-chain rule created, but the router\'s active '
+                'firewall security level (DefaultPolicy=%r) is not "Custom" — the rule may report '
+                'Status: DISABLED and not actually enforce until the router\'s own Security Level '
+                'setting is changed manually in its admin UI',
+                mac, policy,
+            )
+
+    async def _find_host(self, mac: str) -> Optional[dict]:
+        """Resolve a MAC to its full Device/Hosts/Hosts/Host[@uid=...] entry."""
         hosts = await self._get_hosts()
         for h in hosts:
             if isinstance(h, dict) and _norm_mac(h.get('PhysAddress', '')) == mac:
-                return h.get('uid')
+                return h
         return None
+
+    async def _find_host_uid(self, mac: str) -> Optional[int]:
+        """Resolve a MAC to its Device/Hosts/Hosts/Host[@uid=...] uid."""
+        host = await self._find_host(mac)
+        return host.get('uid') if host else None
 
     async def _set_blacklist_schedule(self, mac: str, host_uid: int, *, blacklisted: bool) -> bool:
         """setValue every BlacklistedSchedule/ManagementDay/HoursN leaf (7

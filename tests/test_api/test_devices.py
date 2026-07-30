@@ -210,3 +210,24 @@ class TestBlockUnblock:
         _seed_device()
         resp = client.post(f'/api/devices/{_MAC}/block', headers=auth_headers)
         assert resp.status_code == 503
+
+
+class TestQuarantineUnquarantine:
+    """Success-path coverage (router call actually succeeding) lives in
+    test_scheduler_integration.py, same as TestBlockUnblock — the in-process
+    test_client() deadlocks against the scheduler's own event loop thread."""
+
+    def test_quarantine_without_auth_rejected(self, client):
+        _seed_device()
+        resp = client.post(f'/api/devices/{_MAC}/quarantine')
+        assert resp.status_code == 401
+
+    def test_unquarantine_without_auth_rejected(self, client):
+        _seed_device()
+        resp = client.post(f'/api/devices/{_MAC}/unquarantine')
+        assert resp.status_code == 401
+
+    def test_quarantine_without_running_scheduler_returns_503(self, client, auth_headers):
+        _seed_device()
+        resp = client.post(f'/api/devices/{_MAC}/quarantine', headers=auth_headers)
+        assert resp.status_code == 503

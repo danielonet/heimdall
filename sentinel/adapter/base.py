@@ -40,6 +40,22 @@ class RouterAdapter(ABC):
         """Restore this MAC's network access. Returns True on success."""
 
     @abstractmethod
+    async def quarantine_device(self, mac: str) -> bool:
+        """Cut this MAC's WAN/internet access while leaving it reachable on
+        the LAN — a softer tier than block_device's full removal, for
+        suspect-but-unconfirmed devices. Returns True if the quarantine
+        rule was created, regardless of whether it's actually enforced yet
+        (see SagemcomXmoAdapter.quarantine_device's DefaultPolicy caveat —
+        implementations should log a warning rather than fail outright if
+        enforcement can't be confirmed, since the rule still exists and
+        will start enforcing the moment the precondition is met)."""
+
+    @abstractmethod
+    async def unquarantine_device(self, mac: str) -> bool:
+        """Remove a quarantine rule previously created by quarantine_device.
+        Returns True on success."""
+
+    @abstractmethod
     async def get_router_info(self) -> RouterInfo:
         """Return router metadata: model, firmware, uptime, WAN status."""
 
