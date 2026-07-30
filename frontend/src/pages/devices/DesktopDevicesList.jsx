@@ -89,7 +89,19 @@ const columnHelperDefs = [
     id: 'type',
     header: 'TYPE',
     accessorFn: (d) => d.interface_name || '',
-    cell: ({ getValue }) => <Badge variant="info">{getValue() === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>,
+    cell: ({ row, getValue }) => (
+      <div className="flex flex-wrap gap-1">
+        <Badge variant="info">{getValue() === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>
+        {row.original.ap_alias && (
+          <Badge
+            variant={row.original.ap_alias.startsWith('GUEST') ? 'warning' : 'info'}
+            title="Which access point this device is associated with"
+          >
+            {row.original.ap_alias}
+          </Badge>
+        )}
+      </div>
+    ),
   },
   {
     id: 'signal',

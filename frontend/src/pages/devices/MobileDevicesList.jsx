@@ -76,6 +76,7 @@ export function MobileDevicesList({ devices, totalCount, isLoading, filters, set
               <div className="truncate text-[9px] text-text-muted">
                 {d.ip_address || '—'}
                 {d.device_type && d.device_type !== 'MISCELLANEOUS' && ` · ${d.device_type}`}
+                {d.ap_alias && ` · ${d.ap_alias}`}
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-col items-end gap-1">

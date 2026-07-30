@@ -20,15 +20,18 @@ from redis.asyncio import Redis, from_url
 from sqlalchemy import delete, select, text
 
 from sentinel.adapter.base import RouterAdapter
+from sentinel.adapter.discovery import discover_gateway_ip
 from sentinel.adapter.factory import create_router_adapter
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
+from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
+from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
@@ -37,6 +40,7 @@ from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.clamav_scanner import ClamAvScanner
+from sentinel.security.dhcp_watch import DhcpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.os_classification import os_family
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
@@ -86,6 +90,7 @@ class SentinelScheduler:
         self._ml_contamination = ml_contamination
         self._ml_retrain_cron = ml_retrain_cron
         self._sniff_iface = sniff_iface
+        self._router_ip: str = ''  # resolved in _run_loop via _resolve_router_ip
         self._otx_api_key = otx_api_key
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
@@ -110,10 +115,14 @@ class SentinelScheduler:
         # would throw that state away every 15 seconds.
         self._pipeline: DetectionPipeline | None = None
         self._anomaly_engine: AnomalyEngine | None = None
+        # Tracks a rolling throughput baseline across polls — same
+        # once-per-process-and-reused reasoning as _pipeline/_anomaly_engine.
+        self._wan_bandwidth_detector: WanBandwidthDetector | None = None
         # Security services — also built once per process, same reasoning.
         self._threat_intel: ThreatIntelService | None = None
         self._scanner: NetworkScanner | None = None
         self._arp_watcher: ArpWatcher | None = None
+        self._dhcp_watcher: DhcpWatcher | None = None
         self._fingerprinter: PassiveFingerprinter | None = None
         self._canary_reader: OpenCanaryLogReader | None = None
         self._canary_ingester: OpenCanaryIngester | None = None
@@ -169,6 +178,12 @@ class SentinelScheduler:
         # via run_until_complete since the loop isn't running yet.
         self._sniff_iface = self._loop.run_until_complete(self._resolve_sniff_iface())
 
+        # The router's LAN IP — same resolution create_router_adapter() uses
+        # (settings.ROUTER_IP if set, else the default-route gateway) —
+        # needed by DhcpWatcher to know which DHCP server is legitimate.
+        # Resolved once at startup, same as sniff_iface above.
+        self._router_ip = self._loop.run_until_complete(self._resolve_router_ip())
+
         # Likewise for notification settings (Notifications tab) — a
         # previously-saved ntfy_url/SMTP config persists across restarts
         # without editing .env. SMTP_PASSWORD itself is never DB-backed (see
@@ -184,9 +199,11 @@ class SentinelScheduler:
             contamination=self._ml_contamination,
         )
         self._pipeline = create_default_pipeline(self._anomaly_engine)
+        self._wan_bandwidth_detector = WanBandwidthDetector()
         self._threat_intel = ThreatIntelService(self._otx_api_key)
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
+        self._dhcp_watcher = DhcpWatcher(self._on_dhcp_alert, self._sniff_iface, self._router_ip)
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
         self._canary_reader = OpenCanaryLogReader(self._opencanary_log_path)
         self._canary_ingester = OpenCanaryIngester()
@@ -270,7 +287,8 @@ class SentinelScheduler:
             if self._rule_engine is None:
                 self._rule_engine = RuleEngine(adapter, self._notifier)
             await poll_cycle(
-                adapter, self._redis_client, self._pipeline, self._anomaly_engine, self._rule_engine
+                adapter, self._redis_client, self._pipeline, self._anomaly_engine, self._rule_engine,
+                self._wan_bandwidth_detector,
             )
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
@@ -291,6 +309,14 @@ class SentinelScheduler:
             self._fingerprinter.start()
         except Exception:
             logger.exception('Failed to start ARP watcher / passive fingerprinter')
+
+        try:
+            if self._router_ip:
+                self._dhcp_watcher.start()
+            else:
+                logger.warning('Router IP could not be resolved — DHCP watcher not started')
+        except Exception:
+            logger.exception('Failed to start DHCP watcher')
 
         try:
             await self._threat_intel.refresh_feeds()
@@ -571,6 +597,20 @@ class SentinelScheduler:
             event.get('new_mac'), event['type'], event['severity'], event['description'], raw_data=event,
         )
 
+    def _on_dhcp_alert(self, event: dict) -> None:
+        """Sync callback invoked from DhcpWatcher's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_dhcp_alert(event), self._loop)
+
+    async def _persist_dhcp_alert(self, event: dict) -> None:
+        # mac is the rogue server's own MAC (Ethernet src of the OFFER) —
+        # attribute the alert to it directly, same as _persist_arp_alert
+        # does for new_mac; no DB lookup needed, the sniffed packet already
+        # carries it.
+        await self._raise_threat_alert(
+            event.get('mac'), event['type'], event['severity'], event['description'], raw_data=event,
+        )
+
     def _on_fingerprint(self, ip: str, os_guess: str) -> None:
         """Sync callback invoked from PassiveFingerprinter's own daemon thread."""
         if self._loop is not None:
@@ -675,6 +715,22 @@ class SentinelScheduler:
             )
             return self._sniff_iface
 
+    async def _resolve_router_ip(self) -> str:
+        """The router's LAN-side IP, same resolution create_router_adapter()
+        uses — settings.ROUTER_IP if configured, else the default-route
+        gateway. Best-effort: returns '' on failure rather than raising, so
+        a discovery hiccup doesn't crash the whole scheduler thread;
+        _startup_job skips starting DhcpWatcher entirely when this is blank
+        rather than starting it with nothing to compare against (which
+        would flag every legitimate DHCP OFFER as rogue)."""
+        if settings.ROUTER_IP:
+            return settings.ROUTER_IP
+        try:
+            return discover_gateway_ip()
+        except Exception:
+            logger.exception('Failed to auto-discover router IP — DHCP watcher will not start')
+            return ''
+
     async def _resolve_notification_config(self, fallback: NotificationConfig) -> NotificationConfig:
         """The admin's configured ntfy_url/SMTP settings (SettingsRepository),
         falling back to `fallback` (the env-config default built in
@@ -760,6 +816,7 @@ class SentinelScheduler:
         live signal to report yet."""
         return {
             'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
+            'dhcp_watch_active': self._dhcp_watcher.is_active if self._dhcp_watcher else False,
             'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
             'sniff_iface': self._sniff_iface,
             'nmap_last_scan_at': (
@@ -827,21 +884,28 @@ class SentinelScheduler:
         self._loop.call_soon_threadsafe(self._anomaly_engine.reset)
 
     def restart_sniffers(self, iface: str) -> None:
-        """Restart ARP watch + passive fingerprinting on a new interface —
-        called when the admin changes SNIFF_IFACE in the Settings tab, so it
-        takes effect immediately instead of only on the next process
-        restart. Safe to call whether or not sniffing ever successfully
-        started (e.g. no NET_RAW) — restart() just stops-then-starts.
+        """Restart ARP watch + DHCP watch + passive fingerprinting on a new
+        interface — called when the admin changes SNIFF_IFACE in the
+        Settings tab, so it takes effect immediately instead of only on the
+        next process restart. Safe to call whether or not sniffing ever
+        successfully started (e.g. no NET_RAW) — restart() just
+        stops-then-starts.
 
         Unlike reset_ml_state(), this doesn't need to run on the scheduler's
-        own event loop — ArpWatcher/PassiveFingerprinter manage their own
-        threads directly and don't touch the asyncio loop at all, so calling
-        their plain restart() methods straight from the Flask request thread
-        is safe.
+        own event loop — ArpWatcher/DhcpWatcher/PassiveFingerprinter manage
+        their own threads directly and don't touch the asyncio loop at all,
+        so calling their plain restart() methods straight from the Flask
+        request thread is safe.
         """
         self._sniff_iface = iface
         if self._arp_watcher is not None:
             self._arp_watcher.restart(iface)
+        # Only restart the DHCP watcher if it has something to compare
+        # against — see _startup_job's identical guard. Restarting it with
+        # a blank expected_server_ip would flag every legitimate DHCP
+        # OFFER as rogue.
+        if self._dhcp_watcher is not None and self._router_ip:
+            self._dhcp_watcher.restart(iface)
         if self._fingerprinter is not None:
             self._fingerprinter.restart(iface)
 

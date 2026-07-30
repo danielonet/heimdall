@@ -24,6 +24,9 @@ class DeviceSnapshot:
     port_alias: str = ''           # 'PHY1'..'PHY5' for wired devices, '' for WiFi
     device_type: str = ''          # router's own DHCP-fingerprint classification,
                                     # e.g. 'Smartphone', 'Multimedia device' — '' if unclassified
+    ap_alias: str = ''             # which AP this WiFi client is associated with —
+                                    # 'PRIV0'|'VID1'|'GUEST2G'|'GUEST5G'|'AP_BACKHAUL',
+                                    # '' for wired devices (no AP at all)
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     tags: Set[str] = field(default_factory=set)
@@ -64,6 +67,16 @@ class PortStats:
 
 
 @dataclass
+class WifiRadioInfo:
+    """Channel/power/standard config for a single WiFi radio (2.4GHz/5GHz)."""
+
+    band: str            # '2.4GHz' | '5GHz'
+    channel: int = 0
+    tx_power_dbm: int = 0
+    standard: str = ''    # e.g. 'ax', 'ac', 'n'
+
+
+@dataclass
 class RouterInfo:
     """Static and dynamic metadata about the router itself."""
 
@@ -76,3 +89,24 @@ class RouterInfo:
     wan_mode: str = ''        # 'PPPoE' | 'IPoE'
     uptime_seconds: int = 0
     ssids: list = field(default_factory=list)
+    radios: list = field(default_factory=list)  # list[WifiRadioInfo]
+
+
+@dataclass
+class WanStats:
+    """Household-total WAN traffic delta for a single poll interval — not
+    keyed by device or port, so it's deliberately not a TrafficSample (that
+    dataclass is keyed by mac_address/port_alias; forcing a sentinel key
+    like 'WAN' onto it would be a hack against its intent). The
+    Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats xpath this is
+    read from is unverified against a live router — see
+    docs/router/sagemcom-xmo-api.md's 'Remaining captures needed' and
+    SagemcomXmoAdapter.get_wan_stats(); the adapter returns None instead of
+    this dataclass if the xpath doesn't resolve.
+    """
+
+    timestamp: datetime
+    bytes_sent_delta: int = 0
+    bytes_recv_delta: int = 0
+    throughput_up_kbps: int = 0
+    throughput_dn_kbps: int = 0

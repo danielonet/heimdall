@@ -35,6 +35,10 @@ class Device(Base):
     # 'Multimedia device') — blank when the router couldn't classify it. See
     # SagemcomXmoAdapter._to_device_snapshot.
     device_type: Mapped[str | None] = mapped_column(String(50))
+    # Which AP this WiFi client is associated with — 'PRIV0'|'VID1'|
+    # 'GUEST2G'|'GUEST5G'|'AP_BACKHAUL', NULL for wired devices (no AP at
+    # all). See SagemcomXmoAdapter._get_associated_devices.
+    ap_alias: Mapped[str | None] = mapped_column(String(20))
     os_fingerprint: Mapped[str | None] = mapped_column(String(100))
     nmap_profile: Mapped[dict | None] = mapped_column(JSONB)
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
@@ -158,6 +162,25 @@ class PortStats(Base):
     discards_recv: Mapped[int | None] = mapped_column(Integer)
     broadcast_recv: Mapped[int | None] = mapped_column(BigInteger)
     last_change_secs: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class WanStats(Base):
+    """Household-total WAN traffic delta for a single poll interval
+    (TimescaleDB hypertable). No device/port dimension — `time` alone
+    identifies a row, unlike TrafficSample/PortStats. Populated from
+    SagemcomXmoAdapter.get_wan_stats(), which reads an unverified xpath
+    (Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats — see
+    docs/router/sagemcom-xmo-api.md) and returns None if it doesn't
+    resolve, in which case no row is inserted that poll.
+    """
+
+    __tablename__ = 'wan_stats'
+
+    time: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), primary_key=True)
+    bytes_sent_delta: Mapped[int | None] = mapped_column(BigInteger)
+    bytes_recv_delta: Mapped[int | None] = mapped_column(BigInteger)
+    throughput_up_kbps: Mapped[int | None] = mapped_column(BigInteger)
+    throughput_dn_kbps: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class DnsQuery(Base):

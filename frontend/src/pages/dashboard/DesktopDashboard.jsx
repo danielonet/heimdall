@@ -1,6 +1,7 @@
 import { MetricCard } from '../../components/MetricCard'
 import { StatusDot } from '../../components/StatusDot'
 import { TrafficDisplay } from '../../components/TrafficDisplay'
+import { ThroughputArrows } from '../../components/ThroughputArrows'
 import { MacAddress } from '../../components/MacAddress'
 import { Badge } from '../../components/Badge'
 import { BlockButton } from '../../components/BlockButton'
@@ -10,10 +11,15 @@ import { TrafficBarChart } from '../../components/dashboard/TrafficBarChart'
 import { ServiceStatusPanel } from '../../components/dashboard/ServiceStatusPanel'
 import { PortSummary } from '../../components/dashboard/PortSummary'
 import { isDeviceOnline } from '../../lib/deviceFilters'
+import { useWanStats } from '../../hooks/useWanStats'
 
 export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, health, ports, alertsTotal }) {
   const onlineDevices = devices.filter(isDeviceOnline)
   const onlineCount = onlineDevices.length
+  // 404 here just means SagemcomXmoAdapter.get_wan_stats' xpath hasn't been
+  // verified against a live router yet (see its docstring) — not an error
+  // worth surfacing, the household total simply stays hidden until then.
+  const { data: wanStats } = useWanStats()
 
   return (
     <div className="space-y-px bg-border p-px">
@@ -56,7 +62,14 @@ export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, 
         </div>
 
         <div className="col-span-3 border border-border bg-surface p-4">
-          <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">BANDWIDTH USAGE</div>
+          <div className="mb-2 flex items-center justify-between text-[8px] tracking-[3px] text-text-muted">
+            <span>BANDWIDTH USAGE</span>
+            {wanStats && (
+              <span className="text-[9px] tracking-normal">
+                <ThroughputArrows upKbps={wanStats.throughput_up_kbps} downKbps={wanStats.throughput_dn_kbps} />
+              </span>
+            )}
+          </div>
           <TrafficBarChart devices={onlineDevices} />
         </div>
 

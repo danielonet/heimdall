@@ -12,6 +12,7 @@ import {
   RouterIcon,
   ShieldCheckIcon,
   ShieldIcon,
+  TagIcon,
 } from './ServiceIcons'
 
 function Row({ icon: Icon, label, ok, detail }) {
@@ -68,6 +69,12 @@ export function ServiceStatusPanel({ health }) {
         label="ARP Watch"
         ok={sec.arp_watch_active}
         detail={sec.arp_watch_active ? 'ACTIVE' : 'OFF'}
+      />
+      <Row
+        icon={TagIcon}
+        label="DHCP Watch"
+        ok={sec.dhcp_watch_active}
+        detail={sec.dhcp_watch_active ? 'ACTIVE' : 'OFF'}
       />
       <Row
         icon={FingerprintIcon}

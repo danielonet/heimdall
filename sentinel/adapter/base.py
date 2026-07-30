@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
-from .models import DeviceSnapshot, PortStats, RouterInfo, TrafficSample
+from .models import DeviceSnapshot, PortStats, RouterInfo, TrafficSample, WanStats
 
 
 class RouterAdapter(ABC):
@@ -42,3 +42,11 @@ class RouterAdapter(ABC):
     @abstractmethod
     async def get_router_info(self) -> RouterInfo:
         """Return router metadata: model, firmware, uptime, WAN status."""
+
+    @abstractmethod
+    async def get_wan_stats(self) -> Optional[WanStats]:
+        """Return household-total WAN traffic delta since the last call, or
+        None if the underlying data isn't available (e.g. an unverified
+        xpath that doesn't resolve on this firmware — see
+        SagemcomXmoAdapter.get_wan_stats). Callers must treat None as
+        "nothing to persist this poll", not an error."""

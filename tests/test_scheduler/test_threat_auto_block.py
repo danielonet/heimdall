@@ -169,6 +169,31 @@ class TestPersistArpAlert:
         assert device.is_blocked is True
 
 
+class TestPersistDhcpAlert:
+    async def test_rogue_dhcp_offer_attributes_the_alert_to_the_servers_mac_and_blocks_it(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._persist_dhcp_alert({
+            'type': 'ROGUE_DHCP_SERVER', 'severity': 'CRITICAL', 'ip': _IP, 'mac': _MAC,
+            'description': f'DHCP OFFER received from {_IP} ({_MAC}), not the known router',
+        })
+
+        alert = await _latest_alert()
+        assert alert.device_mac == _MAC
+        assert alert.alert_type == 'ROGUE_DHCP_SERVER'
+        device = await _get_device()
+        assert device.is_blocked is True
+
+    async def test_alert_with_no_mac_is_never_blocked(self, scheduler):
+        await SettingsRepository().set_auto_block_on_threat(True)
+        await scheduler._persist_dhcp_alert({
+            'type': 'ROGUE_DHCP_SERVER', 'severity': 'CRITICAL', 'ip': '10.100.102.66', 'mac': None,
+            'description': 'DHCP OFFER received from 10.100.102.66 (unknown MAC), not the known router',
+        })
+        # Must not raise — the assertion here is simply that this completes.
+
+
 class TestPersistFingerprint:
     async def test_signature_change_on_a_known_device_is_flagged_and_blocked(self, scheduler):
         await _seed_device(is_blocked=False, os_fingerprint='Linux / Android')

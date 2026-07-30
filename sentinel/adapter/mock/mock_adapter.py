@@ -9,7 +9,7 @@ Enable via: USE_MOCK_ROUTER=true environment variable.
 import logging
 import random
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import (
@@ -18,6 +18,8 @@ from sentinel.adapter.models import (
     RouterInfo,
     TrafficGranularity,
     TrafficSample,
+    WanStats,
+    WifiRadioInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,6 +174,24 @@ class MockSagemcomAdapter(RouterAdapter):
             wan_mode='PPPoE',
             uptime_seconds=1_234_567,
             ssids=['HomeNet-5G', 'HomeNet-2.4G'],
+            radios=[
+                WifiRadioInfo(band='5GHz', channel=44, tx_power_dbm=20, standard='ax'),
+                WifiRadioInfo(band='2.4GHz', channel=6, tx_power_dbm=20, standard='n'),
+            ],
+        )
+
+    async def get_wan_stats(self) -> Optional[WanStats]:
+        """Synthetic household WAN throughput — same random-walk shape as
+        the per-device mock traffic, roughly the sum of a busy household."""
+        sent_delta = random.randint(200_000, 3_000_000)
+        recv_delta = random.randint(1_000_000, 15_000_000)
+        poll_interval_s = 15
+        return WanStats(
+            timestamp=datetime.now(timezone.utc),
+            bytes_sent_delta=sent_delta,
+            bytes_recv_delta=recv_delta,
+            throughput_up_kbps=sent_delta * 8 // 1024 // poll_interval_s,
+            throughput_dn_kbps=recv_delta * 8 // 1024 // poll_interval_s,
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -192,6 +212,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_rate_mbps=300,
                 is_online=True,
                 device_type='Computer',
+                ap_alias='PRIV0',
             ),
             DeviceSnapshot(
                 mac_address='b4:b0:1d:8e:4f:5a',
@@ -203,6 +224,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_rate_mbps=130,
                 is_online=True,
                 device_type='Tablet',
+                ap_alias='PRIV0',
             ),
             DeviceSnapshot(
                 mac_address='c8:1c:c3:2d:4b:6e',
@@ -214,6 +236,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_rate_mbps=72,
                 is_online=True,
                 device_type='Multimedia device',
+                ap_alias='PRIV0',
             ),
             DeviceSnapshot(
                 mac_address='d4:6e:0e:33:f2:1a',
@@ -225,6 +248,7 @@ class MockSagemcomAdapter(RouterAdapter):
                 signal_rate_mbps=200,
                 is_online=False,
                 device_type='Smartphone',
+                ap_alias='GUEST2G',
             ),
             # Wired devices
             DeviceSnapshot(

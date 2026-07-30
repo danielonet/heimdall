@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sentinel.db.models import Alert, Device, PortStats, Rule, TrafficSample
+from sentinel.db.models import Alert, Device, PortStats, Rule, TrafficSample, WanStats
 
 
 def device_to_dict(device: Device) -> dict[str, Any]:
@@ -20,6 +20,7 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'signal_strength_dbm': device.signal_strength_dbm,
         'signal_rate_mbps': device.signal_rate_mbps,
         'device_type': device.device_type,
+        'ap_alias': device.ap_alias,
         'os_fingerprint': device.os_fingerprint,
         'nmap_profile': device.nmap_profile,
         'tags': device.tags or [],
@@ -72,6 +73,16 @@ def port_stats_to_dict(port: PortStats) -> dict[str, Any]:
         'discards_recv': port.discards_recv,
         'broadcast_recv': port.broadcast_recv,
         'last_change_secs': port.last_change_secs,
+    }
+
+
+def wan_stats_to_dict(wan: WanStats) -> dict[str, Any]:
+    return {
+        'time': wan.time.isoformat() if wan.time else None,
+        'bytes_sent_delta': wan.bytes_sent_delta,
+        'bytes_recv_delta': wan.bytes_recv_delta,
+        'throughput_up_kbps': wan.throughput_up_kbps,
+        'throughput_dn_kbps': wan.throughput_dn_kbps,
     }
 
 

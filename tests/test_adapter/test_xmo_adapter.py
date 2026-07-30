@@ -213,6 +213,23 @@ class TestToDeviceSnapshotWithAssociatedDevices:
         assert snap.signal_strength_dbm == -59
         assert snap.signal_rate_mbps == 130
 
+    def test_ap_alias_propagates_from_associated_entry(self, adapter):
+        host = _wifi_host()
+        associated = {'da:d4:19:31:c0:e9': {**_associated_client(), '_ap_alias': 'GUEST2G'}}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.ap_alias == 'GUEST2G'
+
+    def test_ap_alias_blank_when_mac_not_in_associated(self, adapter):
+        host = _wifi_host()
+        associated = {'11:22:33:44:55:66': {**_associated_client(), '_ap_alias': 'PRIV0'}}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.ap_alias == ''
+
+    def test_ap_alias_blank_for_wired_device(self, adapter):
+        host = _wired_host()
+        snap = adapter._to_device_snapshot(host)
+        assert snap.ap_alias == ''
+
 
 @pytest.mark.asyncio
 class TestGetAssociatedDevices:
@@ -293,6 +310,25 @@ class TestGetAssociatedDevices:
         result = await adapter._get_associated_devices()
         assert 'aa:bb:cc:dd:ee:ff' in result
 
+    async def test_stamps_the_source_ap_alias_onto_each_client(self, adapter):
+        response = {
+            'reply': {
+                'actions': [
+                    {
+                        'id': i,
+                        'callbacks': [{
+                            'xpath': f'Device/WiFi/AccessPoints/AccessPoint[Alias="{a}"]/AssociatedDevices',
+                            'parameters': {'value': [_associated_client(MACAddress='dd:dd:dd:dd:dd:dd')] if a == 'GUEST5G' else []},
+                        }],
+                    }
+                    for i, a in enumerate(['PRIV0', 'VID1', 'GUEST2G', 'GUEST5G', 'AP_BACKHAUL'])
+                ],
+            }
+        }
+        adapter._client.post = AsyncMock(return_value=response)
+        result = await adapter._get_associated_devices()
+        assert result['dd:dd:dd:dd:dd:dd']['_ap_alias'] == 'GUEST5G'
+
 
 @pytest.mark.asyncio
 class TestGetTrafficSamplesWifiDirection:
@@ -360,6 +396,73 @@ class TestGetTrafficSamplesWifiDirection:
         wifi_sample = next(s for s in samples if s.mac_address == mac)
         assert wifi_sample.throughput_dn_kbps > 0  # the AP-Sent growth must land in download
         assert wifi_sample.throughput_up_kbps == 0  # AP-Received didn't change
+
+
+@pytest.mark.asyncio
+class TestGetPortTrafficSamplesDirection:
+    """Regression coverage: same Sent/Received swap as the WiFi
+    AssociatedDevices path (TestGetTrafficSamplesWifiDirection above) —
+    applied to the wired PHY path on that precedent, not independently
+    re-verified against live wired traffic. See get_port_stats'/
+    _get_port_traffic_samples' comments."""
+
+    def _stats_response(self, phy5_sent: int, phy5_recv: int) -> dict:
+        return {'reply': {'actions': [
+            {
+                'id': i,
+                'callbacks': [{
+                    'xpath': f'Device/Ethernet/Interfaces/Interface[Alias="PHY{i+1}"]/Stats',
+                    'parameters': {
+                        'value': {'BytesSent': str(phy5_sent), 'BytesReceived': str(phy5_recv)} if i == 4 else {},
+                    },
+                }],
+            }
+            for i in range(5)
+        ]}}
+
+    async def test_interface_sent_becomes_download_not_upload(self, adapter):
+        adapter._client.post = AsyncMock(return_value=self._stats_response(9_000_000, 1_000_000))
+        await adapter._get_port_traffic_samples()  # first poll establishes the baseline
+
+        # Second poll: interface BytesSent grew by 900KB, BytesReceived unchanged.
+        adapter._client.post = AsyncMock(return_value=self._stats_response(9_900_000, 1_000_000))
+        samples = await adapter._get_port_traffic_samples()
+
+        phy5 = next(s for s in samples if s.port_alias == 'PHY5')
+        assert phy5.throughput_dn_kbps > 0  # interface-Sent growth must land in download
+        assert phy5.throughput_up_kbps == 0  # interface-Received didn't change
+
+
+@pytest.mark.asyncio
+class TestGetPortStatsDirection:
+    """Same regression coverage as TestGetPortTrafficSamplesDirection, for
+    get_port_stats()'s independent BytesSent/BytesReceived read."""
+
+    def _full_response(self, phy5_sent: int, phy5_recv: int) -> dict:
+        actions = []
+        action_id = 0
+        for alias in ['PHY1', 'PHY2', 'PHY3', 'PHY4', 'PHY5']:
+            stats_value = {'BytesSent': str(phy5_sent), 'BytesReceived': str(phy5_recv)} if alias == 'PHY5' else {}
+            for sub, value in [('Stats', stats_value), ('Status', 'UP'), ('CurrentBitRate', 1000), ('LastChange', 0)]:
+                actions.append({
+                    'id': action_id,
+                    'callbacks': [{
+                        'xpath': f'Device/Ethernet/Interfaces/Interface[Alias="{alias}"]/{sub}',
+                        'parameters': {'value': value},
+                    }],
+                })
+                action_id += 1
+        return {'reply': {'actions': actions}}
+
+    async def test_sent_total_comes_from_bytes_received(self, adapter):
+        """The PHY interface's own BytesReceived (device -> interface, i.e.
+        the device's upload) must feed PortStats.bytes_sent_total (what the
+        frontend renders under a ↑ upload arrow — see PortCard.jsx)."""
+        adapter._client.post = AsyncMock(return_value=self._full_response(9_000_000, 1_000_000))
+        stats = await adapter.get_port_stats()
+        phy5 = next(s for s in stats if s.port_alias == 'PHY5')
+        assert phy5.bytes_sent_total == 1_000_000  # from BytesReceived
+        assert phy5.bytes_recv_total == 9_000_000  # from BytesSent
 
 
 def _port_sample(alias: str, up: int = 100, down: int = 200) -> TrafficSample:
@@ -494,14 +597,25 @@ class TestToDeviceSnapshotDefaults:
         assert snap.is_online is True
 
 
-def _router_info_response(*, wan_lower_layers: str = 'Device/PPP/Interfaces/Interface[PPP_DATA]') -> dict:
+def _router_info_response(
+    *, wan_lower_layers: str = 'Device/PPP/Interfaces/Interface[PPP_DATA]', radios: list | None = None,
+) -> dict:
     """Shape confirmed against a live F@st 5670: DeviceInfo has no
     WANMACAddress (just MACAddress); the WAN interface wraps as {"Interface":
     {...}} (bracket qualifier stripped) with the IP nested under
-    IPv4Addresses[0].IPAddress; SSIDs return as a bare list, no wrapper."""
+    IPv4Addresses[0].IPAddress; SSIDs return as a bare list, no wrapper.
+    Radios defaults to empty — its field-level shape is unverified (see
+    _to_wifi_radio_info's docstring), tests that care pass their own."""
     return {
         'reply': {
             'actions': [
+                {
+                    'id': 3,
+                    'callbacks': [{
+                        'xpath': 'Device/WiFi/Radios/Radio',
+                        'parameters': {'value': radios if radios is not None else []},
+                    }],
+                },
                 {
                     'id': 0,
                     'callbacks': [{
@@ -590,3 +704,75 @@ class TestGetRouterInfo:
         ))
         info = await adapter.get_router_info()
         assert info.wan_mode == ''
+
+    async def test_no_radios_returns_empty_list(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        info = await adapter.get_router_info()
+        assert info.radios == []
+
+    async def test_radios_parsed_with_band_inferred_from_alias(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response(radios=[
+            {'Alias': 'wl0', 'Channel': 44, 'TransmitPower': 20, 'OperatingStandards': 'ax'},
+            {'Alias': 'wl1', 'Channel': 6, 'TransmitPower': 20, 'OperatingStandards': 'n'},
+        ]))
+        info = await adapter.get_router_info()
+        assert len(info.radios) == 2
+        assert info.radios[0].band == '5GHz'
+        assert info.radios[0].channel == 44
+        assert info.radios[0].tx_power_dbm == 20
+        assert info.radios[0].standard == 'ax'
+        assert info.radios[1].band == '2.4GHz'
+        assert info.radios[1].channel == 6
+
+    async def test_unrecognized_alias_falls_back_to_operating_frequency_band(self, adapter):
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response(radios=[
+            {'Alias': 'wl2', 'OperatingFrequencyBand': '6GHz', 'Channel': 37},
+        ]))
+        info = await adapter.get_router_info()
+        assert info.radios[0].band == '6GHz'
+        assert info.radios[0].channel == 37
+
+
+@pytest.mark.asyncio
+class TestGetWanStats:
+    def _stats_response(self, sent: int, recv: int) -> dict:
+        return {
+            'reply': {'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats",
+                    'parameters': {'value': {'Stats': {'BytesSent': str(sent), 'BytesReceived': str(recv)}}},
+                }],
+            }]},
+        }
+
+    async def test_returns_none_and_warns_once_when_xpath_does_not_resolve(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value={'reply': {'actions': []}})
+        assert await adapter.get_wan_stats() is None
+        assert await adapter.get_wan_stats() is None
+        assert adapter._wan_stats_warned is True
+
+    async def test_first_poll_has_zero_delta(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value=self._stats_response(1_000_000, 5_000_000))
+        stats = await adapter.get_wan_stats()
+        assert stats is not None
+        assert stats.bytes_sent_delta == 0
+        assert stats.bytes_recv_delta == 0
+
+    async def test_second_poll_computes_delta(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value=self._stats_response(1_000_000, 5_000_000))
+        await adapter.get_wan_stats()
+        adapter._client.get_value = AsyncMock(return_value=self._stats_response(1_150_000, 5_300_000))
+        stats = await adapter.get_wan_stats()
+        assert stats.bytes_sent_delta == 150_000
+        assert stats.bytes_recv_delta == 300_000
+        assert stats.throughput_up_kbps > 0
+        assert stats.throughput_dn_kbps > 0
+
+    async def test_counter_reset_uses_new_value_as_delta(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value=self._stats_response(1_000_000, 5_000_000))
+        await adapter.get_wan_stats()
+        adapter._client.get_value = AsyncMock(return_value=self._stats_response(500, 300))  # router rebooted
+        stats = await adapter.get_wan_stats()
+        assert stats.bytes_sent_delta == 500
+        assert stats.bytes_recv_delta == 300

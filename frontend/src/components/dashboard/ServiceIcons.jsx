@@ -125,3 +125,12 @@ export function ShieldCheckIcon(props) {
     </svg>
   )
 }
+
+export function TagIcon(props) {
+  return (
+    <svg {...strokeBase} {...props}>
+      <path d="M12.6 3H5a2 2 0 0 0-2 2v7.6a2 2 0 0 0 .6 1.4l8.4 8.4a2 2 0 0 0 2.8 0l6.6-6.6a2 2 0 0 0 0-2.8L13 3.6a2 2 0 0 0-1.4-.6z" />
+      <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

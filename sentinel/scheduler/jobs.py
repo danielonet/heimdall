@@ -21,6 +21,7 @@ from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import DeviceSnapshot, PortStats as PortStatsSnapshot
 from sentinel.adapter.models import RouterInfo, TrafficGranularity
 from sentinel.adapter.models import TrafficSample as TrafficSampleSnapshot
+from sentinel.adapter.models import WanStats as WanStatsSnapshot
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import (
     emit_alert,
@@ -29,11 +30,12 @@ from sentinel.api.websocket import (
     emit_port_update,
     emit_wan_status,
 )
-from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStatusHistory
+from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStats, WanStatusHistory
 from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
+from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.trainer import ModelTrainer
 from sentinel.security.mac_vendor import lookup_vendor
@@ -49,6 +51,7 @@ async def poll_cycle(
     pipeline: DetectionPipeline,
     anomaly_engine: AnomalyEngine,
     rule_engine: RuleEngine,
+    wan_bandwidth_detector: WanBandwidthDetector,
 ) -> None:
     """Run one full poll cycle: fetch, detect, score, persist, publish, broadcast.
 
@@ -65,17 +68,23 @@ async def poll_cycle(
     traffic_samples = await adapter.get_traffic_samples()
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
+    wan_stats = await adapter.get_wan_stats()  # None if the (unverified) xpath doesn't resolve
 
     await _auto_trust_new_connections_during_learning(devices)
     await _retrain_once_armed(anomaly_engine)
 
     alerts = await _run_detection(pipeline, devices, traffic_samples)
     scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
+    if wan_stats is not None:
+        wan_alert = wan_bandwidth_detector.inspect(wan_stats)
+        if wan_alert is not None:
+            alerts.append(wan_alert)
 
     async with get_session() as session:
         newly_seen_macs = await _upsert_devices(session, devices)
         await _insert_traffic_samples(session, traffic_samples, scores_by_mac)
         await _insert_port_stats(session, port_stats)
+        await _insert_wan_stats(session, wan_stats)
         wan_changed = await _record_wan_status(session, router_info)
         for alert in alerts:
             session.add(alert)
@@ -320,6 +329,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 signal_strength_dbm=snapshot.signal_strength_dbm,
                 signal_rate_mbps=snapshot.signal_rate_mbps,
                 device_type=snapshot.device_type or None,
+                ap_alias=snapshot.ap_alias or None,
                 is_trusted=was_trusted,
                 is_online=snapshot.is_online,
                 ever_connected=snapshot.is_online,
@@ -337,6 +347,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             existing.signal_strength_dbm = snapshot.signal_strength_dbm
             existing.signal_rate_mbps = snapshot.signal_rate_mbps
             existing.device_type = snapshot.device_type or None
+            existing.ap_alias = snapshot.ap_alias or None
             existing.is_online = snapshot.is_online
             if snapshot.is_online:
                 existing.ever_connected = True
@@ -399,6 +410,20 @@ async def _insert_port_stats(session: AsyncSession, port_stats: list[PortStatsSn
             broadcast_recv=port.broadcast_recv,
             last_change_secs=port.last_change_secs,
         ))
+
+
+async def _insert_wan_stats(session: AsyncSession, wan_stats: WanStatsSnapshot | None) -> None:
+    """Insert one household-total WAN row, if the adapter had one to give —
+    see SagemcomXmoAdapter.get_wan_stats' unverified-xpath caveat."""
+    if wan_stats is None:
+        return
+    session.add(WanStats(
+        time=wan_stats.timestamp,
+        bytes_sent_delta=wan_stats.bytes_sent_delta,
+        bytes_recv_delta=wan_stats.bytes_recv_delta,
+        throughput_up_kbps=wan_stats.throughput_up_kbps,
+        throughput_dn_kbps=wan_stats.throughput_dn_kbps,
+    ))
 
 
 async def _record_wan_status(session: AsyncSession, router_info: RouterInfo) -> bool:

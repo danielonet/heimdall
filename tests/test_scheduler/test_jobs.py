@@ -15,11 +15,12 @@ from sqlalchemy import delete, select
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.adapter.models import DeviceSnapshot
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, AppSettings, Device, PortStats, TrafficSample, TrustedMac
+from sentinel.db.models import Alert, AppSettings, Device, PortStats, TrafficSample, TrustedMac, WanStats
 from sentinel.db.repositories import TrustedMacRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.pipeline import create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
+from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.notifications.service import NotificationConfig, NotificationService
@@ -102,6 +103,13 @@ def rule_engine(adapter):
     return RuleEngine(adapter, NotificationService(NotificationConfig()))
 
 
+@pytest.fixture
+def wan_bandwidth_detector():
+    """A fresh detector per test — same in-memory-state-across-calls
+    reasoning as pipeline/anomaly_engine above."""
+    return WanBandwidthDetector()
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _cleanup_mock_rows():
     yield
@@ -110,6 +118,7 @@ async def _cleanup_mock_rows():
             delete(TrafficSample).where(TrafficSample.mac_address.in_(_MOCK_MACS + _MOCK_PORTS))
         )
         await session.execute(delete(PortStats).where(PortStats.port_alias.in_(_MOCK_PORTS)))
+        await session.execute(delete(WanStats))
         await session.execute(delete(Alert).where(Alert.device_mac.in_(_MOCK_MACS)))
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))
@@ -142,8 +151,8 @@ async def established_baseline():
 
 
 class TestPollCycle:
-    async def test_persists_devices(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_persists_devices(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
@@ -151,62 +160,74 @@ class TestPollCycle:
             assert device.hostname == 'daniel-laptop'
             assert device.traffic_granularity == 'per_device'  # WiFi
 
-    async def test_is_online_persisted_true(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_persists_a_wan_stats_row(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        """MockSagemcomAdapter.get_wan_stats() always returns synthetic
+        data, so a real row must land every poll — the None/skip path (an
+        unverified xpath not resolving) is covered directly against
+        SagemcomXmoAdapter in test_xmo_adapter.py."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
+
+        async with get_session() as session:
+            result = await session.execute(select(WanStats).order_by(WanStats.time.desc()).limit(1))
+            row = result.scalars().first()
+            assert row is not None
+
+    async def test_is_online_persisted_true(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')  # daniel-laptop, mock is_online=True
             assert device.is_online is True
 
-    async def test_is_online_persisted_false(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_is_online_persisted_false(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
         """Regression coverage: is_online must reflect the router's own Active
         flag, not be silently dropped — see sentinel/scheduler/jobs.py:_upsert_devices
         and frontend/src/lib/deviceFilters.js."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'd4:6e:0e:33:f2:1a')  # guest-phone, mock is_online=False
             assert device.is_online is False
 
-    async def test_wifi_signal_strength_persisted(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_wifi_signal_strength_persisted(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
         """Regression coverage: the adapter has computed real signal_strength_dbm/
         signal_rate_mbps since the AssociatedDevices fix, but neither ever
         reached the devices table or the API — see sentinel/api/serializers.py."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')  # daniel-laptop, WiFi
             assert device.signal_strength_dbm < 0  # a real dBm reading, not the 0 default
             assert device.signal_rate_mbps > 0
 
-    async def test_wired_device_signal_strength_is_zero(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_wired_device_signal_strength_is_zero(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
             assert device.signal_strength_dbm == 0
 
-    async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_wired_device_marked_per_port(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'e8:31:cd:1f:4c:2e')  # nas-nas-01, Ethernet
             assert device is not None
             assert device.traffic_granularity == 'per_port'
 
-    async def test_vendor_name_gets_populated_from_mac_lookup(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
+    async def test_vendor_name_gets_populated_from_mac_lookup(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
         """Adapters never set vendor_name themselves — poll_cycle enriches it via
         a local MAC OUI lookup (sentinel.security.mac_vendor), so it should end up
         a string (possibly '' for an unrecognized/randomized MAC), never left NULL."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, 'a8:5e:60:f1:2c:3d')
             assert device is not None
             assert device.vendor_name is not None
 
-    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_persists_traffic_samples_and_port_stats(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -220,8 +241,8 @@ class TestPollCycle:
             assert port.status == 'UP'
             assert port.link_speed_mbps == 1000
 
-    async def test_per_device_sample_gets_bootstrap_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_per_device_sample_gets_bootstrap_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -230,8 +251,8 @@ class TestPollCycle:
             sample = result.scalars().first()
             assert sample.anomaly_score == 0.0  # bootstrap: no trained model yet
 
-    async def test_per_port_sample_has_no_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_per_port_sample_has_no_anomaly_score(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -241,9 +262,9 @@ class TestPollCycle:
             assert sample is not None
             assert sample.anomaly_score is None
 
-    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_second_poll_updates_rather_than_duplicates_device(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -252,19 +273,19 @@ class TestPollCycle:
             assert len(result.scalars().all()) == 1
 
     async def test_last_seen_does_not_advance_for_a_device_that_stays_offline(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """Regression coverage: last_seen previously got bumped on every poll
         for every device regardless of Active status, which is what made the
         frontend's old last_seen-recency ONLINE guess always true. It must
         only advance while the router reports the device as actually active."""
         mac = 'd4:6e:0e:33:f2:1a'  # guest-phone, mock is_online=False on every poll
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             first_last_seen = (await session.get(Device, mac)).last_seen
 
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             second_last_seen = (await session.get(Device, mac)).last_seen
@@ -274,9 +295,9 @@ class TestPollCycle:
 
 class TestDetectionIntegration:
     async def test_first_poll_raises_new_device_alert_for_every_online_mock_device(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector, established_baseline,
     ):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -288,8 +309,8 @@ class TestDetectionIntegration:
             assert {a.device_mac for a in alerts} == set(_MOCK_ONLINE_MACS)
             assert all(a.severity == 'CRITICAL' for a in alerts)
 
-    async def test_offline_mock_device_never_raises_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+    async def test_offline_mock_device_never_raises_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -300,10 +321,10 @@ class TestDetectionIntegration:
             assert result.scalars().all() == []
 
     async def test_second_poll_does_not_re_raise_new_device_alert(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector, established_baseline,
     ):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # devices become known here
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # should raise nothing new
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)  # devices become known here
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)  # should raise nothing new
 
         async with get_session() as session:
             result = await session.execute(
@@ -315,7 +336,7 @@ class TestDetectionIntegration:
             assert len(alerts) == len(_MOCK_ONLINE_MACS)  # exactly one per online device, not two
 
     async def test_pretrusted_mac_raises_no_new_device_alert_even_with_no_devices_row(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """Regression coverage for re-baselining after a devices-table reset
         (see scripts/seed_baseline.py) — a MAC in the persistent trusted_macs
@@ -324,7 +345,7 @@ class TestDetectionIntegration:
         mac = 'a8:5e:60:f1:2c:3d'
         await TrustedMacRepository().trust(mac)
 
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -333,12 +354,12 @@ class TestDetectionIntegration:
             assert result.scalars().all() == []
 
     async def test_pretrusted_mac_gets_is_trusted_carried_onto_new_devices_row(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         mac = 'a8:5e:60:f1:2c:3d'
         await TrustedMacRepository().trust(mac)
 
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             device = await session.get(Device, mac)
@@ -346,7 +367,7 @@ class TestDetectionIntegration:
             assert device.is_trusted is True
 
     async def test_existing_untrusted_row_gets_resynced_once_trusted_macs_catches_up(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, established_baseline,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector, established_baseline,
     ):
         """Regression coverage for a real incident: a devices row can end up
         incorrectly is_trusted=False (e.g. created during a race where
@@ -363,7 +384,7 @@ class TestDetectionIntegration:
         mac = 'a8:5e:60:f1:2c:3d'
 
         # First poll: not yet trusted — row gets created with is_trusted=False.
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
         async with get_session() as session:
             assert (await session.get(Device, mac)).is_trusted is False
 
@@ -372,7 +393,7 @@ class TestDetectionIntegration:
         await TrustedMacRepository().trust(mac)
 
         # Second poll: the existing row must pick up the trust, not stay stuck.
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
         async with get_session() as session:
             assert (await session.get(Device, mac)).is_trusted is True
 
@@ -386,9 +407,9 @@ class TestAutoTrustDuringLearning:
     only make sense before any real baseline exists."""
 
     async def test_first_poll_on_empty_db_raises_no_new_device_alerts(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         async with get_session() as session:
             result = await session.execute(
@@ -397,9 +418,9 @@ class TestAutoTrustDuringLearning:
             assert result.scalars().all() == []
 
     async def test_first_poll_on_empty_db_trusts_every_online_device(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
         for mac in _MOCK_ONLINE_MACS:
             assert await TrustedMacRepository().is_trusted(mac) is True
@@ -407,16 +428,16 @@ class TestAutoTrustDuringLearning:
                 assert (await session.get(Device, mac)).is_trusted is True
 
     async def test_offline_device_is_not_pre_trusted(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """Only devices actually online this poll count toward the baseline —
         a MAC the router merely mentions (is_online=False) shouldn't be
         silently trusted before it's ever really connected."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
         assert await TrustedMacRepository().is_trusted('d4:6e:0e:33:f2:1a') is False
 
     async def test_stamps_baseline_established_at(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """Drives the frontend's LEARNING/ARMED status badge — see
         SettingsRepository.get_all()/set_baseline_established_at/get_status()."""
@@ -425,7 +446,7 @@ class TestAutoTrustDuringLearning:
         from sentinel.db.repositories import SettingsRepository
 
         before = datetime.now(timezone.utc)
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
         after = datetime.now(timezone.utc)
 
         stamped = (await SettingsRepository().get_all())['baseline_established_at']
@@ -433,7 +454,7 @@ class TestAutoTrustDuringLearning:
         assert before <= stamped <= after
 
     async def test_late_joiner_within_the_learning_window_is_not_alerted(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """The core regression this covers: a device connecting well after
         the *first* post-purge/fresh-install poll — but still within the
@@ -442,7 +463,7 @@ class TestAutoTrustDuringLearning:
         very first poll; anything joining later (a phone that was asleep, a
         laptop still associating) fell straight into NewDeviceDetector's
         normal CRITICAL alert path."""
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # starts the clock
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)  # starts the clock
 
         new_mac = 'aa:aa:aa:aa:aa:aa'
         adapter._devices.append(DeviceSnapshot(
@@ -450,7 +471,7 @@ class TestAutoTrustDuringLearning:
             interface_name='WiFi', is_online=True,
         ))
         try:
-            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
             assert await TrustedMacRepository().is_trusted(new_mac) is True
             async with get_session() as session:
@@ -465,7 +486,7 @@ class TestAutoTrustDuringLearning:
                 await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == new_mac))
 
     async def test_new_device_alerts_normally_once_armed(
-        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine,
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector,
     ):
         """Once the learning period has elapsed, auto-trust must stop — a
         device connecting for the first time after ARMED goes back through
@@ -474,7 +495,7 @@ class TestAutoTrustDuringLearning:
 
         from sentinel.db.repositories import SettingsRepository
 
-        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)  # starts the clock
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)  # starts the clock
         await SettingsRepository().set_baseline_established_at(
             datetime.now(timezone.utc) - timedelta(hours=200)  # well past the 72h default
         )
@@ -485,7 +506,7 @@ class TestAutoTrustDuringLearning:
             interface_name='WiFi', is_online=True,
         ))
         try:
-            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine)
+            await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
 
             assert await TrustedMacRepository().is_trusted(new_mac) is False
             async with get_session() as session:

@@ -6,8 +6,10 @@ import dataclasses
 
 from flask import Blueprint, current_app, jsonify
 from redis.asyncio import from_url
-from sqlalchemy import text
+from sqlalchemy import select, text
 
+from sentinel.api.serializers import wan_stats_to_dict
+from sentinel.db.models import WanStats
 from sentinel.db.session import get_session
 from sentinel.scheduler.scheduler import get_scheduler
 
@@ -30,6 +32,25 @@ async def router_info():
         return jsonify(error=f'Router call failed: {exc}'), 502
 
     return jsonify(dataclasses.asdict(info))
+
+
+@bp.route('/wan-stats', methods=['GET'])
+async def wan_stats():
+    """Latest household-total WAN throughput, if any exists yet.
+
+    wan_stats stays empty for as long as SagemcomXmoAdapter.get_wan_stats()'s
+    xpath doesn't resolve (see its docstring — unverified against a live
+    router). A 404 here means exactly that, not a real error — the frontend
+    should treat it as "not available yet", not surface an error state.
+    """
+    async with get_session() as session:
+        result = await session.execute(select(WanStats).order_by(WanStats.time.desc()).limit(1))
+        latest = result.scalars().first()
+
+    if latest is None:
+        return jsonify(error='No WAN stats recorded yet'), 404
+
+    return jsonify(wan_stats_to_dict(latest))
 
 
 @bp.route('/health', methods=['GET'])

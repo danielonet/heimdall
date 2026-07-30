@@ -63,6 +63,13 @@ export function SettingsPage() {
             <Field label="WAN MODE">{router.wan_mode || '—'}</Field>
             <Field label="UPTIME">{formatUptime(router.uptime_seconds)}</Field>
             <Field label="SSIDs">{(router.ssids || []).join(', ') || '—'}</Field>
+            <Field label="WIFI RADIOS">
+              {(router.radios || []).length > 0
+                ? router.radios
+                    .map((r) => `${r.band} ch${r.channel}${r.tx_power_dbm ? ` ${r.tx_power_dbm}dBm` : ''}${r.standard ? ` (${r.standard})` : ''}`)
+                    .join(', ')
+                : '—'}
+            </Field>
           </div>
         )}
         <RouterCredentialsForm />

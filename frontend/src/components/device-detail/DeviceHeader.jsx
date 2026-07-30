@@ -44,6 +44,14 @@ export function DeviceHeader({ device }) {
             <Badge variant="info">
               {device.interface_name === 'Ethernet' ? `ETH${device.port_alias ? ` · ${device.port_alias}` : ''}` : 'WiFi'}
             </Badge>
+            {device.ap_alias && (
+              <Badge
+                variant={device.ap_alias.startsWith('GUEST') ? 'warning' : 'info'}
+                title="Which access point this device is associated with"
+              >
+                {device.ap_alias}
+              </Badge>
+            )}
             <button
               type="button"
               disabled={setTrusted.isPending}

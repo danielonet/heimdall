@@ -11,6 +11,8 @@ from sentinel.adapter.models import (
     RouterInfo,
     TrafficGranularity,
     TrafficSample,
+    WanStats,
+    WifiRadioInfo,
 )
 
 from .delta import TrafficDeltaCalculator
@@ -62,6 +64,8 @@ class SagemcomXmoAdapter(RouterAdapter):
         # port alias -> (bytes_sent_total, bytes_recv_total)
         self._port_prev: dict[str, Tuple[int, int]] = {}
         self._poll_interval_s = poll_interval_s
+        # Logged once, not every poll — see get_wan_stats().
+        self._wan_stats_warned = False
 
     # ──────────────────────────────────────────────────────────────────────────
     # RouterAdapter interface
@@ -195,8 +199,20 @@ class SagemcomXmoAdapter(RouterAdapter):
             bitrate = _scalar_int(bitrate_raw)
             lastchange = _scalar_int(lastchange_raw)
 
-            sent_total = _int_field(stats, 'BytesSent')
-            recv_total = _int_field(stats, 'BytesReceived')
+            # Same direction convention as the WiFi AssociatedDevices fix in
+            # get_traffic_samples() (applied here on that precedent, not
+            # independently re-verified against live wired traffic — see
+            # docs/router/sagemcom-xmo-api.md's "Remaining captures needed"):
+            # from the interface's own perspective, "Sent" is
+            # interface-to-device (the device's download) and "Received" is
+            # device-to-interface (the device's upload) — the opposite of
+            # the WAN interface's convention. sent_total/sent_delta below
+            # are what the frontend renders under a ↑ upload arrow
+            # (PortCard.jsx), so the raw fields are swapped feeding them.
+            port_download_total = _int_field(stats, 'BytesSent')
+            port_upload_total = _int_field(stats, 'BytesReceived')
+            sent_total = port_upload_total
+            recv_total = port_download_total
 
             prev = self._port_prev.get(alias)
             sent_delta = recv_delta = 0
@@ -312,6 +328,7 @@ class SagemcomXmoAdapter(RouterAdapter):
             'Device/DeviceInfo',
             "Device/IP/Interfaces/Interface[Alias='IP_DATA']",
             'Device/WiFi/SSIDs',
+            'Device/WiFi/Radios/Radio',
         ])
 
         info = self._client._extract_result(resp, 0) or {}
@@ -326,9 +343,15 @@ class SagemcomXmoAdapter(RouterAdapter):
         if isinstance(ssids_raw, dict):
             ssids_raw = [ssids_raw]
 
+        radios_raw = self._client._extract_result(resp, 3) or []
+        if isinstance(radios_raw, dict):
+            radios_raw = [radios_raw]
+
         wan_ipv4_addresses = wan_interface.get('IPv4Addresses') or []
         wan_ip = wan_ipv4_addresses[0].get('IPAddress', '') if wan_ipv4_addresses else ''
         wan_mode = 'PPPoE' if 'PPP' in (wan_interface.get('LowerLayers') or '') else ''
+
+        radios = [self._to_wifi_radio_info(r) for r in radios_raw if isinstance(r, dict)]
 
         return RouterInfo(
             model=_str_field(info, 'ModelName'),
@@ -343,6 +366,73 @@ class SagemcomXmoAdapter(RouterAdapter):
             # typically broadcast as a separate XMO object per radio band
             # (2.4GHz/5GHz), so the same name appears more than once here.
             ssids=list(dict.fromkeys(s['SSID'] for s in ssids_raw if isinstance(s, dict) and s.get('SSID'))),
+            radios=radios,
+        )
+
+    async def get_wan_stats(self) -> Optional[WanStats]:
+        """Household-total WAN traffic delta since the last call.
+
+        Reads `Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats` — this
+        xpath is UNVERIFIED against a live router (marked ⬜ in
+        docs/router/sagemcom-xmo-api.md, a guess by analogy to the confirmed
+        `Device/Ethernet/Interfaces/Interface[...]/Stats` shape, not an
+        observed field list). Degrades gracefully: if the response doesn't
+        have BytesSent/BytesReceived, logs a warning once (not every poll —
+        this runs on the main 15s cycle) and returns None; poll_cycle just
+        skips persisting a row that cycle rather than raising.
+        """
+        resp = await self._client.get_value("Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats")
+        stats = self._client._extract_result(resp, 0) or {}
+        if isinstance(stats, list) and stats:
+            stats = stats[0]
+
+        if not isinstance(stats, dict) or 'BytesSent' not in stats or 'BytesReceived' not in stats:
+            if not self._wan_stats_warned:
+                logger.warning(
+                    "WAN stats xpath (Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats) "
+                    'did not resolve as expected (unverified xpath — see docs/router/'
+                    'sagemcom-xmo-api.md) — household bandwidth tracking is disabled'
+                )
+                self._wan_stats_warned = True
+            return None
+
+        sent_total = _int_field(stats, 'BytesSent')
+        recv_total = _int_field(stats, 'BytesReceived')
+        # Reuse TrafficDeltaCalculator purely as a delta/throughput
+        # calculator (same counter-reset guard as every other traffic
+        # source) rather than duplicating that math a third time — the
+        # resulting TrafficSample's key/granularity/port_alias fields are
+        # discarded, only the computed deltas/throughput are kept. A
+        # household total has no device/port key of its own, so it's never
+        # persisted as a TrafficSample (see WanStats' docstring).
+        sample = self._device_delta.compute(
+            key='__WAN__', sent_now=sent_total, recv_now=recv_total,
+            granularity=TrafficGranularity.PER_DEVICE, poll_interval_s=self._poll_interval_s,
+        )
+        return WanStats(
+            timestamp=sample.timestamp,
+            bytes_sent_delta=sample.bytes_sent_delta,
+            bytes_recv_delta=sample.bytes_recv_delta,
+            throughput_up_kbps=sample.throughput_up_kbps,
+            throughput_dn_kbps=sample.throughput_dn_kbps,
+        )
+
+    def _to_wifi_radio_info(self, radio: dict) -> WifiRadioInfo:
+        """Field names here are a best-guess against standard TR-181 WiFi
+        Radio object conventions (Channel/TransmitPower/OperatingStandards)
+        — the xpath itself is confirmed live (docs/router/sagemcom-xmo-api.md
+        marks it ✅), but no field-level capture was taken, unlike the
+        Stats sub-paths on the same object. Band is inferred from the
+        radio's own Alias (wl0=5GHz, wl1=2.4GHz, confirmed via the sibling
+        Stats rows) since OperatingFrequencyBand isn't confirmed either.
+        """
+        alias = _str_field(radio, 'Alias')
+        band = '5GHz' if alias == 'wl0' else '2.4GHz' if alias == 'wl1' else _str_field(radio, 'OperatingFrequencyBand')
+        return WifiRadioInfo(
+            band=band,
+            channel=_int_field(radio, 'Channel'),
+            tx_power_dbm=_int_field(radio, 'TransmitPower'),
+            standard=_str_field(radio, 'OperatingStandards'),
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -393,6 +483,10 @@ class SagemcomXmoAdapter(RouterAdapter):
             # carries no real signal unless an admin hand-edited it in the
             # router's own UI.
             device_type=host.get('DetectedDeviceType', ''),
+            # Which AP this client is on (private vs. guest) — stamped onto
+            # the client dict by _get_associated_devices(); blank for wired
+            # devices, which have no AssociatedDevices entry at all.
+            ap_alias=client.get('_ap_alias', '') if client else '',
         )
 
     async def _get_hosts(self) -> List[dict]:
@@ -438,7 +532,7 @@ class SagemcomXmoAdapter(RouterAdapter):
         resp = await self._client.post(actions)
 
         by_mac: dict[str, dict] = {}
-        for i in range(len(_ACCESS_POINT_ALIASES)):
+        for i, alias in enumerate(_ACCESS_POINT_ALIASES):
             clients = self._client._extract_result(resp, i) or []
             if isinstance(clients, dict):
                 clients = [clients]
@@ -448,6 +542,11 @@ class SagemcomXmoAdapter(RouterAdapter):
                 mac = _norm_mac(client.get('MACAddress', ''))
                 if not mac:
                     continue
+                # Stamp which AP this entry came from — the loop variable
+                # is otherwise discarded at merge time, which used to mean
+                # DeviceSnapshot had no way to say which network (private
+                # vs. guest) a device is actually on. See ap_alias.
+                client['_ap_alias'] = alias
                 # A device can have a stale entry on more than one AP object
                 # (e.g. mid-roam between bands) — prefer whichever the router
                 # currently reports as Active.
@@ -456,7 +555,13 @@ class SagemcomXmoAdapter(RouterAdapter):
         return by_mac
 
     async def _get_port_traffic_samples(self) -> List[TrafficSample]:
-        """Return one PER_PORT TrafficSample per active port (based on Stats/BytesSent)."""
+        """Return one PER_PORT TrafficSample per active port (based on Stats/BytesSent).
+
+        Same Sent/Received swap as get_port_stats() — see that method's
+        comment for the reasoning (mirrors the confirmed WiFi
+        AssociatedDevices direction fix, not independently re-verified
+        against live wired traffic).
+        """
         actions = [
             {
                 'id': i,
@@ -472,12 +577,12 @@ class SagemcomXmoAdapter(RouterAdapter):
             stats = self._client._extract_result(resp, i) or {}
             if isinstance(stats, list) and stats:
                 stats = stats[0]
-            sent = _int_field(stats, 'BytesSent')
-            recv = _int_field(stats, 'BytesReceived')
+            port_download = _int_field(stats, 'BytesSent')
+            port_upload = _int_field(stats, 'BytesReceived')
             sample = self._device_delta.compute(
                 key=alias,
-                sent_now=sent,
-                recv_now=recv,
+                sent_now=port_upload,
+                recv_now=port_download,
                 granularity=TrafficGranularity.PER_PORT,
                 poll_interval_s=self._poll_interval_s,
                 port_alias=alias,
