@@ -107,11 +107,15 @@ reflected in each item below.
 
 This is a menu, not a queue — recommend picking a small number of items (2-4)
 to scope as actual implementation plans, rather than attempting all of this
-at once. The original "quick win" cluster (**#10 device-type thresholds**,
-**#11 active/passive OS cross-check**, plus **#12 default-accounts NSE**) has
-now shipped. With those done, the strongest remaining candidates are:
-**#4/#5 (rogue AP / rogue DHCP)** — the highest-impact *new* capability for a
-home security tool specifically, contingent on confirming monitor-mode
-hardware support; **#15 (cross-alert correlation)** — turns the isolated
-alerts these new detectors produce into correlated incidents; and wiring the
-**Suricata** service that's already in the Compose file but has no parser yet.
+at once. Both "quick win" clusters have now shipped: **#10/#11/#12** (device-
+type thresholds, active/passive OS cross-check, default-accounts NSE) and
+**#5/#6/#7/#8/#9** (rogue DHCP, WAN bandwidth, AP-alias visibility, WiFi
+channel visibility, wired-PHY direction fix) — see each item's status note
+above. **#4 (rogue AP)** was evaluated and skipped: it needs a monitor-mode-
+capable WiFi radio this deployment doesn't have. With all of Section B/C
+done, the strongest remaining candidates are: **#15 (cross-alert
+correlation)** — turns the isolated alerts these new detectors produce into
+correlated incidents; wiring the **Suricata** service that's already in the
+Compose file but has no parser yet; and live-verifying the two best-guess
+integrations from this round (**#6** WAN stats' `IP_DATA/Stats` xpath and
+**#8** WiFi radios' TR-181 field names) against the real router.
