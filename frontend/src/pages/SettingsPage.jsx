@@ -7,6 +7,7 @@ import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
+import { NotificationsSection } from '../components/settings/NotificationsSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
 import heimdallLogo from '../assets/heimdall-icon.png'
@@ -86,6 +87,8 @@ export function SettingsPage() {
       </div>
 
       <AutoBlockSection />
+
+      <NotificationsSection />
 
       <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-4">
         <div className="flex items-center gap-3">

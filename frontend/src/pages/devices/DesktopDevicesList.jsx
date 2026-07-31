@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from '@tanstack/react-table'
 import { StatusDot } from '../../components/StatusDot'
@@ -10,6 +10,7 @@ import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
 import { BlockButton } from '../../components/BlockButton'
 import { UnblockButton } from '../../components/UnblockButton'
 import { isDeviceOnline } from '../../lib/deviceFilters'
+import { groupByAp, isGuestApGroup } from '../../lib/apGroups'
 
 const FILTER_GROUPS = [
   { key: 'connectivity', options: [['all', 'ALL'], ['online', 'ONLINE'], ['offline', 'OFFLINE']] },
@@ -148,6 +149,7 @@ const columnHelperDefs = [
 export function DesktopDevicesList({ devices, totalCount, isLoading, filters, setFilters }) {
   const navigate = useNavigate()
   const [sorting, setSorting] = useState([])
+  const [apGrouping, setApGrouping] = useState(false)
   const columns = useMemo(() => columnHelperDefs, [])
 
   const table = useReactTable({
@@ -158,6 +160,12 @@ export function DesktopDevicesList({ devices, totalCount, isLoading, filters, se
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   })
+
+  const rows = table.getRowModel().rows
+  // Grouping is purely a presentation split of the already-sorted/filtered
+  // rows — sorting still applies within each group, it just doesn't reorder
+  // rows across groups.
+  const rowGroups = apGrouping ? groupByAp(rows, (row) => row.original) : null
 
   return (
     <div className="p-4">
@@ -177,6 +185,18 @@ export function DesktopDevicesList({ devices, totalCount, isLoading, filters, se
             onChange={(val) => setFilters((f) => ({ ...f, [group.key]: val }))}
           />
         ))}
+        <button
+          type="button"
+          onClick={() => setApGrouping((g) => !g)}
+          title="Group devices by which access point they're on"
+          className={`border px-2 py-1 text-[9px] tracking-wider transition-colors ${
+            apGrouping
+              ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
+              : 'border-border text-text-muted hover:text-text-secondary'
+          }`}
+        >
+          GROUP BY AP
+        </button>
         <span className="ml-auto text-[9px] tracking-wide text-text-muted">
           {devices.length} / {totalCount} DEVICES
         </span>
@@ -215,19 +235,48 @@ export function DesktopDevicesList({ devices, totalCount, isLoading, filters, se
                 </td>
               </tr>
             )}
-            {table.getRowModel().rows.map((row) => (
-              <tr
-                key={row.id}
-                onClick={() => navigate(`/devices/${row.original.mac_address}`)}
-                className="cursor-pointer border-b border-border/50 last:border-none hover:bg-border/20"
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-3 py-2">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {!apGrouping &&
+              rows.map((row) => (
+                <tr
+                  key={row.id}
+                  onClick={() => navigate(`/devices/${row.original.mac_address}`)}
+                  className="cursor-pointer border-b border-border/50 last:border-none hover:bg-border/20"
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td key={cell.id} className="px-3 py-2">
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            {apGrouping &&
+              rowGroups.map(([label, groupRows]) => (
+                <Fragment key={label}>
+                  <tr className="border-b border-border bg-bg/60">
+                    <td
+                      colSpan={columns.length}
+                      className={`px-3 py-1.5 text-[9px] tracking-[2px] ${
+                        isGuestApGroup(label) ? 'text-accent-amber' : 'text-text-muted'
+                      }`}
+                    >
+                      {label} · {groupRows.length}
+                    </td>
+                  </tr>
+                  {groupRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      onClick={() => navigate(`/devices/${row.original.mac_address}`)}
+                      className="cursor-pointer border-b border-border/50 last:border-none hover:bg-border/20"
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td key={cell.id} className="px-3 py-2">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </Fragment>
+              ))}
           </tbody>
         </table>
       </div>

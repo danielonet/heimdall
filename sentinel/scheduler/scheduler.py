@@ -9,6 +9,7 @@ import asyncio
 import dataclasses
 import logging
 import threading
+import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from typing import Any, Coroutine
@@ -146,6 +147,7 @@ class SentinelScheduler:
         # Health tracking, read synchronously by Flask's /api/health route.
         self._last_poll_at: datetime | None = None
         self._last_poll_error: str | None = None
+        self._last_poll_duration_s: float | None = None
         self._last_nmap_scan_at: datetime | None = None
         self._last_canary_check_at: datetime | None = None
         self._last_zeek_dns_check_at: datetime | None = None
@@ -309,6 +311,7 @@ class SentinelScheduler:
         self._loop.run_forever()
 
     async def _poll_job(self) -> None:
+        start = time.monotonic()
         try:
             adapter = await self._ensure_adapter()
             if self._rule_engine is None:
@@ -319,6 +322,7 @@ class SentinelScheduler:
             )
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
+            self._last_poll_duration_s = time.monotonic() - start
         except Exception as exc:
             logger.exception('Poll cycle failed')
             self._last_poll_error = str(exc)
@@ -1002,6 +1006,22 @@ class SentinelScheduler:
             'scheduler_running': self._thread is not None and self._thread.is_alive(),
             'last_poll_at': self._last_poll_at.isoformat() if self._last_poll_at else None,
             'last_poll_error': self._last_poll_error,
+        }
+
+    def metrics_snapshot(self) -> dict[str, Any]:
+        """Poll-latency figures for /api/metrics — see health_snapshot for
+        the equivalent JSON status view. last_poll_duration_s only updates on
+        a *successful* poll (same as last_poll_at), so a poll cycle that's
+        currently failing repeatedly still reports its last good duration,
+        not a stale/misleading partial-failure timing.
+        """
+        return {
+            'scheduler_running': self._thread is not None and self._thread.is_alive(),
+            'last_poll_duration_s': self._last_poll_duration_s,
+            'last_poll_age_s': (
+                (datetime.now(timezone.utc) - self._last_poll_at).total_seconds()
+                if self._last_poll_at else None
+            ),
         }
 
     def security_services_snapshot(self) -> dict[str, Any]:

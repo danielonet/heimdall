@@ -67,6 +67,78 @@ class TestListAlerts:
         assert body['per_page'] == 2
 
 
+class TestExportAlerts:
+    def test_empty_export_has_header_row_only(self, client):
+        resp = client.get('/api/alerts/export')
+        assert resp.status_code == 200
+        assert resp.content_type.startswith('text/csv')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        assert len(lines) == 1
+        assert lines[0] == 'id,created_at,severity,alert_type,device_mac,hostname,description,acknowledged,resolved'
+
+    def test_includes_seeded_alert_fields(self, client):
+        alert_id = _seed_alert(
+            device_mac='aa:bb:cc:dd:ee:ff', alert_type='ARP_SPOOF', severity='CRITICAL',
+            description='spoofing suspected',
+        )
+        resp = client.get('/api/alerts/export')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        assert len(lines) == 2
+        row = lines[1].split(',')
+        assert row[0] == str(alert_id)
+        assert row[2] == 'CRITICAL'
+        assert row[3] == 'ARP_SPOOF'
+        assert row[4] == 'aa:bb:cc:dd:ee:ff'
+
+    def test_joins_device_hostname(self, client):
+        import asyncio
+        from sentinel.db.models import Device
+        from sentinel.db.session import get_session
+
+        async def _seed_device():
+            async with get_session() as session:
+                session.add(Device(mac_address='aa:bb:cc:dd:ee:ff', hostname='daniel-laptop'))
+        asyncio.run(_seed_device())
+        _seed_alert(device_mac='aa:bb:cc:dd:ee:ff')
+
+        resp = client.get('/api/alerts/export')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        assert 'daniel-laptop' in lines[1]
+
+    def test_no_matching_device_leaves_hostname_blank(self, client):
+        _seed_alert(device_mac='aa:bb:cc:dd:ee:ff')
+        resp = client.get('/api/alerts/export')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        row = lines[1].split(',')
+        assert row[5] == ''
+
+    def test_filter_by_severity(self, client):
+        _seed_alert(severity='CRITICAL')
+        _seed_alert(severity='WARNING')
+        resp = client.get('/api/alerts/export?severity=WARNING')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        assert len(lines) == 2
+        assert 'WARNING' in lines[1]
+
+    def test_filter_by_acknowledged(self, client):
+        _seed_alert(acknowledged=True)
+        _seed_alert(acknowledged=False)
+        resp = client.get('/api/alerts/export?acknowledged=true')
+        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+        assert len(lines) == 2
+        assert lines[1].split(',')[-2] == 'True'
+
+    def test_content_disposition_offers_a_download(self, client):
+        resp = client.get('/api/alerts/export')
+        assert 'attachment' in resp.headers.get('Content-Disposition', '')
+        assert '.csv' in resp.headers.get('Content-Disposition', '')
+
+    def test_no_auth_required(self, client):
+        """Same posture as GET /alerts and /alerts/grouped — read-only."""
+        resp = client.get('/api/alerts/export')
+        assert resp.status_code == 200
+
+
 class TestGetAlert:
     def test_not_found(self, client):
         resp = client.get('/api/alerts/999999')

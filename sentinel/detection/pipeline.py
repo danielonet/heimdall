@@ -44,6 +44,8 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
     """
     from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
     from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
+
+    from sentinel.detection.detectors.ap_crossing import AccessPointCrossingDetector
     from sentinel.detection.detectors.high_upload import HighUploadDetector
     from sentinel.detection.detectors.new_device import NewDeviceDetector
     from sentinel.detection.detectors.signal_anomaly import SignalAnomalyDetector
@@ -55,4 +57,5 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
         VendorMismatchDetector(),
         SignalAnomalyDetector(DeviceRepository(), SettingsRepository()),
         AnomalousVolumeDetector(anomaly_engine, DeviceRepository(), SettingsRepository()),
+        AccessPointCrossingDetector(DeviceRepository()),
     ])

@@ -54,6 +54,16 @@ def _request(method: str, path: str, token: str | None = None, body: dict | None
         return exc.code, json.loads(exc.read())
 
 
+def _request_text(method: str, path: str) -> tuple[int, str]:
+    """Like _request but for the plain-text /api/metrics response."""
+    req = urllib.request.Request(f'{BASE_URL}{path}', method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
 @pytest.fixture(scope='module')
 def live_server():
     env = os.environ.copy()
@@ -121,6 +131,25 @@ class TestHealthWithScheduler:
         status, body = _request('GET', '/api/health')
         assert status == 200
         assert body['status'] == 'ok'
+
+
+class TestMetricsWithScheduler:
+    def test_reports_a_real_poll_duration_once_scheduler_has_polled(self, live_server):
+        """live_server's _wait_for_first_poll already waited for a real poll
+        cycle to complete — /api/metrics should report a real, positive
+        duration for it, not the None/omitted-line case the non-scheduler
+        unit tests cover (see tests/test_api/test_metrics.py)."""
+        status, text = _request_text('GET', '/api/metrics')
+        assert status == 200
+        assert 'heimdall_scheduler_up 1' in text
+        assert 'heimdall_poll_last_duration_seconds' in text
+        assert 'heimdall_poll_last_success_age_seconds' in text
+
+        duration_line = next(
+            line for line in text.splitlines() if line.startswith('heimdall_poll_last_duration_seconds ')
+        )
+        duration = float(duration_line.split()[-1])
+        assert duration >= 0
 
 
 class TestRouterInfoWithScheduler:

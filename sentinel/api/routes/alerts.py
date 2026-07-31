@@ -1,9 +1,11 @@
-"""Alert routes: list, detail, acknowledge, delete."""
+"""Alert routes: list, detail, acknowledge, delete, export."""
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import case, func, select, update
 
@@ -14,6 +16,7 @@ from sentinel.db.session import get_session
 bp = Blueprint('alerts', __name__)
 
 MAX_PER_PAGE = 200
+MAX_EXPORT_ROWS = 50_000
 
 # Ordinal so func.max() picks the worst severity present in a group — plain
 # alphabetical order (CRITICAL < INFO < WARNING) would pick the wrong one.
@@ -135,6 +138,71 @@ async def list_alerts_grouped():
     ]
 
     return jsonify(groups=groups)
+
+
+@bp.route('/export', methods=['GET'])
+async def export_alerts():
+    """CSV export of alerts matching the same filters list_alerts() accepts
+    (severity, device_mac, acknowledged, resolved, from, to) — no pagination,
+    up to MAX_EXPORT_ROWS, for record-keeping/audit trail purposes (e.g.
+    attaching to a pentest report) rather than incremental UI browsing.
+    """
+    query = select(Alert, Device.hostname).outerjoin(Device, Device.mac_address == Alert.device_mac)
+
+    severity = request.args.get('severity')
+    if severity:
+        query = query.where(Alert.severity == severity)
+
+    device_mac = request.args.get('device_mac')
+    if device_mac:
+        query = query.where(Alert.device_mac == device_mac)
+
+    acknowledged = request.args.get('acknowledged')
+    if acknowledged is not None:
+        query = query.where(Alert.acknowledged.is_(acknowledged.lower() in ('true', '1')))
+
+    resolved = request.args.get('resolved')
+    if resolved is not None:
+        query = query.where(Alert.resolved.is_(resolved.lower() in ('true', '1')))
+
+    from_ts = _parse_timestamp(request.args.get('from'))
+    if from_ts:
+        query = query.where(Alert.created_at >= from_ts)
+
+    to_ts = _parse_timestamp(request.args.get('to'))
+    if to_ts:
+        query = query.where(Alert.created_at <= to_ts)
+
+    query = query.order_by(Alert.created_at.desc()).limit(MAX_EXPORT_ROWS)
+
+    async with get_session() as session:
+        rows = (await session.execute(query)).all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        'id', 'created_at', 'severity', 'alert_type', 'device_mac', 'hostname',
+        'description', 'acknowledged', 'resolved',
+    ])
+    for alert, hostname in rows:
+        writer.writerow([
+            alert.id,
+            alert.created_at.isoformat() if alert.created_at else '',
+            alert.severity,
+            alert.alert_type,
+            alert.device_mac or '',
+            hostname or '',
+            alert.description or '',
+            alert.acknowledged,
+            alert.resolved,
+        ])
+
+    filename = f'heimdall-alerts-{datetime.now().strftime("%Y%m%d-%H%M%S")}.csv'
+    return Response(
+        buffer.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 @bp.route('/bulk', methods=['PATCH'])

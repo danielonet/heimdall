@@ -29,8 +29,8 @@ reflected in each item below.
 - A `suricata` service now exists in `docker-compose.yml` (with a `suricata-logs` volume) but has **no Python integration** yet — the only reference in code is a comment in `scheduler.py` listing it among services that get a fabricated health-status row. Wiring a Suricata EVE-JSON log parser (same pattern as the Zeek and OpenCanary ingestion) is an unlisted follow-up.
 
 **Implementation status of the items below** (updated after re-surveying the code):
-- ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #5 (rogue DHCP), #6 (WAN bandwidth), #7 (AP-alias visibility, descoped), #8 (WiFi channel visibility), #9 (wired-PHY direction fix), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE), #13 (time-limited auto-block), #14 (quarantine tier), #15 (cross-alert correlation), #16 (security digest).
-- ⬜ Not yet built: #4, #17, #18, #19.
+- ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #5 (rogue DHCP), #6 (WAN bandwidth), #7 (AP-alias visibility, descoped), #8 (WiFi channel visibility), #9 (wired-PHY direction fix), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE), #13 (time-limited auto-block), #14 (quarantine tier), #15 (cross-alert correlation), #16 (security digest), #17 (`/metrics` endpoint), #18 (CSV alert export), #19 (AP grouping + trust-crossing detector).
+- ⬜ Not yet built: #4.
 - ◐ Partial: #20 (dependency cleanup — `pyclamd`/`pandas` now in use; `pyshark`/`dpkt` still have no callers).
 
 ---
@@ -89,11 +89,11 @@ reflected in each item below.
 
 ## E. Observability / frontend
 
-17. **Prometheus-style `/metrics` endpoint.** The `/api/debug/memory` endpoint already exposes internal state cleanly; a lightweight `/metrics` extension (device counts, alert rates, poll latency) would let the user point Grafana/Prometheus at Heimdall if they already run home-lab monitoring.
+17. **Prometheus-style `/metrics` endpoint.** ✅ *Done — `GET /api/metrics`, plain-text exposition format, no new dependencies (hand-rolled, not `prometheus_client`).* Exposes device counts (total/online/blocked/quarantined/trusted), alert rates (total/unacknowledged/last-1h/last-24h, all by severity), and poll latency (`heimdall_poll_last_duration_seconds`, a new real timing added to `_poll_job` via `time.monotonic()` — previously only `last_poll_at`/`last_poll_error` were tracked, no duration) plus `heimdall_scheduler_up`. Deliberately unauthenticated, same posture as `/api/health` — a standard Prometheus static scrape config can't refresh this app's short-lived JWT access tokens, and every metric here is an aggregate count, never a per-device identifying detail.
 
-18. **Alert export (CSV/PDF).** Useful for the user's own pentest record-keeping (matches what they've been doing with the Kali VM this whole engagement) or general audit trail. CSV is dependency-free; PDF would need a small new library (e.g. `reportlab`).
+18. **Alert export (CSV/PDF).** ✅ *Done — CSV only (PDF explicitly scoped out to avoid the new `reportlab` dependency).* New `GET /api/alerts/export`, reusing the same filters as `GET /api/alerts` (severity, device_mac, acknowledged, resolved, from, to), capped at 50,000 rows, joined against `devices` for hostname context. New "EXPORT CSV" link on the Alerts page mirrors whatever severity/ack/date-range filters are currently active in the UI.
 
-19. **Per-device AP/band visualization.** You already know which AP alias (`PRIV0`/`VID1`/`GUEST2G`/`GUEST5G`/`AP_BACKHAUL`) each device is on — a simple grouped view (or a device switching bands unexpectedly as a signal) would use data that's already collected but not really surfaced today.
+19. **Per-device AP/band visualization.** ✅ *Done — both halves shipped.* A "GROUP BY AP" toggle on the Devices page (desktop table + mobile cards, shared grouping/ordering logic in `frontend/src/lib/apGroups.js`) buckets devices by AP alias, guest groups visually distinguished. New `AccessPointCrossingDetector` (`sentinel/detection/detectors/ap_crossing.py`) is the "signal" half: it deliberately does *not* fire on ordinary band-hopping (`PRIV0`<->`VID1`, `GUEST2G`<->`GUEST5G` — normal WiFi roaming/steering, would be pure noise) — only a device crossing the guest/private trust boundary raises `AP_TRUST_CROSSING` (WARNING moving private->guest, CRITICAL moving guest->private, since that direction implies unexplained access escalation).
 
 ---
 
@@ -112,12 +112,15 @@ type thresholds, active/passive OS cross-check, default-accounts NSE),
 **#5/#6/#7/#8/#9** (rogue DHCP, WAN bandwidth, AP-alias visibility, WiFi
 channel visibility, wired-PHY direction fix), and **#13/#14/#15/#16**
 (time-limited auto-block, quarantine tier, cross-alert correlation, security
-digest) — see each item's status note above. **#4 (rogue AP)** was evaluated
-and skipped: it needs a monitor-mode-capable WiFi radio this deployment
-doesn't have. With Sections B/C/D all done, the strongest remaining
-candidates are: wiring the **Suricata** service that's already in the
-Compose file but has no parser yet; live-verifying the best-guess
-integrations from earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath,
-**#8** WiFi radios' TR-181 field names, and now **#14**'s quarantine `Rule`
-object field names) against the real router; and **#17-19** (metrics
-endpoint, alert export, AP/band visualization) for observability polish.
+digest), **#17/#18** (metrics endpoint, CSV alert export), and **#19** (AP
+grouping + trust-crossing detector) — see each item's status note above.
+**#4 (rogue AP)** was evaluated and skipped: it needs a monitor-mode-capable
+WiFi radio this deployment doesn't have — the only item left unbuilt.
+Remaining follow-up isn't new features so much as hardening what's already
+shipped: wiring the **Suricata** service that's already in the Compose file
+but has no parser yet; live-verifying the best-guess integrations from
+earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath, **#8** WiFi radios'
+TR-181 field names, and **#14**'s quarantine `Rule` object field names)
+against the real router; and, if Grafana ever gets pointed at **#17**'s new
+`/metrics` endpoint, adding a Prometheus scrape config + a starter dashboard
+JSON to `docs/` so that setup is copy-paste rather than built from scratch.

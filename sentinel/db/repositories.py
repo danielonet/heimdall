@@ -59,6 +59,19 @@ class DeviceRepository:
             result = await session.execute(select(Device.mac_address).limit(1))
             return result.first() is None
 
+    async def get_ap_alias(self, mac_address: str) -> str | None:
+        """The AP alias (PRIV0/VID1/GUEST2G/GUEST5G/AP_BACKHAUL) this MAC was
+        associated with as of its last persisted poll, or None if it has no
+        row yet or was last seen wired/unassociated. Used by
+        AccessPointCrossingDetector to compare against the *incoming* poll's
+        ap_alias before _upsert_devices overwrites it — must be called before
+        that upsert runs, same ordering requirement as has_connected_before
+        (see NewDeviceDetector's docstring).
+        """
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            return device.ap_alias if device else None
+
 
 class TrustedMacRepository:
     """Read/write access to the persistent trusted_macs registry.

@@ -15,6 +15,22 @@ function rangeStartIso(range) {
   return null // 'all'
 }
 
+// Mirrors the currently-active severity/ack/range filters into a CSV export
+// URL — the export always grabs every matching row (no pagination), so page
+// isn't part of this. GET /api/alerts/export isn't JWT-protected (same
+// posture as the other alert GET routes), so a plain navigation triggers the
+// download without needing to attach an auth header.
+function buildExportUrl({ severity, ackFilter, range }) {
+  const params = new URLSearchParams()
+  if (severity !== 'all') params.set('severity', severity)
+  if (ackFilter === 'open') params.set('acknowledged', 'false')
+  if (ackFilter === 'acked') params.set('acknowledged', 'true')
+  const from = rangeStartIso(range)
+  if (from) params.set('from', from)
+  const qs = params.toString()
+  return `/api/alerts/export${qs ? `?${qs}` : ''}`
+}
+
 export function AlertsPage() {
   const mode = useLayoutMode()
   // Grouped is the default view — a large detector flood (hundreds/thousands
@@ -70,7 +86,7 @@ export function AlertsPage() {
   }
 
   const ViewToggle = (
-    <div className="flex gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {[['grouped', 'GROUPED'], ['list', 'LIST']].map(([val, text]) => (
         <button
           key={val}
@@ -85,6 +101,13 @@ export function AlertsPage() {
           {text}
         </button>
       ))}
+      <a
+        href={buildExportUrl({ severity, ackFilter, range })}
+        title="Download the alerts matching the current filters as CSV"
+        className="ml-auto border border-border px-2 py-1 text-[9px] tracking-wider text-text-muted transition-colors hover:text-text-secondary"
+      >
+        EXPORT CSV
+      </a>
     </div>
   )
 
