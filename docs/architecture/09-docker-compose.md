@@ -22,6 +22,7 @@ services:
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - SNIFF_IFACE=eth0        # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
     secrets:
@@ -30,6 +31,7 @@ services:
       - otx_api_key
       - db_pass
       - admin_password
+      - smtp_password
     depends_on:
       - postgres
       - redis
@@ -114,6 +116,7 @@ secrets:
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
+  smtp_password:   { file: ./secrets/smtp_password.txt }  # optional — blank file is valid (unauthenticated relay)
 
 volumes:
   pgdata:
@@ -139,6 +142,7 @@ openssl rand -base64 64 > secrets/jwt_secret.txt
 echo "your_otx_api_key"           > secrets/otx_api_key.txt
 openssl rand -base64 32            > secrets/db_pass.txt
 openssl rand -hex 32               > secrets/admin_password.txt   # dashboard login
+touch secrets/smtp_password.txt    # optional — leave empty for an unauthenticated SMTP relay
 chmod 600 secrets/*.txt
 
 # 3. Configure LAN interface (find yours with: ip link show)

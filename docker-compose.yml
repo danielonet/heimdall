@@ -18,6 +18,7 @@ services:
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
     secrets:
@@ -26,6 +27,7 @@ services:
       - otx_api_key
       - db_pass
       - admin_password
+      - smtp_password
     depends_on:
       - postgres
       - redis
@@ -141,6 +143,10 @@ secrets:
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
+  # Optional — blank is a valid value (unauthenticated/local relay). Must
+  # still exist as a file for Compose to mount it; scripts/install.sh
+  # scaffolds it empty. See sentinel/config.py's SMTP_PASSWORD_FILE.
+  smtp_password:   { file: ./secrets/smtp_password.txt }
 
 volumes:
   pgdata:

@@ -231,6 +231,18 @@ else
     log_skip "secrets/otx_api_key.txt"
 fi
 
+# SMTP password: optional, blank is a valid final value (unauthenticated/
+# local relay) — unlike the placeholders above, an empty file here is a
+# real working state, not a "fill this in" prompt. Compose still requires
+# the file to exist to mount it as a secret at all.
+if [ ! -f "${SECRETS_DIR}/smtp_password.txt" ]; then
+    touch "${SECRETS_DIR}/smtp_password.txt"
+    chmod 600 "${SECRETS_DIR}/smtp_password.txt"
+    log_success "Created empty secrets/smtp_password.txt (set it from the Notifications page, or edit directly, if your SMTP relay needs auth)"
+else
+    log_skip "secrets/smtp_password.txt"
+fi
+
 chown -R "$REAL_USER:$REAL_USER" "$SECRETS_DIR"
 
 # ── 7. .env scaffold ──────────────────────────────────────────────────────────
