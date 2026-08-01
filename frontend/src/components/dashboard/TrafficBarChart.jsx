@@ -14,14 +14,14 @@ export function TrafficBarChart({ devices }) {
   return (
     <ResponsiveContainer width="100%" height={180}>
       <BarChart data={data} layout="vertical" margin={{ left: 8, right: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1a2535" horizontal={false} />
-        <XAxis type="number" tick={{ fontSize: 9, fill: '#5a7090' }} />
-        <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 9, fill: '#5a7090' }} />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
+        <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--color-text-muted)' }} />
+        <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 9, fill: 'var(--color-text-muted)' }} />
         <Tooltip
-          contentStyle={{ background: '#0a0f18', border: '1px solid rgba(0,220,140,0.2)', fontSize: 11 }}
+          contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', fontSize: 11 }}
           formatter={(value) => [`${value} kbps`, 'Upload']}
         />
-        <Bar dataKey="up" fill="#00aaff" />
+        <Bar dataKey="up" fill="var(--color-accent-blue)" />
       </BarChart>
     </ResponsiveContainer>
   )

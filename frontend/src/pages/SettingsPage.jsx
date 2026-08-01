@@ -7,7 +7,6 @@ import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
-import { NotificationsSection } from '../components/settings/NotificationsSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
 import heimdallLogo from '../assets/heimdall-icon.png'
@@ -35,10 +34,11 @@ export function SettingsPage() {
   const navigate = useNavigate()
 
   // Keyed off layout mode, not viewport — see PortsPage/ThreatsPage.
-  const gridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-3 gap-4'
+  const gridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-4 gap-3'
   // items-stretch (the grid default) so paired tiles match each other's
   // height instead of each hugging its own content.
-  const sectionGridClass = mode === 'mobile' ? 'space-y-4' : 'grid grid-cols-2 gap-4'
+  const threeUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-3 gap-3'
+  const twoUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-2 gap-3'
 
   async function handleLogout() {
     await logout()
@@ -46,9 +46,9 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="space-y-4 p-4">
-      <div className="border border-border bg-surface p-4">
-        <div className="mb-3 text-[8px] tracking-[3px] text-text-muted">ROUTER</div>
+    <div className="space-y-3 p-3">
+      <div className="border border-border bg-surface p-3">
+        <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">ROUTER</div>
         {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}
         {isError && <div className="text-[10px] text-accent-red">{error.message}</div>}
         {router && (
@@ -63,34 +63,35 @@ export function SettingsPage() {
             </Field>
             <Field label="WAN MODE">{router.wan_mode || '—'}</Field>
             <Field label="UPTIME">{formatUptime(router.uptime_seconds)}</Field>
-            <Field label="SSIDs">{(router.ssids || []).join(', ') || '—'}</Field>
-            <Field label="WIFI RADIOS">
-              {(router.radios || []).length > 0
-                ? router.radios
-                    .map((r) => `${r.band} ch${r.channel}${r.tx_power_dbm ? ` ${r.tx_power_dbm}dBm` : ''}${r.standard ? ` (${r.standard})` : ''}`)
-                    .join(', ')
-                : '—'}
-            </Field>
+            <div className={mode === 'mobile' ? '' : 'col-span-2'}>
+              <Field label="SSIDs">{(router.ssids || []).join(', ') || '—'}</Field>
+            </div>
+            <div className={mode === 'mobile' ? '' : 'col-span-2'}>
+              <Field label="WIFI RADIOS">
+                {(router.radios || []).length > 0
+                  ? router.radios
+                      .map((r) => `${r.band} ch${r.channel}${r.tx_power_dbm ? ` ${r.tx_power_dbm}dBm` : ''}${r.standard ? ` (${r.standard})` : ''}`)
+                      .join(', ')
+                  : '—'}
+              </Field>
+            </div>
           </div>
         )}
         <RouterCredentialsForm />
       </div>
 
-      <div className={sectionGridClass}>
+      <div className={threeUpClass}>
         <LearningStatusSection />
         <DatabaseSection />
+        <NetworkInterfaceSection />
       </div>
 
-      <div className={sectionGridClass}>
-        <NetworkInterfaceSection />
+      <div className={twoUpClass}>
+        <AutoBlockSection />
         <PurgeDatabaseSection />
       </div>
 
-      <AutoBlockSection />
-
-      <NotificationsSection />
-
-      <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-3">
         <div className="flex items-center gap-3">
           <img src={heimdallLogo} alt="" className="h-6 w-6 flex-shrink-0" />
           <div className="text-[9px] text-text-muted">Sentinel — Heimdall Home Network Monitor</div>

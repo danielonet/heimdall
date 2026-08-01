@@ -2,9 +2,35 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { logout } from '../../lib/api'
 import { useHealth } from '../../hooks/useHealth'
+import { useThemeStore } from '../../store/themeStore'
 import { StatusDot } from '../../components/StatusDot'
 import { CreditsModal } from '../../components/CreditsModal'
 import heimdallLogo from '../../assets/heimdall-icon.png'
+
+const PALETTES = [['amber', 'AMBER'], ['slate', 'SLATE']]
+
+function PaletteToggle() {
+  const palette = useThemeStore((s) => s.palette)
+  const setPalette = useThemeStore((s) => s.setPalette)
+  return (
+    <div className="flex items-center gap-1">
+      {PALETTES.map(([value, text]) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => setPalette(value)}
+          className={`border px-2 py-1 text-[9px] tracking-wider transition-colors ${
+            palette === value
+              ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
+              : 'border-border text-text-muted hover:text-text-secondary'
+          }`}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 const NAV_ITEMS = [
   { to: '/', label: 'DASHBOARD', end: true },
@@ -83,6 +109,7 @@ export function DesktopShell() {
             <StatusDot variant={schedulerOk ? 'green' : 'red'} pulse={schedulerOk} />
             <span className="text-[9px] tracking-wide text-text-muted">XMO</span>
           </div>
+          <PaletteToggle />
           <button
             type="button"
             onClick={handleLogout}

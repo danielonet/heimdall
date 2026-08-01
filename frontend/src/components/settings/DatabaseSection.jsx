@@ -15,12 +15,11 @@ export function DatabaseSection() {
   const mutation = useUpdateSettings()
 
   return (
-    <div className="border border-border bg-surface p-4">
+    <div className="border border-border bg-surface p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">DATABASE</div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        Traffic history, port stats, WAN status changes, and alerts older than the retention window are
-        cleared out nightly, so the database doesn't grow forever. Known devices and trust decisions are
-        never affected by this — only time-series history rolls off.
+      <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
+        Traffic, port stats, WAN changes, and alerts older than the retention window are purged nightly.
+        Known devices and trust decisions are never affected.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}

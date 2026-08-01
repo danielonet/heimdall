@@ -17,11 +17,10 @@ export function NetworkInterfaceSection() {
   const isDirty = data && selected !== data.sniff_iface
 
   return (
-    <div className="border border-border bg-surface p-4">
+    <div className="border border-border bg-surface p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">NETWORK INTERFACE</div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        The LAN-facing network card ARP spoof watch and passive OS fingerprinting listen on. Changing this
-        takes effect immediately — no restart needed.
+      <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
+        The LAN-facing NIC ARP watch and passive fingerprinting listen on. Applies immediately.
       </p>
 
       {(isLoading || interfacesLoading) && <div className="text-[10px] text-text-muted">Loading…</div>}

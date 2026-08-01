@@ -20,8 +20,8 @@ export function RouterCredentialsForm() {
   }
 
   return (
-    <div className="mt-4 border-t border-border/50 pt-4">
-      <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">ROUTER LOGIN</div>
+    <div className="mt-2 border-t border-border/50 pt-2">
+      <div className="mb-1.5 text-[8px] tracking-[3px] text-text-muted">ROUTER LOGIN</div>
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label htmlFor="router-username" className="mb-1 block text-[9px] tracking-wider text-text-muted">
@@ -56,7 +56,7 @@ export function RouterCredentialsForm() {
           {mutation.isPending ? 'SAVING…' : 'SAVE'}
         </button>
       </div>
-      <p className="mt-2 text-[9px] text-text-muted">Leave password blank to keep the current one. Applies immediately, no restart needed.</p>
+      <p className="mt-1.5 text-[9px] text-text-muted">Leave password blank to keep the current one. Applies immediately.</p>
       {mutation.isError && <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>}
     </div>
   )

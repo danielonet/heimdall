@@ -19,12 +19,11 @@ export function PurgeDatabaseSection() {
   }
 
   return (
-    <div className="border border-accent-red/30 bg-accent-red/5 p-4">
+    <div className="border border-accent-red/30 bg-accent-red/5 p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-accent-red">RESET &amp; RELEARN</div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        Permanently deletes every known device, trust decision, traffic history, alert, and trained anomaly
-        model. The sentinel goes back into LEARNING status and starts accumulating a fresh baseline —
-        every currently-connected device is re-trusted automatically on the next poll. This cannot be undone.
+      <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
+        Deletes every known device, trust decision, traffic history, alert, and trained model. Returns to
+        LEARNING — connected devices are re-trusted automatically. <strong>Cannot be undone.</strong>
       </p>
 
       <button

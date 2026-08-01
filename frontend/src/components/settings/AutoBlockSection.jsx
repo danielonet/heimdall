@@ -13,13 +13,12 @@ export function AutoBlockSection() {
   const isDirty = data && enabled !== data.auto_block_on_threat
 
   return (
-    <div className="border border-border bg-surface p-4">
+    <div className="border border-border bg-surface p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">AUTO-BLOCK ON THREAT</div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        When armed, ARP Watch, Passive Fingerprint, and Nmap Scanner block a device's MAC address
-        at the router firewall the instant they identify an attack (ARP spoofing, an OS-fingerprint
-        mismatch on a known MAC, a newly-opened high-risk port, or an nmap vulnerability finding) —
-        instead of only raising an alert.
+      <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
+        When armed, ARP Watch, Passive Fingerprint, and Nmap Scanner block the offending MAC the instant
+        they detect an attack (spoofing, fingerprint mismatch, a new high-risk port, a vulnerability) —
+        instead of only alerting.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}

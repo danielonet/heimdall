@@ -22,11 +22,11 @@ export function AlertHistogram({ alerts }) {
   return (
     <ResponsiveContainer width="100%" height={120}>
       <BarChart data={buckets}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1a2535" />
-        <XAxis dataKey="hour" tick={{ fontSize: 8, fill: '#5a7090' }} interval={3} />
-        <YAxis tick={{ fontSize: 9, fill: '#5a7090' }} width={24} allowDecimals={false} />
-        <Tooltip contentStyle={{ background: '#0a0f18', border: '1px solid rgba(0,220,140,0.2)', fontSize: 11 }} />
-        <Bar dataKey="count" fill="#00aaff" />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+        <XAxis dataKey="hour" tick={{ fontSize: 8, fill: 'var(--color-text-muted)' }} interval={3} />
+        <YAxis tick={{ fontSize: 9, fill: 'var(--color-text-muted)' }} width={24} allowDecimals={false} />
+        <Tooltip contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', fontSize: 11 }} />
+        <Bar dataKey="count" fill="var(--color-accent-blue)" />
       </BarChart>
     </ResponsiveContainer>
   )

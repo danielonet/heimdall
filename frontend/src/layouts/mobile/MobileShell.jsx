@@ -2,8 +2,11 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { logout } from '../../lib/api'
 import { useHealth } from '../../hooks/useHealth'
 import { useAlerts } from '../../hooks/useAlerts'
+import { useThemeStore } from '../../store/themeStore'
 import { StatusDot } from '../../components/StatusDot'
 import heimdallLogo from '../../assets/heimdall-icon.png'
+
+const PALETTES = [['amber', 'AMBER'], ['slate', 'SLATE']]
 
 const TABS = [
   { to: '/', label: 'OVERVIEW', end: true },
@@ -28,6 +31,8 @@ export function MobileShell() {
   const { data: alertsPage } = useAlerts({ acknowledged: 'false', per_page: '1' })
   const unreadCount = alertsPage?.total ?? 0
   const schedulerOk = health?.scheduler?.scheduler_running && !health?.scheduler?.last_poll_error
+  const palette = useThemeStore((s) => s.palette)
+  const setPalette = useThemeStore((s) => s.setPalette)
 
   async function handleLogout() {
     await logout()
@@ -70,6 +75,22 @@ export function MobileShell() {
             {unreadCount} ALERTS
           </div>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          {PALETTES.map(([value, text]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setPalette(value)}
+              className={`border px-2 py-1 text-[9px] tracking-wider ${
+                palette === value
+                  ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
+                  : 'border-border text-text-muted'
+              }`}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
       </div>
 
       <nav className="sticky top-0 z-10 flex gap-1 overflow-x-auto border-b border-border bg-bg px-4">

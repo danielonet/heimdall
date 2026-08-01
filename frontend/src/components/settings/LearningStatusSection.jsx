@@ -15,8 +15,8 @@ export function LearningStatusSection() {
   const security = health?.security_services
 
   return (
-    <div className="border border-border bg-surface p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <div className="border border-border bg-surface p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="text-[8px] tracking-[3px] text-text-muted">ANOMALY DETECTION</div>
         {!isLoading && data && (
           <Badge variant={data.status === 'ARMED' ? 'success' : 'warning'}>{data.status}</Badge>
@@ -27,27 +27,24 @@ export function LearningStatusSection() {
 
       {!isLoading && data && (
         <>
-          <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
+          <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
             {data.status === 'LEARNING' ? (
               <>
-                The system is still building a traffic baseline — a device that hasn't been observed for a
-                full learning period yet is exempt from ANOMALOUS_VOLUME alerts, since there's not enough
-                history to tell normal from anomalous. This is expected right after a fresh install or a
-                database purge, and clears automatically once the window below has elapsed.
+                Building a traffic baseline — devices are exempt from ANOMALOUS_VOLUME alerts until they
+                clear the window below. Expected after a fresh install or purge.
               </>
             ) : (
-              <>Baseline established{data.baseline_established_at && <> — armed since <TimeAgo iso={data.baseline_established_at} /></>}. ML anomaly detection is active for devices that have cleared the learning window.</>
+              <>Baseline established{data.baseline_established_at && <> — armed since <TimeAgo iso={data.baseline_established_at} /></>}. Anomaly detection is active past the learning window.</>
             )}
           </p>
 
           {data.status === 'LEARNING' && (
-            <div className="mb-3 border border-accent-amber/30 bg-accent-amber/5 p-2.5 text-[9px] leading-relaxed text-accent-amber">
-              Other defenses stay fully active while learning — new-device detection, ARP spoofing watch,
-              OpenCanary honeypot monitoring, and rule-based alerts are not affected.
+            <div className="mb-2 border border-accent-amber/30 bg-accent-amber/5 p-2 text-[9px] leading-relaxed text-accent-amber">
+              Other defenses stay fully active while learning:
               {security && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <Badge variant={security.arp_watch_active ? 'success' : 'danger'}>
-                    ARP WATCH {security.arp_watch_active ? 'ACTIVE' : 'OFFLINE'}
+                    ARP {security.arp_watch_active ? 'ACTIVE' : 'OFFLINE'}
                   </Badge>
                   <Badge variant={security.fingerprint_active ? 'success' : 'danger'}>
                     FINGERPRINT {security.fingerprint_active ? 'ACTIVE' : 'OFFLINE'}
