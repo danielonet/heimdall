@@ -12,6 +12,7 @@ import {
   RouterIcon,
   ShieldCheckIcon,
   ShieldIcon,
+  SirenIcon,
   TagIcon,
 } from './ServiceIcons'
 
@@ -30,8 +31,8 @@ function Row({ icon: Icon, label, ok, detail }) {
   )
 }
 
-// Only real, wired signals — no Suricata/Pi-hole rows, since nothing in the
-// backend reports their status. See sentinel/api/routes/system.py.
+// Only real, wired signals — no Pi-hole row, since nothing in the backend
+// reports its status. See sentinel/api/routes/system.py.
 export function ServiceStatusPanel({ health }) {
   if (!health) return <div className="text-[10px] text-text-muted">Loading…</div>
 
@@ -117,6 +118,12 @@ export function ServiceStatusPanel({ health }) {
         label="ClamAV"
         ok={!!sec.clamav_reachable}
         detail={sec.clamav_reachable ? 'REACHABLE' : 'DOWN'}
+      />
+      <Row
+        icon={SirenIcon}
+        label="Suricata IDS"
+        ok={!!sec.suricata_last_check_at}
+        detail={sec.suricata_last_check_at ? <TimeAgo iso={sec.suricata_last_check_at} /> : 'PENDING'}
       />
     </div>
   )

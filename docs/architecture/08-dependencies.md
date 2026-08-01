@@ -1,78 +1,82 @@
 # Python Dependencies
 
-Full `requirements.txt` for the `sentinel-backend` container.
+Full `requirements.txt` for the `sentinel-backend` container — this mirrors
+`sentinel/requirements.txt` exactly (that file, not this doc, is the source
+of truth; copy it here, don't hand-maintain a duplicate that can drift again
+— see the note below).
+
+> **Note**: an earlier version of this doc described an aspirational
+> dependency list from before implementation started (`flask-cors`,
+> `flask-limiter`, `gevent`, `psycopg2-binary`, `pyshark`, `dpkt`, `netaddr`,
+> `pymisp`, `python-stix2`, `passlib`, `python-jose`, `cryptography`,
+> `pyOpenSSL`, `structlog`, `joblib`, `scipy`, `python-dateutil`, among
+> others) that was never actually installed — a stale, duplicate root-level
+> `requirements.txt` carried the same drift and has been removed. None of
+> those packages have any callers in `sentinel/`; if a future feature needs
+> one, add it to `sentinel/requirements.txt` and update this doc in the same
+> change, not separately.
 
 ## requirements.txt
 
 ```
-# ── Web framework ──────────────────────────────────────────────────────────
-flask>=3.0
-flask-socketio>=5.3
-flask-jwt-extended>=4.6
-flask-cors>=4.0
-flask-limiter>=3.5          # rate-limit /api/login
-gunicorn>=21.2              # production WSGI server, --worker-class gthread
-                             # (not gevent — flask-socketio here uses
-                             # async_mode='threading', which needs a real
-                             # OS-thread worker; gevent's monkey-patched
-                             # threads are greenlets on one OS thread, which
-                             # broke SentinelScheduler's dedicated event loop)
+# ── Web framework & API ────────────────────────────────────────────────────
+Flask==3.0.3
+asgiref==3.11.1              # required for Flask's native `async def` view support
+Flask-SocketIO==5.3.5
+Flask-JWT-Extended==4.5.3
+python-socketio==5.9.0
+python-engineio==4.8.0       # pulls in simple-websocket, which is what actually
+                              # gives Flask-SocketIO's async_mode='threading' real
+                              # WebSocket upgrades under a threaded WSGI server
 
-# ── Configuration ──────────────────────────────────────────────────────────
-python-dotenv>=1.0
-pydantic-settings>=2.0
+# ── WSGI application server ────────────────────────────────────────────────
+gunicorn==21.2.0             # --worker-class gthread (not gevent — see below)
 
-# ── Async HTTP ────────────────────────────────────────────────────────────
-httpx>=0.27
-tenacity>=8.2               # retry with exponential back-off
+# ── Async database & ORM ───────────────────────────────────────────────────
+SQLAlchemy==2.0.51
+asyncpg==0.31.0              # async PostgreSQL driver (referenced via the
+                              # postgresql+asyncpg:// URL scheme, not imported directly)
+alembic==1.12.1              # migrations; env.py runs through the same async
+                              # engine/driver, no separate sync driver needed
 
-# ── Database ──────────────────────────────────────────────────────────────
-sqlalchemy>=2.0
-asyncpg>=0.29               # async PostgreSQL driver
-alembic>=1.13               # migrations; env.py runs migrations through the
-                             # same async engine/driver, no sync driver needed
+# ── Redis (Pub/Sub) ─────────────────────────────────────────────────────────
+redis==5.0.1                 # includes redis.asyncio; aioredis is archived
+                              # upstream and unusable on Python 3.11+
 
-# ── Cache / message bus ───────────────────────────────────────────────────
-redis>=5.0                  # redis.asyncio covers async pub/sub; aioredis is
-                             # archived upstream and unusable on Python 3.11+
+# ── Async HTTP client ───────────────────────────────────────────────────────
+httpx==0.25.2
+tenacity==8.2.3              # retry with exponential back-off (XMO client, threat intel)
 
-# ── Machine learning ──────────────────────────────────────────────────────
-scikit-learn>=1.4           # IsolationForest
-pyod>=1.1                   # LOF, COPOD, ECOD (40+ algorithms)
-numpy>=1.26
-pandas>=2.1                 # log parsing, feature engineering
-joblib>=1.3                 # model persistence
-scipy>=1.12                 # entropy calculation (DNS exfil detection)
+# ── Task scheduling ─────────────────────────────────────────────────────────
+APScheduler==3.10.4          # AsyncIOScheduler for all background jobs
 
-# ── Network security ──────────────────────────────────────────────────────
-scapy>=2.5                  # ARP sniffing, passive OS fingerprinting
-python-nmap>=1.6            # Nmap wrapper
-pyshark>=0.6                # Wireshark/tshark Python wrapper
-netaddr>=0.10               # IP/subnet manipulation
-dpkt>=1.9                   # fast PCAP parsing
+# ── Configuration ───────────────────────────────────────────────────────────
+pydantic==2.13.4
+pydantic-settings==2.14.2    # its env_file support pulls in python-dotenv
+                              # transitively — not imported directly here either
+python-dotenv==1.2.2
 
-# ── Threat intelligence ───────────────────────────────────────────────────
-OTXv2>=1.5                  # AlienVault Open Threat Exchange SDK
-pymisp>=2.4                 # MISP threat sharing (optional)
-python-stix2>=3.0           # STIX 2.1 threat intel bundles
+# ── Machine learning & anomaly detection ───────────────────────────────────
+scikit-learn==1.9.0          # IsolationForest
+PyOD==3.6.1                  # LOF — 1.1.2 predates scikit-learn's __sklearn_tags__
+                              # API (sklearn>=1.6) and crashes on LOF.predict()
+                              # under scikit-learn==1.9.0 above
+numpy==2.4.6
+pandas==3.0.3                # Zeek conn.log parsing / beacon-interval feature engineering
 
-# ── Scheduling ────────────────────────────────────────────────────────────
-apscheduler>=3.10           # AsyncIOScheduler for all background jobs
+# ── Network security ────────────────────────────────────────────────────────
+Scapy==2.7.0                 # ARP/DHCP sniffing, passive OS fingerprinting
+python-nmap==0.7.1           # nightly active scan (OS detection, vuln/default-account NSE)
 
-# ── Authentication ────────────────────────────────────────────────────────
-passlib[bcrypt]>=1.7        # admin password hashing
-python-jose>=3.3            # JWT (used by flask-jwt-extended)
+# ── Threat intelligence ─────────────────────────────────────────────────────
+OTXv2==1.5.12                # AlienVault Open Threat Exchange SDK
 
-# ── TLS / certificate inspection ─────────────────────────────────────────
-cryptography>=42.0          # inspect TLS certs on device open ports
-pyOpenSSL>=24.0
+# ── Anti-malware integration ────────────────────────────────────────────────
+pyclamd==0.4.0                # ClamAV TCP daemon client (Zeek file-extraction pipeline)
 
-# ── AV scanning ───────────────────────────────────────────────────────────
-pyclamd>=0.4                # ClamAV TCP daemon client
-
-# ── Utilities ─────────────────────────────────────────────────────────────
-python-dateutil>=2.9
-structlog>=24.1             # structured JSON logging
+# ── Development & testing (not needed at runtime) ───────────────────────────
+pytest==7.4.3
+pytest-asyncio==0.21.1
 ```
 
 ## Docker image base
@@ -104,10 +108,10 @@ CMD ["gunicorn", "--worker-class", "gthread", "--threads", "4",
 
 | Package | Chosen over | Reason |
 |---------|-------------|--------|
-| `httpx` | `requests` | Native async support; `tenacity` retry |
+| `httpx` | `requests` | Native async support; pairs with `tenacity` retry |
 | `sqlalchemy 2.0` | raw `asyncpg` | ORM + async in one; Alembic migration support |
 | `flask-socketio` | `websockets` lib | Integrates directly with Flask; Socket.IO protocol handles reconnection |
-| `apscheduler` | `celery` | No broker needed for single-machine deployment |
-| `scapy` | `libpcap` bindings | Pythonic API; ARP crafting + sniffing in the same library |
-| `pyod LOF` | `sklearn` only | Better accuracy on small per-device datasets |
-| `structlog` | `logging` stdlib | JSON-formatted logs — easier to parse and ship to ELK if needed |
+| `apscheduler` | `celery` | No broker needed for a single-machine deployment |
+| `scapy` | raw `libpcap` bindings | Pythonic API; ARP crafting + sniffing in the same library |
+| `pyod` (LOF) | `sklearn` only | Better accuracy on small per-device datasets |
+| stdlib `logging` | `structlog` / `python-json-logger` | A structured-JSON logger was originally planned but never adopted — plain `logging.basicConfig` (see `sentinel/api/app.py:_configure_logging`) has been sufficient in practice; don't reach for one without an actual log-shipping consumer that needs it |

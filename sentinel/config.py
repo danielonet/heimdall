@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     ZEEK_BEACON_SCAN_INTERVAL_SECONDS: int = 300
     CLAMAV_HOST: str = 'localhost'
     CLAMAV_PORT: int = 3310
+    # See sentinel/security/suricata_parser.py.
+    SURICATA_EVE_LOG_PATH: str = '/var/log/suricata/eve.json'
+    SURICATA_POLL_INTERVAL_SECONDS: int = 15
     # How often to check for auto-blocks past their AppSettings.
     # auto_block_expiry_hours — an interval, not a nightly cron, so a 24h
     # SLA doesn't slip by up to a full day. See SentinelScheduler._block_expiry_job.

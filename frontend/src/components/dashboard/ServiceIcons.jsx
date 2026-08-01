@@ -4,8 +4,8 @@
 // Postgres and Redis are real products with an actual brand mark, so those
 // two use Simple Icons' (https://simpleicons.org, CC0) official monochrome
 // path data verbatim instead of an invented glyph — same currentColor
-// recolouring, just the real shape. Nmap/ClamAV/Zeek/OpenCanary don't have
-// an entry in Simple Icons (too niche), so they stay hand-drawn too.
+// recolouring, just the real shape. Nmap/ClamAV/Zeek/OpenCanary/Suricata
+// don't have an entry in Simple Icons (too niche), so they stay hand-drawn too.
 
 const strokeBase = {
   viewBox: '0 0 24 24',
@@ -88,6 +88,17 @@ export function CanaryIcon(props) {
       <path d="M4 13c0-4 3-7 7-7 3 0 4 1.5 6 1.5S20 6 21 5c0 2-.5 3.5-2 4.5 1 .5 2 1.5 2 3-3 0-4-1-6-1-1 3-4 5-7 5-2 0-3-.5-4-1.5" />
       <path d="M6 16c-1 1-2 1.3-3 1.3" />
       <circle cx="15" cy="9" r=".6" fill="currentColor" />
+    </svg>
+  )
+}
+
+export function SirenIcon(props) {
+  return (
+    <svg {...strokeBase} {...props}>
+      <path d="M6 20v-6a6 6 0 0 1 12 0v6" />
+      <rect x="4" y="20" width="16" height="2" rx="1" />
+      <path d="M12 8V5" />
+      <path d="M3 9l1.5 1M21 9l-1.5 1" />
     </svg>
   )
 }

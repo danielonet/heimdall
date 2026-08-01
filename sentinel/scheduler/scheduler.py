@@ -46,6 +46,7 @@ from sentinel.security.dhcp_watch import DhcpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.os_classification import os_family
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
+from sentinel.security.suricata_parser import SuricataAlertIngester, SuricataEveLogReader
 from sentinel.security.threat_intel import ThreatIntelService
 from sentinel.security.zeek_parser import (
     ZeekConnBeaconDetector,
@@ -84,6 +85,8 @@ class SentinelScheduler:
         zeek_beacon_scan_interval_s: int,
         clamav_host: str,
         clamav_port: int,
+        suricata_eve_log_path: str,
+        suricata_poll_interval_s: int,
         block_expiry_check_interval_s: int,
         correlation_scan_interval_s: int,
         security_digest_cron: str,
@@ -109,6 +112,8 @@ class SentinelScheduler:
         self._zeek_beacon_scan_interval_s = zeek_beacon_scan_interval_s
         self._clamav_host = clamav_host
         self._clamav_port = clamav_port
+        self._suricata_eve_log_path = suricata_eve_log_path
+        self._suricata_poll_interval_s = suricata_poll_interval_s
         self._block_expiry_check_interval_s = block_expiry_check_interval_s
         self._correlation_scan_interval_s = correlation_scan_interval_s
         self._security_digest_cron = security_digest_cron
@@ -140,6 +145,8 @@ class SentinelScheduler:
         self._zeek_beacon_detector: ZeekConnBeaconDetector | None = None
         self._zeek_file_watcher: ZeekFileExtractionWatcher | None = None
         self._clamav: ClamAvScanner | None = None
+        self._suricata_reader: SuricataEveLogReader | None = None
+        self._suricata_ingester: SuricataAlertIngester | None = None
         # Rules/notifications — RuleEngine tracks per-(rule, device) streak and
         # rate-limit state across polls, so it's built once too.
         self._notifier: NotificationService | None = None
@@ -154,6 +161,7 @@ class SentinelScheduler:
         self._last_zeek_beacon_scan_at: datetime | None = None
         self._last_zeek_file_scan_at: datetime | None = None
         self._clamav_reachable: bool | None = None
+        self._last_suricata_check_at: datetime | None = None
 
     def start(self) -> None:
         """Start the background thread and begin polling. Safe to call once."""
@@ -223,6 +231,8 @@ class SentinelScheduler:
         self._zeek_beacon_detector = ZeekConnBeaconDetector(self._zeek_log_dir)
         self._zeek_file_watcher = ZeekFileExtractionWatcher(self._zeek_extract_dir, self._zeek_log_dir)
         self._clamav = ClamAvScanner(self._clamav_host, self._clamav_port)
+        self._suricata_reader = SuricataEveLogReader(self._suricata_eve_log_path)
+        self._suricata_ingester = SuricataAlertIngester()
         self._notifier = NotificationService(self._notification_config)
         # _rule_engine is constructed lazily in _poll_job, once the adapter
         # exists (BLOCK_DEVICE actions need it) — see _ensure_adapter().
@@ -282,6 +292,12 @@ class SentinelScheduler:
             'interval',
             seconds=self._zeek_dns_poll_interval_s,
             id='zeek_file_scan',
+        )
+        self._scheduler.add_job(
+            self._suricata_poll_job,
+            'interval',
+            seconds=self._suricata_poll_interval_s,
+            id='suricata_poll',
         )
         self._scheduler.add_job(
             self._block_expiry_job,
@@ -754,6 +770,35 @@ class SentinelScheduler:
                 )
         self._last_zeek_file_scan_at = datetime.now(timezone.utc)
 
+    async def _suricata_poll_job(self) -> None:
+        """Tail Suricata's eve.json and raise an IDS_SIGNATURE_MATCH alert
+        for every new IDS signature match. Only event_type=="alert" lines are
+        ingested — Suricata also logs dns/http/tls/flow/stats to the same
+        file, but Zeek already covers DNS visibility, so ingesting those too
+        would be redundant, not more coverage. See sentinel/security/
+        suricata_parser.py's field-shape caveat: this is unverified against
+        a live eve.json, so a per-line failure must not drop the rest of
+        the batch (same isolation as _canary_poll_job).
+        """
+        self._last_suricata_check_at = datetime.now(timezone.utc)
+        for line in self._suricata_reader.read_new_lines():
+            parsed = self._suricata_ingester.parse_event(line)
+            if parsed is None:
+                continue
+            try:
+                await self._persist_suricata_alert(parsed)
+            except Exception:
+                logger.exception('Failed to persist Suricata alert')
+
+    async def _persist_suricata_alert(self, parsed: dict) -> None:
+        mac = await self._mac_for_ip(parsed['src_ip'])
+        await self._raise_threat_alert(
+            mac, 'IDS_SIGNATURE_MATCH', parsed['severity'],
+            f"{parsed['src_ip']} triggered Suricata rule \"{parsed['signature']}\" "
+            f"({parsed['category']})",
+            raw_data=parsed,
+        )
+
     def _on_arp_alert(self, event: dict) -> None:
         """Sync callback invoked from ArpWatcher's own daemon thread."""
         if self._loop is not None:
@@ -1026,8 +1071,8 @@ class SentinelScheduler:
 
     def security_services_snapshot(self) -> dict[str, Any]:
         """Real status for the security services that are actually wired — no
-        fabricated rows for services (e.g. Suricata/Pi-hole) that don't have a
-        live signal to report yet."""
+        fabricated rows for services (e.g. Pi-hole) that don't have a live
+        signal to report yet."""
         return {
             'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
             'dhcp_watch_active': self._dhcp_watcher.is_active if self._dhcp_watcher else False,
@@ -1046,6 +1091,9 @@ class SentinelScheduler:
                 self._last_zeek_beacon_scan_at.isoformat() if self._last_zeek_beacon_scan_at else None
             ),
             'clamav_reachable': self._clamav_reachable,
+            'suricata_last_check_at': (
+                self._last_suricata_check_at.isoformat() if self._last_suricata_check_at else None
+            ),
         }
 
     def memory_diagnostics_snapshot(self) -> dict[str, Any]:
@@ -1210,6 +1258,8 @@ def init_scheduler(app: Flask) -> None:
         zeek_beacon_scan_interval_s=app.config['ZEEK_BEACON_SCAN_INTERVAL_SECONDS'],
         clamav_host=app.config['CLAMAV_HOST'],
         clamav_port=app.config['CLAMAV_PORT'],
+        suricata_eve_log_path=app.config['SURICATA_EVE_LOG_PATH'],
+        suricata_poll_interval_s=app.config['SURICATA_POLL_INTERVAL_SECONDS'],
         block_expiry_check_interval_s=app.config['BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS'],
         correlation_scan_interval_s=app.config['CORRELATION_SCAN_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],

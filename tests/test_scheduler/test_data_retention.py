@@ -69,6 +69,8 @@ def _scheduler() -> SentinelScheduler:
         zeek_beacon_scan_interval_s=300,
         clamav_host='localhost',
         clamav_port=3310,
+        suricata_eve_log_path='/tmp/heimdall-test-suricata-eve.json',
+        suricata_poll_interval_s=15,
         block_expiry_check_interval_s=900,
         correlation_scan_interval_s=300,
         security_digest_cron='0 7 * * *',

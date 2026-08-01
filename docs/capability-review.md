@@ -26,12 +26,12 @@ reflected in each item below.
 - Dependencies installed but with no callers found: `pyclamd`, `pyshark`, `dpkt`, `pandas` (Zeek-only use case, never built).
 - Router capabilities never probed at all (not even flagged TBD in the XMO docs): QoS, port forwarding, DDNS, VPN passthrough, guest-network isolation enforcement, WiFi channel/interference monitoring.
 - A possible existing bug: wired Ethernet PHY stats may have the same Sent/Received direction swap that was found and fixed for WiFi `AssociatedDevices` — flagged as untested in the docs, never verified.
-- A `suricata` service now exists in `docker-compose.yml` (with a `suricata-logs` volume) but has **no Python integration** yet — the only reference in code is a comment in `scheduler.py` listing it among services that get a fabricated health-status row. Wiring a Suricata EVE-JSON log parser (same pattern as the Zeek and OpenCanary ingestion) is an unlisted follow-up.
+- ✅ *Done* — a `suricata` service exists in `docker-compose.yml` (with a `suricata-logs` volume); `sentinel/security/suricata_parser.py` now tails its `eve.json` and ingests `event_type=="alert"` lines as `IDS_SIGNATURE_MATCH` alerts (same log-tailing pattern as Zeek/OpenCanary — see `docs/suricata-ingestion-plan.md`). The actual ruleset (Emerging Threats or otherwise) is still unmanaged by Heimdall — this only wires ingestion, not rule fetching/tuning.
 
 **Implementation status of the items below** (updated after re-surveying the code):
 - ✅ Done: #1 (ClamAV wired), #2 (Zeek parser + real `/dns-stats` + `is_domain_malicious` now called), #3 (superseded by #2), #5 (rogue DHCP), #6 (WAN bandwidth), #7 (AP-alias visibility, descoped), #8 (WiFi channel visibility), #9 (wired-PHY direction fix), #10 (device-type thresholds), #11 (active/passive OS cross-check), #12 (nmap default-accounts NSE), #13 (time-limited auto-block), #14 (quarantine tier), #15 (cross-alert correlation), #16 (security digest), #17 (`/metrics` endpoint), #18 (CSV alert export), #19 (AP grouping + trust-crossing detector).
 - ⬜ Not yet built: #4.
-- ◐ Partial: #20 (dependency cleanup — `pyclamd`/`pandas` now in use; `pyshark`/`dpkt` still have no callers).
+- ✅ Done: #20 (dependency cleanup — `pyclamd`/`pandas` in active use; `pyshark`/`dpkt` removed).
 
 ---
 
@@ -99,7 +99,7 @@ reflected in each item below.
 
 ## F. Housekeeping
 
-20. **Resolve the dead dependencies.** `pyclamd` (until #1 is done), `pyshark`, `dpkt`, and `pandas`'s only listed use case (Zeek) currently have no callers — either commit to using them (#1/#2) or remove them to keep `requirements.txt` honest about what's actually running. *Status: `pyclamd` and `pandas` are now both in active use (ClamAV scanning, Zeek beacon detection). `pyshark`/`dpkt` are still unused.*
+20. **Resolve the dead dependencies.** ✅ *Done.* `pyclamd` and `pandas` are both in active use (ClamAV scanning, Zeek beacon detection — see #1/#2). `pyshark`/`dpkt` turned out to live only in a stale, entirely unused root-level `requirements.txt` — nothing installs from it (the Dockerfile and `scripts/install.sh` both explicitly use `sentinel/requirements.txt`), and it had drifted badly (it still listed `aioredis`, which CLAUDE.md rule 2 flags as archived/unimportable on Python 3.11+). Deleted rather than patched, since a second unreferenced copy of the dependency list is itself the problem this item was about. While auditing, also found `python-json-logger` genuinely dead in the *real* `sentinel/requirements.txt` — logging actually runs on stdlib `logging.basicConfig` (`sentinel/api/app.py:_configure_logging`), never JSON-formatted — removed that too. `docs/architecture/08-dependencies.md` (a design-era doc that had drifted even further from reality than the stale root file had) rewritten to mirror `sentinel/requirements.txt` exactly.
 
 ---
 
@@ -115,12 +115,15 @@ channel visibility, wired-PHY direction fix), and **#13/#14/#15/#16**
 digest), **#17/#18** (metrics endpoint, CSV alert export), and **#19** (AP
 grouping + trust-crossing detector) — see each item's status note above.
 **#4 (rogue AP)** was evaluated and skipped: it needs a monitor-mode-capable
-WiFi radio this deployment doesn't have — the only item left unbuilt.
-Remaining follow-up isn't new features so much as hardening what's already
-shipped: wiring the **Suricata** service that's already in the Compose file
-but has no parser yet; live-verifying the best-guess integrations from
-earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath, **#8** WiFi radios'
-TR-181 field names, and **#14**'s quarantine `Rule` object field names)
-against the real router; and, if Grafana ever gets pointed at **#17**'s new
-`/metrics` endpoint, adding a Prometheus scrape config + a starter dashboard
-JSON to `docs/` so that setup is copy-paste rather than built from scratch.
+WiFi radio this deployment doesn't have — the only item left unbuilt. The
+**Suricata** EVE-JSON ingestion flagged in the survey findings above has
+also since shipped. Remaining follow-up isn't new features so much as
+hardening what's already shipped: verifying/tuning the actual Suricata
+ruleset against real home traffic (this integration ingests alerts, it
+doesn't manage the rule set); live-verifying the best-guess integrations
+from earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath, **#8** WiFi
+radios' TR-181 field names, and **#14**'s quarantine `Rule` object field
+names) against the real router; and, if Grafana ever gets pointed at
+**#17**'s `/metrics` endpoint, adding a Prometheus scrape config + a
+starter dashboard JSON to `docs/` so that setup is copy-paste rather than
+built from scratch.
