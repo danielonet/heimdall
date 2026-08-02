@@ -17,8 +17,8 @@ from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, Device
-from sentinel.db.repositories import SettingsRepository
+from sentinel.db.models import Alert, Device, TrustedMac
+from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
 
@@ -51,6 +51,7 @@ async def _init_db():
         # empty-list assertion) whenever they happen to run afterward.
         await session.execute(delete(Alert).where(Alert.device_mac.is_(None)))
         await session.execute(delete(Device).where(Device.mac_address == _MAC))
+        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == _MAC))
     await get_engine().dispose()
 
 
@@ -59,6 +60,7 @@ def scheduler():
     """A scheduler with only self._adapter populated — see module docstring."""
     sched = object.__new__(SentinelScheduler)
     sched._adapter = MockSagemcomAdapter()
+    sched._ip_conflict_quiet_until = {}
     return sched
 
 
@@ -232,6 +234,115 @@ class TestPersistArpAlert:
         assert alert.device_mac == _MAC
         device = await _get_device()
         assert device.is_blocked is True
+
+    async def test_trusted_new_mac_is_never_blocked_and_downgrades_to_ip_conflict_info(self, scheduler):
+        """Regression coverage for a real incident: ArpWatcher can't tell an
+        attacker impersonating a known IP apart from two of the user's own
+        devices both configured with the same static IP — it only sees a
+        MAC change. If the device now holding the IP is already trusted,
+        that's the benign case: never auto-block it, and raise a single
+        INFO-severity IP_CONFLICT alert instead of a CRITICAL ARP_SPOOF one."""
+        await _seed_device(is_blocked=False)
+        await TrustedMacRepository().trust(_MAC)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        device = await _get_device()
+        assert device.is_blocked is False
+        alert = await _latest_alert()
+        assert alert.alert_type == 'IP_CONFLICT'
+        assert alert.severity == 'INFO'
+        assert alert.device_mac == _MAC
+        assert _IP in alert.description
+
+    async def test_repeated_conflict_on_the_same_ip_is_suppressed(self, scheduler):
+        """Must not flood the Alerts tab while the same IP keeps flapping
+        between two known devices — only the first occurrence is recorded
+        until IP_CONFLICT_QUIET_MINUTES passes."""
+        await _seed_device(is_blocked=False)
+        await TrustedMacRepository().trust(_MAC)
+
+        event = {
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        }
+        await scheduler._persist_arp_alert(event)
+        first_alert = await _latest_alert()
+
+        await scheduler._persist_arp_alert(event)
+        await scheduler._persist_arp_alert(event)
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.alert_type == 'IP_CONFLICT'))
+            conflict_alerts = result.scalars().all()
+        assert len(conflict_alerts) == 1
+        assert conflict_alerts[0].id == first_alert.id
+
+    async def test_conflict_quiet_window_is_keyed_by_ip_not_by_device(self, scheduler):
+        """A different IP conflicting for the same trusted device must still
+        alert — the quiet window tracks 'have I already reported this IP',
+        not 'have I already reported this device'."""
+        await _seed_device(is_blocked=False)
+        await TrustedMacRepository().trust(_MAC)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': '10.0.0.99',
+            'old_mac': 'de:ad:be:ef:00:02', 'new_mac': _MAC,
+            'description': 'ARP spoofing suspected: 10.0.0.99 changed',
+        })
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.alert_type == 'IP_CONFLICT'))
+            conflict_alerts = result.scalars().all()
+        assert len(conflict_alerts) == 2
+
+    async def test_untrusted_new_mac_on_a_previously_conflicted_ip_still_gets_full_treatment(self, scheduler):
+        """The quiet window only ever suppresses the trusted-device path —
+        an actually-untrusted MAC taking over that same IP later must still
+        raise a full CRITICAL ARP_SPOOF and attempt to block, regardless of
+        the IP's conflict history."""
+        await _seed_device(is_blocked=False)
+        await TrustedMacRepository().trust(_MAC)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        other_mac = '11:22:33:44:55:66'
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': _MAC, 'new_mac': other_mac,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == other_mac).order_by(Alert.created_at.desc())
+            )
+            alert = result.scalars().first()
+            await session.execute(delete(Alert).where(Alert.device_mac == other_mac))
+        assert alert is not None
+        assert alert.alert_type == 'ARP_SPOOF'
+        # MockSagemcomAdapter.block_device() unconditionally succeeds even
+        # with no matching Device row — the point here is just that the
+        # full CRITICAL/auto-block path ran at all, not the mock's own
+        # block-target-lookup behavior (see xmo_adapter.py for the real
+        # adapter's stricter host-lookup requirement).
+        assert 'auto-blocked' in alert.description
 
 
 class TestPersistDhcpAlert:

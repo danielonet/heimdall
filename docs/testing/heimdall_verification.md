@@ -68,6 +68,20 @@ arp.spoof on
   alerted on
 - `Device.blocked_at`/`blocked_until` get stamped (see Test 14)
 
+**Caveat — trusted-device exception**: if the MAC now holding the IP is
+already in Heimdall's trusted-devices registry, none of the above happens.
+`ArpWatcher` can't distinguish "attacker impersonating a known IP" from "two
+of the user's own devices both statically configured with the same IP" — it
+only sees a MAC change. A trusted new MAC is treated as the latter: it is
+**never** auto-blocked, and instead of a CRITICAL `ARP_SPOOF` alert you get a
+single INFO-severity `IP_CONFLICT` alert, suppressed on repeat flaps of the
+*same* IP for `IP_CONFLICT_QUIET_MINUTES` (default 30). For this test to
+exercise the real CRITICAL/auto-block path, run it from a device that is
+**not** marked trusted in Heimdall — which is the normal case for an
+external Kali attacker anyway. Worth a second, deliberate run against a
+trusted device's IP too, to confirm the downgrade itself works and nothing
+gets blocked.
+
 **Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
 
 **Notes:** _______________________________________________

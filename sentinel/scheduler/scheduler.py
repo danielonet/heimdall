@@ -28,7 +28,7 @@ from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
-from sentinel.db.repositories import SettingsRepository
+from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.correlation import CrossAlertCorrelator
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
@@ -58,6 +58,11 @@ from sentinel.security.zeek_parser import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_ADAPTER_CALL_TIMEOUT_S = 10.0
+# How long to stay quiet on a given IP after reporting it as conflicted
+# (see _persist_arp_alert) — an IP statically double-assigned to two of the
+# user's own devices keeps flapping until they fix it at the network level,
+# and would otherwise re-fire on every single flip.
+IP_CONFLICT_QUIET_MINUTES = 30
 
 
 class SentinelScheduler:
@@ -162,6 +167,8 @@ class SentinelScheduler:
         self._last_zeek_file_scan_at: datetime | None = None
         self._clamav_reachable: bool | None = None
         self._last_suricata_check_at: datetime | None = None
+        # ip -> quiet-until, see _persist_arp_alert.
+        self._ip_conflict_quiet_until: dict[str, datetime] = {}
 
     def start(self) -> None:
         """Start the background thread and begin polling. Safe to call once."""
@@ -808,9 +815,44 @@ class SentinelScheduler:
         # new_mac is the attacker's MAC impersonating a known IP — attribute
         # the alert to it (rather than the previous None) so it's both
         # visible on the alert and available to auto-block.
+        new_mac = event.get('new_mac')
+
+        # ArpWatcher can't tell "attacker impersonating a known IP" apart
+        # from "two of the user's own devices both configured with the same
+        # static IP" — it only sees a MAC change. If the device now holding
+        # the IP is one we already trust, treat it as the latter: never
+        # auto-block a trusted device over this, and downgrade the noise to
+        # a single INFO alert instead of a recurring CRITICAL one. A
+        # genuinely untrusted MAC still gets the full ARP_SPOOF/auto-block
+        # treatment below, regardless of this IP's conflict history.
+        if new_mac and await TrustedMacRepository().is_trusted(new_mac):
+            await self._persist_ip_conflict_alert(event, new_mac)
+            return
+
         await self._raise_threat_alert(
-            event.get('new_mac'), event['type'], event['severity'], event['description'], raw_data=event,
+            new_mac, event['type'], event['severity'], event['description'], raw_data=event,
         )
+
+    async def _persist_ip_conflict_alert(self, event: dict, new_mac: str) -> None:
+        ip = event.get('ip')
+        now = datetime.now(timezone.utc)
+        if self._ip_conflict_quiet_until.get(ip, now) > now:
+            return  # already reported this IP's conflict recently — don't flood
+        self._ip_conflict_quiet_until[ip] = now + timedelta(minutes=IP_CONFLICT_QUIET_MINUTES)
+
+        old_mac = event.get('old_mac')
+        description = (
+            f'{ip} is claimed by more than one device — seen as both {old_mac} and {new_mac} '
+            f'(currently trusted). Likely two devices configured with the same static IP, not '
+            f'an attack; give one of them a different address to resolve.'
+        )
+        async with get_session() as session:
+            alert = Alert(
+                device_mac=new_mac, alert_type='IP_CONFLICT', severity='INFO',
+                description=description, raw_data=event,
+            )
+            session.add(alert)
+        emit_alert(alert_to_dict(alert))
 
     def _on_dhcp_alert(self, event: dict) -> None:
         """Sync callback invoked from DhcpWatcher's own daemon thread."""
