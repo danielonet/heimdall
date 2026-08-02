@@ -101,3 +101,30 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* Network Map (BIFRÖST) — bridge flow + node pulse + core breathing. Prefixed
+   distinctly since these are more elaborate/longer-running than pulse-live. */
+@keyframes network-map-flow {
+  to { stroke-dashoffset: -18; }
+}
+
+@keyframes network-map-pulse-crit {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@keyframes network-map-pulse-warn {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes network-map-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .network-map-anim {
+    animation: none !important;
+  }
+}

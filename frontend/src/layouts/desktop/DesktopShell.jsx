@@ -34,6 +34,7 @@ function PaletteToggle() {
 
 const NAV_ITEMS = [
   { to: '/', label: 'DASHBOARD', end: true },
+  { to: '/map', label: 'MAP' },
   { to: '/devices', label: 'DEVICES' },
   { to: '/alerts', label: 'ALERTS' },
   { to: '/ports', label: 'PORTS' },

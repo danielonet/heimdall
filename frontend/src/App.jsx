@@ -4,6 +4,7 @@ import { AuthGuard } from './AuthGuard'
 import { Shell } from './Shell'
 import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { NetworkMapPage } from './pages/NetworkMapPage'
 import { DevicesPage } from './pages/DevicesPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
 import { AlertsPage } from './pages/AlertsPage'
@@ -26,6 +27,7 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route element={<Shell />}>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/map" element={<NetworkMapPage />} />
               <Route path="/devices" element={<DevicesPage />} />
               <Route path="/devices/:mac" element={<DeviceDetailPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
