@@ -4,6 +4,7 @@ import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
+import { ClearAlertsSection } from '../components/settings/ClearAlertsSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
@@ -38,7 +39,6 @@ export function SettingsPage() {
   // items-stretch (the grid default) so paired tiles match each other's
   // height instead of each hugging its own content.
   const threeUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-3 gap-3'
-  const twoUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-2 gap-3'
 
   async function handleLogout() {
     await logout()
@@ -86,8 +86,9 @@ export function SettingsPage() {
         <NetworkInterfaceSection />
       </div>
 
-      <div className={twoUpClass}>
+      <div className={threeUpClass}>
         <AutoBlockSection />
+        <ClearAlertsSection />
         <PurgeDatabaseSection />
       </div>
 

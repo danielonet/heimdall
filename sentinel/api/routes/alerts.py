@@ -7,7 +7,7 @@ from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import jwt_required
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, delete, func, select, update
 
 from sentinel.api.serializers import alert_to_dict
 from sentinel.db.models import Alert, Device
@@ -76,6 +76,19 @@ async def list_alerts():
         per_page=per_page,
         total=total,
     )
+
+
+@bp.route('', methods=['DELETE'])
+@jwt_required()
+async def delete_all_alerts():
+    """Clears the entire alert feed. Devices, trust decisions, traffic
+    history, and trained ML models are untouched — detectors keep running
+    against the same data and simply start from an empty feed, no re-learning
+    involved. The lighter sibling to POST /settings/purge, which resets the
+    learned baseline too."""
+    async with get_session() as session:
+        result = await session.execute(delete(Alert))
+    return jsonify(deleted=result.rowcount)
 
 
 @bp.route('/grouped', methods=['GET'])

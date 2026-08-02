@@ -240,6 +240,28 @@ class TestBulkPatchAlerts:
         assert client.get(f'/api/alerts/{id_b}').get_json()['resolved'] is True
 
 
+class TestDeleteAllAlerts:
+    def test_requires_auth(self, client):
+        _seed_alert()
+        resp = client.delete('/api/alerts')
+        assert resp.status_code == 401
+
+    def test_clears_every_alert(self, client, auth_headers):
+        _seed_alert(device_mac='aa:aa:aa:aa:aa:aa')
+        _seed_alert(device_mac='bb:bb:bb:bb:bb:bb')
+        resp = client.delete('/api/alerts', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['deleted'] == 2
+
+        list_resp = client.get('/api/alerts')
+        assert list_resp.get_json()['total'] == 0
+
+    def test_empty_table_deletes_nothing(self, client, auth_headers):
+        resp = client.delete('/api/alerts', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['deleted'] == 0
+
+
 class TestDeleteAlert:
     def test_requires_auth(self, client):
         alert_id = _seed_alert()
