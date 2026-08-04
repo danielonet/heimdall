@@ -7,7 +7,7 @@ services:
 
   sentinel-backend:
     build: ./sentinel
-    network_mode: host          # must reach 10.100.102.1 AND sniff ARP on LAN
+    network_mode: host          # must reach the router AND sniff ARP on LAN
     cap_add:
       - NET_RAW                 # required by Scapy for ARP packet sniffing
       - NET_ADMIN               # required for network interface operations
@@ -17,14 +17,16 @@ services:
       - ROUTER_PORT=80
       - ROUTER_USERNAME=home
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
+      # - USE_MOCK_ROUTER=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
-      - SNIFF_IFACE=eth0        # LAN-facing interface on monitoring machine
+      - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
+      - DEPLOYMENT_TIER=${DEPLOYMENT_TIER:-full}  # minimal|intermediate|full — see "Installation tiers" below
     secrets:
       - router_password
       - jwt_secret
@@ -39,11 +41,15 @@ services:
     volumes:
       - ml-models:/data/models        # persist trained ML models across restarts
       - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
+      - zeek-logs:/var/log/zeek:ro              # read by zeek_parser.py (dns.log/conn.log)
+      - zeek-extracted:/var/zeek/extracted:ro   # read by zeek_parser.py, scanned via ClamAV
+      - suricata-logs:/var/log/suricata:ro      # read by SuricataEveLogReader (eve.json)
 
   frontend:
     build: ./frontend
-    ports:
-      - "3000:80"               # React app via Nginx
+    network_mode: host          # nginx proxies /api + /socket.io to sentinel-backend
+                                 # at 127.0.0.1:5000 without CORS (see frontend/nginx.conf);
+                                 # listens on :3000 directly, no port mapping under host networking
     depends_on:
       - sentinel-backend
     restart: unless-stopped
@@ -67,8 +73,21 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     restart: unless-stopped
 
+  # Dev/test tooling only — mock Sagemcom XMO API. Not part of any real
+  # installation tier; only started with `--profile dev`.
+  wiremock:
+    image: wiremock/wiremock:3.x-alpine
+    profiles: ["dev"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./wiremock:/home/wiremock
+    restart: unless-stopped
+
+  # full tier only
   suricata:
     image: jasonish/suricata:latest
+    profiles: ["full"]
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -76,26 +95,35 @@ services:
     volumes:
       - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
       - suricata-logs:/var/log/suricata
+    command: ["--af-packet=${SNIFF_IFACE:-eth0}"]
     restart: unless-stopped
 
+  # full tier only — depends on zeek's file-extraction watcher for anything
+  # to scan, so it's not meaningful without zeek alongside it
   clamav:
     image: clamav/clamav:stable
+    profiles: ["full"]
     ports:
       - "3310:3310"             # TCP socket for pyclamd
     volumes:
       - clamav-db:/var/lib/clamav
     restart: unless-stopped
 
+  # intermediate + full — the one lightweight, dependency-free optional
+  # container (idle socket listeners only, no packet inspection)
   opencanary:
     image: thinkst/opencanary:latest
+    profiles: ["intermediate", "full"]
     network_mode: host          # must appear as a real LAN device
     volumes:
       - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
+  # full tier only
   zeek:
     image: zeek/zeek:latest
+    profiles: ["full"]
     network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
     cap_add:
       - NET_ADMIN
@@ -107,7 +135,7 @@ services:
       - zeek-logs:/var/log/zeek
       - zeek-extracted:/var/zeek/extracted
     working_dir: /var/log/zeek
-    command: ["zeek", "-i", "eth0", "local"]
+    command: ["zeek", "-i", "${SNIFF_IFACE:-eth0}", "local"]
     restart: unless-stopped
 
 secrets:
@@ -128,6 +156,31 @@ volumes:
   zeek-extracted:
 ```
 
+## Installation tiers
+
+Three tiers, one axis — which optional Docker-backed security containers
+this install runs. Expressed as Compose **profiles** (services with no
+`profiles` key always run) rather than separate compose files, so there's
+one source of truth instead of files that can drift apart. See
+`sentinel/deployment_tiers.py` and `docs/deployment-tiers-plan.md`.
+
+| Tier | Containers beyond core | Command |
+|---|---|---|
+| **minimal** | none | `docker compose up -d` |
+| **intermediate** | + OpenCanary | `docker compose --profile intermediate up -d` |
+| **full** | + Zeek, ClamAV, Suricata | `docker compose --profile full up -d` |
+
+Python-library-based detection (the ML/rule detectors, ARP/DHCP/passive-
+fingerprint watchers, nmap scanning, threat intel feeds) and auto-block/
+quarantine response are active in **every** tier — none of it needs an
+extra container, and auto-block is a single always-available Settings
+toggle (`auto_block_on_threat`), not gated by tier.
+
+The `DEPLOYMENT_TIER` env var (read by `sentinel/config.py`, defaulting to
+`full`) must match whichever `--profile` actually brought the stack up —
+`scripts/install.sh --tier=X` (or the `scripts/install-<tier>.sh`
+wrappers) writes it into `.env` for you.
+
 ## First-run setup
 
 ```bash
@@ -135,23 +188,20 @@ volumes:
 git clone https://gitlab.com/yourname/heimdall.git
 cd heimdall
 
-# 2. Create secrets (never committed to git)
-mkdir -p secrets
+# 2. Scaffold secrets/.env/config dirs for your chosen tier
+sudo ./scripts/install-minimal.sh        # or install-intermediate.sh / install-full.sh
+
+# 3. Edit the placeholder secrets it created
 echo "your_router_admin_password" > secrets/router_password.txt
-openssl rand -base64 64 > secrets/jwt_secret.txt
-echo "your_otx_api_key"           > secrets/otx_api_key.txt
-openssl rand -base64 32            > secrets/db_pass.txt
-openssl rand -hex 32               > secrets/admin_password.txt   # dashboard login
-touch secrets/smtp_password.txt    # optional — leave empty for an unauthenticated SMTP relay
-chmod 600 secrets/*.txt
+echo "your_otx_api_key"           > secrets/otx_api_key.txt   # optional
 
-# 3. Configure LAN interface (find yours with: ip link show)
-# Edit docker-compose.yml: SNIFF_IFACE=eth0  (or enp3s0, etc.)
+# 4. Configure LAN interface (find yours with: ip link show)
+# Edit .env: SNIFF_IFACE=eth0  (or enp3s0, etc.)
 
-# 4. Start the stack
-docker compose up -d
+# 5. Start the stack (install.sh prints the exact command for your tier)
+docker compose --profile full up -d     # or --profile intermediate, or no --profile for minimal
 
-# 5. Run database migrations
+# 6. Run database migrations
 docker compose exec sentinel-backend alembic upgrade head
 ```
 

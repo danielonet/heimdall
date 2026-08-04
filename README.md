@@ -114,15 +114,28 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 
 Requires a Linux host with Docker, on the same LAN as the router it will monitor (several containers run with `network_mode: host` to sniff ARP/DHCP/DNS traffic directly).
 
-### 1. Clone and run the installer
+### 1. Choose an installation tier and run the installer
+
+| Tier | Containers beyond core (Postgres/Redis/backend/frontend) | Installer |
+|---|---|---|
+| **minimal** | none | `sudo ./scripts/install-minimal.sh` |
+| **intermediate** | + OpenCanary (honeypot) | `sudo ./scripts/install-intermediate.sh` |
+| **full** | + Zeek, ClamAV, Suricata | `sudo ./scripts/install-full.sh` |
+
+Every tier gets the full passive/active detection set above (ARP/DHCP/
+fingerprint watchers, ML anomaly detection, nmap, threat intel) and the
+same block/quarantine/auto-block response — none of that needs an extra
+container. The tier only decides which of Zeek/ClamAV/OpenCanary/Suricata
+actually run. See [`docs/deployment-tiers-plan.md`](docs/deployment-tiers-plan.md).
 
 ```bash
 git clone <this-repo-url> heimdall
 cd heimdall
-sudo ./scripts/install.sh
+sudo ./scripts/install-full.sh      # or install-minimal.sh / install-intermediate.sh
 ```
 
-`scripts/install.sh` is idempotent (safe to re-run) and handles: system packages (Docker, nmap, libpcap, Node), Python/Node dependencies, a `secrets/` scaffold with dev placeholders, an `.env` scaffold with safe dev defaults, and the config directories Docker Compose expects (`suricata/`, `opencanary/`).
+Each is a thin wrapper around `sudo ./scripts/install.sh --tier=<minimal|intermediate|full>`,
+which is idempotent (safe to re-run) and handles: system packages (Docker, nmap, libpcap, Node), Python/Node dependencies, a `secrets/` scaffold with dev placeholders, an `.env` scaffold (including `DEPLOYMENT_TIER`) with safe dev defaults, and only the config directories the chosen tier's containers actually need (`suricata/` for full, `opencanary/` for intermediate/full).
 
 ### 2. Fill in real secrets and configuration
 
@@ -148,8 +161,13 @@ Edit `.env` (copied from `.env.example` by the installer) — at minimum, confir
 ### 3. Start the stack
 
 ```bash
-docker compose up -d
+docker compose up -d                        # minimal
+docker compose --profile intermediate up -d # intermediate
+docker compose --profile full up -d         # full
 ```
+
+Use whichever matches the tier you installed — `install.sh` prints the
+exact command at the end of step 1.
 
 Dashboard: `http://<host-ip>:3000` — log in with `admin` / the password you put in `secrets/admin_password.txt`.
 

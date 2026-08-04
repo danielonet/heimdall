@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router
     SCHEDULER_ENABLED: bool = True  # set False in tests to avoid starting the poll loop
 
+    # ── Deployment ────────────────────────────────────────────────────────────
+    # 'minimal' | 'intermediate' | 'full' — which optional Docker-backed
+    # security services (OpenCanary/Zeek/ClamAV/Suricata) this install runs.
+    # See sentinel/deployment_tiers.py. Defaults to 'full' since that's the
+    # behavior every install had before this setting existed.
+    DEPLOYMENT_TIER: str = 'full'
+
     # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str = 'postgresql+asyncpg://sentinel:pass@postgres/sentinel'
 

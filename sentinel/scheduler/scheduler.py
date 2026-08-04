@@ -30,6 +30,7 @@ from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
 from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
+from sentinel.deployment_tiers import active_service_keys, services_for_tier
 from sentinel.detection.correlation import CrossAlertCorrelator
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -95,7 +96,10 @@ class SentinelScheduler:
         block_expiry_check_interval_s: int,
         correlation_scan_interval_s: int,
         security_digest_cron: str,
+        deployment_tier: str = 'full',
     ) -> None:
+        self._tier = deployment_tier
+        self._tier_services = services_for_tier(deployment_tier)
         self._poll_interval_s = poll_interval_s
         self._redis_url = redis_url
         self._ml_model_dir = ml_model_dir
@@ -231,15 +235,24 @@ class SentinelScheduler:
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
         self._dhcp_watcher = DhcpWatcher(self._on_dhcp_alert, self._sniff_iface, self._router_ip)
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
-        self._canary_reader = OpenCanaryLogReader(self._opencanary_log_path)
-        self._canary_ingester = OpenCanaryIngester()
-        self._zeek_dns_reader = ZeekDnsLogReader(f'{self._zeek_log_dir}/dns.log')
-        self._zeek_dns_ingester = ZeekDnsIngester()
-        self._zeek_beacon_detector = ZeekConnBeaconDetector(self._zeek_log_dir)
-        self._zeek_file_watcher = ZeekFileExtractionWatcher(self._zeek_extract_dir, self._zeek_log_dir)
-        self._clamav = ClamAvScanner(self._clamav_host, self._clamav_port)
-        self._suricata_reader = SuricataEveLogReader(self._suricata_eve_log_path)
-        self._suricata_ingester = SuricataAlertIngester()
+        # Docker-backed integrations only get built for tiers that actually
+        # deploy their container — see sentinel/deployment_tiers.py. Each
+        # attribute stays None (its __init__ default) otherwise, and the
+        # matching APScheduler job below is simply never registered rather
+        # than polling a container that was never started.
+        if self._tier_services['opencanary']:
+            self._canary_reader = OpenCanaryLogReader(self._opencanary_log_path)
+            self._canary_ingester = OpenCanaryIngester()
+        if self._tier_services['zeek']:
+            self._zeek_dns_reader = ZeekDnsLogReader(f'{self._zeek_log_dir}/dns.log')
+            self._zeek_dns_ingester = ZeekDnsIngester()
+            self._zeek_beacon_detector = ZeekConnBeaconDetector(self._zeek_log_dir)
+            self._zeek_file_watcher = ZeekFileExtractionWatcher(self._zeek_extract_dir, self._zeek_log_dir)
+        if self._tier_services['clamav']:
+            self._clamav = ClamAvScanner(self._clamav_host, self._clamav_port)
+        if self._tier_services['suricata']:
+            self._suricata_reader = SuricataEveLogReader(self._suricata_eve_log_path)
+            self._suricata_ingester = SuricataAlertIngester()
         self._notifier = NotificationService(self._notification_config)
         # _rule_engine is constructed lazily in _poll_job, once the adapter
         # exists (BLOCK_DEVICE actions need it) — see _ensure_adapter().
@@ -276,36 +289,39 @@ class SentinelScheduler:
             id='data_retention',
             replace_existing=True,
         )
-        self._scheduler.add_job(
-            self._canary_poll_job,
-            'interval',
-            seconds=self._canary_poll_interval_s,
-            id='canary_poll',
-        )
-        self._scheduler.add_job(
-            self._zeek_dns_poll_job,
-            'interval',
-            seconds=self._zeek_dns_poll_interval_s,
-            id='zeek_dns_poll',
-        )
-        self._scheduler.add_job(
-            self._zeek_beacon_scan_job,
-            'interval',
-            seconds=self._zeek_beacon_scan_interval_s,
-            id='zeek_beacon_scan',
-        )
-        self._scheduler.add_job(
-            self._zeek_file_scan_job,
-            'interval',
-            seconds=self._zeek_dns_poll_interval_s,
-            id='zeek_file_scan',
-        )
-        self._scheduler.add_job(
-            self._suricata_poll_job,
-            'interval',
-            seconds=self._suricata_poll_interval_s,
-            id='suricata_poll',
-        )
+        if self._tier_services['opencanary']:
+            self._scheduler.add_job(
+                self._canary_poll_job,
+                'interval',
+                seconds=self._canary_poll_interval_s,
+                id='canary_poll',
+            )
+        if self._tier_services['zeek']:
+            self._scheduler.add_job(
+                self._zeek_dns_poll_job,
+                'interval',
+                seconds=self._zeek_dns_poll_interval_s,
+                id='zeek_dns_poll',
+            )
+            self._scheduler.add_job(
+                self._zeek_beacon_scan_job,
+                'interval',
+                seconds=self._zeek_beacon_scan_interval_s,
+                id='zeek_beacon_scan',
+            )
+            self._scheduler.add_job(
+                self._zeek_file_scan_job,
+                'interval',
+                seconds=self._zeek_dns_poll_interval_s,
+                id='zeek_file_scan',
+            )
+        if self._tier_services['suricata']:
+            self._scheduler.add_job(
+                self._suricata_poll_job,
+                'interval',
+                seconds=self._suricata_poll_interval_s,
+                id='suricata_poll',
+            )
         self._scheduler.add_job(
             self._block_expiry_job,
             'interval',
@@ -751,7 +767,15 @@ class SentinelScheduler:
         /api/health, which the frontend polls every 15s per open tab; pinging
         clamd on every one of those requests would open a lot of avoidable
         sockets. This job's own interval is a cheap enough cadence for it.
+
+        Guards on self._clamav being set even though this job is only
+        registered when the 'zeek' tier flag is on — defensive, since the
+        'clamav' flag is tracked separately and the two only coincide by
+        the current tier table's design, not by any hard coupling.
         """
+        if self._clamav is None:
+            self._last_zeek_file_scan_at = datetime.now(timezone.utc)
+            return
         self._clamav_reachable = await self._clamav.ping()
 
         try:
@@ -1114,8 +1138,16 @@ class SentinelScheduler:
     def security_services_snapshot(self) -> dict[str, Any]:
         """Real status for the security services that are actually wired — no
         fabricated rows for services (e.g. Pi-hole) that don't have a live
-        signal to report yet."""
+        signal to report yet.
+
+        `deployment_tier`/`active_services` let the frontend distinguish
+        "not installed for this tier" from "installed but currently
+        down/idle" — every other field here is a None-guarded boolean or
+        timestamp that looks the same in both cases on its own. See
+        sentinel/deployment_tiers.py."""
         return {
+            'deployment_tier': self._tier,
+            'active_services': active_service_keys(self._tier),
             'arp_watch_active': self._arp_watcher.is_active if self._arp_watcher else False,
             'dhcp_watch_active': self._dhcp_watcher.is_active if self._dhcp_watcher else False,
             'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
@@ -1305,6 +1337,7 @@ def init_scheduler(app: Flask) -> None:
         block_expiry_check_interval_s=app.config['BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS'],
         correlation_scan_interval_s=app.config['CORRELATION_SCAN_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
+        deployment_tier=app.config['DEPLOYMENT_TIER'],
     )
     _scheduler.start()
 

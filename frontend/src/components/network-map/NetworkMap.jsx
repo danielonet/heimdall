@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MAP_CENTER, TIER_RADIUS, OUTER_RADIUS } from '../../lib/networkMapLayout'
 
@@ -60,31 +61,37 @@ function Bridge({ node }) {
   )
 }
 
-function Node({ node, onSelect }) {
+function Node({ node, onSelect, isHovered, onHover }) {
   const color = STATUS_COLOR[node.status]
   const toRight = node.x > CX
-  const r = nodeRadius(node.status)
-  const dim = node.status === 'offline'
+  const baseR = nodeRadius(node.status)
+  const r = isHovered ? baseR + 2 : baseR
+  const dim = node.status === 'offline' && !isHovered
   const label = node.hostname || node.mac
   return (
     <g
       className="cursor-pointer"
       opacity={dim ? 0.4 : 1}
       onClick={() => onSelect(node.mac)}
+      onMouseEnter={() => onHover(node.mac)}
+      onMouseLeave={() => onHover(null)}
     >
       <title>
         {label} · {node.sector} · {node.status.toUpperCase()}
         {node.ip_address ? ` · ${node.ip_address}` : ''}
       </title>
-      {/* Wider invisible hit target — the visible dots are too small to click reliably. */}
-      <circle cx={node.x} cy={node.y} r={12} fill="transparent" />
+      {/* Wider invisible hit target — the visible dots are too small to hover/click reliably. */}
+      <circle cx={node.x} cy={node.y} r={14} fill="transparent" />
+      {isHovered && (
+        <circle cx={node.x} cy={node.y} r={r + 5} fill="none" stroke={color} strokeWidth={1} opacity={0.45} />
+      )}
       <circle
         cx={node.x}
         cy={node.y}
         r={r}
         fill={node.status === 'online' || node.status === 'offline' ? 'var(--color-bg)' : color}
         stroke={color}
-        strokeWidth={1.5}
+        strokeWidth={isHovered ? 2.5 : 1.5}
         className={nodeAnimClass(node.status)}
       />
       <text
@@ -92,9 +99,43 @@ function Node({ node, onSelect }) {
         y={node.y + 3}
         textAnchor={toRight ? 'start' : 'end'}
         className="pointer-events-none font-mono text-[8.5px] tracking-tight"
-        fill="var(--color-text-secondary)"
+        fill={isHovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}
       >
         {label}
+      </text>
+    </g>
+  )
+}
+
+// Callout badge that appears above (or below, near the top edge) a hovered
+// node, making its MAC address legible even when the node's own label shows
+// a hostname instead — and even at high node density where labels overlap.
+function MacHighlight({ node }) {
+  if (!node) return null
+  const width = node.mac.length * 5.3 + 16
+  const height = 16
+  const above = node.y > 70
+  const boxY = above ? node.y - 14 - height : node.y + 14
+  return (
+    <g className="pointer-events-none">
+      <rect
+        x={node.x - width / 2}
+        y={boxY}
+        width={width}
+        height={height}
+        rx={2}
+        fill="var(--color-surface-elevated)"
+        stroke="var(--color-accent-green)"
+        strokeWidth={1}
+      />
+      <text
+        x={node.x}
+        y={boxY + height / 2 + 3}
+        textAnchor="middle"
+        className="font-mono text-[9px] font-semibold tracking-wide"
+        fill="var(--color-accent-green)"
+      >
+        {node.mac}
       </text>
     </g>
   )
@@ -117,6 +158,8 @@ export function NetworkMap({ layout, degraded }) {
   const navigate = useNavigate()
   const { nodes, sectors } = layout
   const coreColor = degraded ? 'var(--color-accent-red)' : 'var(--color-accent-green)'
+  const [hoveredMac, setHoveredMac] = useState(null)
+  const hoveredNode = hoveredMac ? nodes.find((n) => n.mac === hoveredMac) : null
 
   function handleSelect(mac) {
     navigate(`/devices/${mac}`)
@@ -186,7 +229,13 @@ export function NetworkMap({ layout, degraded }) {
       </g>
       <g>
         {nodes.map((n) => (
-          <Node key={n.mac} node={n} onSelect={handleSelect} />
+          <Node
+            key={n.mac}
+            node={n}
+            onSelect={handleSelect}
+            isHovered={n.mac === hoveredMac}
+            onHover={setHoveredMac}
+          />
         ))}
       </g>
 
@@ -205,6 +254,8 @@ export function NetworkMap({ layout, degraded }) {
       <text x={CX} y={CY + 10} textAnchor="middle" className="font-mono text-[7px] tracking-[2px]" fill="var(--color-text-muted)">
         WATCHTOWER
       </text>
+
+      <MacHighlight node={hoveredNode} />
     </svg>
   )
 }

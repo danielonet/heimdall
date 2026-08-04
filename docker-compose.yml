@@ -2,6 +2,12 @@ services:
 
   sentinel-backend:
     build: ./sentinel
+    # Pre-built image on GitLab Container Registry — `docker compose pull`
+    # fetches this instead of building from source (see
+    # scripts/build-and-push.sh); `docker compose up`/`build` still builds
+    # locally from ./sentinel and tags it the same way when you have the
+    # source and want to. Not wired into CI on purpose — pushed manually.
+    image: registry.gitlab.com/danielonnet-group/heimdall/sentinel-backend:${IMAGE_TAG:-latest}
     network_mode: host          # must reach router AND sniff ARP on LAN
     cap_add:
       - NET_RAW                 # required by Scapy for ARP packet sniffing
@@ -21,6 +27,11 @@ services:
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
+      # minimal | intermediate | full — which optional containers below this
+      # install actually runs; must match whatever --profile was used to
+      # bring the stack up. See sentinel/deployment_tiers.py and
+      # scripts/install.sh --tier.
+      - DEPLOYMENT_TIER=${DEPLOYMENT_TIER:-full}
     secrets:
       - router_password
       - jwt_secret
@@ -37,9 +48,11 @@ services:
       - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
       - zeek-logs:/var/log/zeek:ro              # read by zeek_parser.py (dns.log/conn.log)
       - zeek-extracted:/var/zeek/extracted:ro   # read by zeek_parser.py, scanned via ClamAV
+      - suricata-logs:/var/log/suricata:ro      # read by SuricataEveLogReader (eve.json)
 
   frontend:
     build: ./frontend
+    image: registry.gitlab.com/danielonnet-group/heimdall/frontend:${IMAGE_TAG:-latest}
     network_mode: host          # so nginx can proxy /api + /socket.io to
                                  # sentinel-backend at 127.0.0.1:5000 without
                                  # CORS (see frontend/nginx.conf) — nginx
@@ -71,8 +84,12 @@ services:
   # WireMock: Mock Sagemcom router XMO API (optional, for testing with recorded responses)
   # Enable this only if you want to test against actual XMO API response formats
   # from a real router (recorded traffic). See docs/architecture/10-mock-router.md
+  # Dev/test tooling only — not part of any real installation tier, so it's
+  # never started by `docker compose up`, `--profile intermediate`, or
+  # `--profile full`; only an explicit `--profile dev` brings it up.
   wiremock:
     image: wiremock/wiremock:3.x-alpine
+    profiles: ["dev"]
     ports:
       - "8080:8080"             # Admin API + stub responses
     volumes:
@@ -83,8 +100,10 @@ services:
       - --disable-request-logging
     restart: unless-stopped
 
+  # full tier only — see sentinel/deployment_tiers.py
   suricata:
     image: jasonish/suricata:latest
+    profiles: ["full"]
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -95,24 +114,34 @@ services:
     command: ["--af-packet=${SNIFF_IFACE:-eth0}"]
     restart: unless-stopped
 
+  # full tier only — depends on zeek's file-extraction watcher for anything
+  # to actually scan (see _zeek_file_scan_job in sentinel/scheduler/scheduler.py),
+  # so it's never meaningful in intermediate without zeek alongside it.
   clamav:
     image: clamav/clamav:stable
+    profiles: ["full"]
     ports:
       - "3310:3310"             # TCP socket for pyclamd
     volumes:
       - clamav-db:/var/lib/clamav
     restart: unless-stopped
 
+  # intermediate + full — the one lightweight, dependency-free optional
+  # container: idle socket listeners only, no packet inspection, no
+  # signature database. See docs/deployment-tiers-plan.md.
   opencanary:
     image: thinkst/opencanary:latest
+    profiles: ["intermediate", "full"]
     network_mode: host          # must appear as a real LAN device
     volumes:
       - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
       - opencanary-logs:/var/log/opencanary
     restart: unless-stopped
 
+  # full tier only — see sentinel/deployment_tiers.py
   zeek:
     image: zeek/zeek:latest
+    profiles: ["full"]
     network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
     cap_add:
       - NET_ADMIN

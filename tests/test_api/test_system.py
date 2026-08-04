@@ -14,11 +14,22 @@ class TestHealth:
         assert body['redis']['reachable'] is True
 
     def test_reports_security_services_defaults_without_scheduler(self, client):
+        """Same key shape security_services_snapshot() returns when a
+        scheduler exists — a scheduler that never started shouldn't hand the
+        frontend a smaller/different JSON shape to special-case."""
         resp = client.get('/api/health')
         body = resp.get_json()
         assert body['security_services'] == {
-            'arp_watch_active': False, 'fingerprint_active': False,
+            'deployment_tier': 'minimal',
+            'active_services': [
+                'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch',
+                'fingerprint', 'nmap', 'threat_intel',
+            ],
+            'arp_watch_active': False, 'dhcp_watch_active': False, 'fingerprint_active': False,
+            'sniff_iface': '',
             'nmap_last_scan_at': None, 'canary_last_check_at': None,
+            'zeek_dns_last_check_at': None, 'zeek_beacon_last_scan_at': None,
+            'clamav_reachable': None, 'suricata_last_check_at': None,
         }
         assert body['threat_intel_feeds'] == {}
 

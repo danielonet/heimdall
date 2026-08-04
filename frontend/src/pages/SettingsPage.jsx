@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useRouterInfo } from '../hooks/useRouterInfo'
+import { useHealth } from '../hooks/useHealth'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
@@ -31,8 +32,10 @@ function Field({ label, children }) {
 
 export function SettingsPage() {
   const { data: router, isLoading, isError, error } = useRouterInfo()
+  const { data: health } = useHealth()
   const mode = useLayoutMode()
   const navigate = useNavigate()
+  const deploymentTier = health?.security_services?.deployment_tier
 
   // Keyed off layout mode, not viewport — see PortsPage/ThreatsPage.
   const gridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-4 gap-3'
@@ -63,6 +66,9 @@ export function SettingsPage() {
             </Field>
             <Field label="WAN MODE">{router.wan_mode || '—'}</Field>
             <Field label="UPTIME">{formatUptime(router.uptime_seconds)}</Field>
+            <Field label="DEPLOYMENT">
+              {deploymentTier ? <Badge variant="info">{deploymentTier.toUpperCase()}</Badge> : '—'}
+            </Field>
             <div className={mode === 'mobile' ? '' : 'col-span-2'}>
               <Field label="SSIDs">{(router.ssids || []).join(', ') || '—'}</Field>
             </div>

@@ -556,12 +556,19 @@ class SagemcomXmoAdapter(RouterAdapter):
         exist); AssociatedDevices carries real SignalStrength (dBm) and
         LastDataDownlinkRate (kbps) for WiFi clients instead.
         """
-        iface_type = host.get('InterfaceType', '')
-        interface_name = 'WiFi' if iface_type == 'WiFi' else 'Ethernet'
-        is_active = _is_active(host)
-
         mac = _norm_mac(host.get('PhysAddress', ''))
         client = (associated or {}).get(mac, {})
+
+        iface_type = host.get('InterfaceType', '')
+        # Device/Hosts' InterfaceType is unreliable on this firmware — several
+        # of its other fields are known-stale/blank for WiFi clients too (see
+        # _get_hosts()'s docstring). AssociatedDevices is queried straight off
+        # the AP objects and is WiFi-only data, so a MAC's presence there is
+        # definitive proof it's on WiFi even when Hosts disagrees (confirmed
+        # in production: a phone showing InterfaceType='Ethernet' while
+        # DetectedDeviceType correctly says 'Smartphone').
+        interface_name = 'WiFi' if (iface_type == 'WiFi' or client) else 'Ethernet'
+        is_active = _is_active(host)
 
         signal_strength_dbm = _int_field(client, 'SignalStrength') if client else _int_field(host, 'X_SAGEMCOM_SignalStrength')
         # LastDataDownlinkRate is in kbps (confirmed live: 72222 ~= MaxBitRate

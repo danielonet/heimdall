@@ -11,17 +11,51 @@
 # What it does:
 #   1. System packages  (docker, python3, node, nmap, libpcap, etc.)
 #   2. Docker Engine    (official install script if not already present)
-#   3. Python packages  (pip install -r requirements.txt)
-#   4. Node packages    (npm install in frontend/ when package.json exists)
-#   5. Secrets scaffold (creates secrets/ files with dev placeholders)
-#   6. .env scaffold    (creates .env with safe dev defaults)
-#   7. Config dirs      (suricata/, opencanary/ — required by docker-compose)
+#   3. Python packages  (pip install -r requirements.txt)     [skipped with --pull]
+#   4. Node packages    (npm install in frontend/)             [skipped with --pull]
+#   5. Secrets scaffold (creates secrets/ files with dev placeholders — unique per machine)
+#   6. .env scaffold    (creates .env with safe dev defaults, incl. DEPLOYMENT_TIER)
+#   7. Config dirs      (suricata/, opencanary/ — only the ones this tier needs)
+#   8. ML model dir     (host/console dev only)                [skipped with --pull]
+#
+# Installation tiers (--tier=minimal|intermediate|full, see
+# sentinel/deployment_tiers.py and docs/deployment-tiers-plan.md):
+#   minimal      core stack only (postgres/redis/backend/frontend)
+#   intermediate minimal + OpenCanary
+#   full         everything (+ Zeek, ClamAV, Suricata)
+# Prefer the thin wrappers for discoverability:
+#   sudo ./scripts/install-minimal.sh
+#   sudo ./scripts/install-intermediate.sh
+#   sudo ./scripts/install-full.sh
+#
+# --pull: for a new machine that isn't building from source — skips the
+# Python/Node toolchain setup entirely and expects `docker compose pull`
+# (after `docker login registry.gitlab.com`) to fetch pre-built images
+# published by scripts/build-and-push.sh. Secrets/.env are still scaffolded
+# fresh, so every machine still gets its own unique passwords.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/utils.sh
 source "${REPO_ROOT}/scripts/lib/utils.sh"
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+TIER=""
+PULL_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --tier=*) TIER="${arg#--tier=}" ;;
+        --pull) PULL_MODE=true ;;
+        *) log_error "Unknown argument: $arg (expected --tier=minimal|intermediate|full, --pull)"; exit 1 ;;
+    esac
+done
+if [ -n "$TIER" ]; then
+    case "$TIER" in
+        minimal|intermediate|full) ;;
+        *) log_error "Invalid --tier=$TIER (must be minimal, intermediate, or full)"; exit 1 ;;
+    esac
+fi
 
 # ── 0. Must run as root (or with sudo) for apt operations ─────────────────────
 if [ "$EUID" -ne 0 ]; then
@@ -33,9 +67,31 @@ fi
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 
+# Resolve the tier interactively only once we know the script will actually
+# proceed (root check passed) — no point prompting just to fail afterward.
+if [ -z "$TIER" ]; then
+    if [ -t 0 ]; then
+        echo "Which installation tier?"
+        echo "  1) minimal       core stack only — no extra containers"
+        echo "  2) intermediate  minimal + OpenCanary"
+        echo "  3) full          everything (+ Zeek, ClamAV, Suricata)"
+        read -rp "Enter 1/2/3 [3]: " _choice
+        case "$_choice" in
+            1) TIER="minimal" ;;
+            2) TIER="intermediate" ;;
+            3|"") TIER="full" ;;
+            *) log_error "Invalid choice: $_choice"; exit 1 ;;
+        esac
+    else
+        TIER="minimal"
+        log_warn "No --tier given and not running interactively — defaulting to 'minimal'"
+    fi
+fi
+
 log_section "Heimdall Install"
 echo "  Repo root : ${REPO_ROOT}"
 echo "  Real user : ${REAL_USER}"
+echo "  Tier      : ${TIER}"
 echo ""
 
 # ── 1. System packages ────────────────────────────────────────────────────────
@@ -125,61 +181,66 @@ else
     log_skip "Docker daemon already running"
 fi
 
-# ── 3. Node.js ────────────────────────────────────────────────────────────────
-log_section "Node.js"
-
-if have node && have npm; then
-    log_skip "Node.js $(node --version) / npm $(npm --version)"
+if $PULL_MODE; then
+    log_section "Node.js / Python / Frontend Packages"
+    log_skip "Steps 3-5 (--pull mode: images come from the registry, no build toolchain needed)"
 else
-    log_info "Installing Node.js LTS via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-    apt-get install -y -qq nodejs
-    log_success "Node.js $(node --version) / npm $(npm --version) installed"
-fi
+    # ── 3. Node.js ────────────────────────────────────────────────────────────
+    log_section "Node.js"
 
-# ── 4. Python packages ────────────────────────────────────────────────────────
-log_section "Python Packages"
-
-REQUIREMENTS="${REPO_ROOT}/sentinel/requirements.txt"
-STAMP_FILE="${REPO_ROOT}/.install_stamp"
-VENV_DIR="${REPO_ROOT}/.venv"
-
-# Debian/Ubuntu system Python is externally-managed (PEP 668) — use a venv,
-# which is also where run.sh looks for its interpreter.
-if [ ! -d "$VENV_DIR" ]; then
-    log_info "Creating Python virtual environment..."
-    sudo -u "$REAL_USER" python3 -m venv "$VENV_DIR"
-fi
-
-# Reinstall if requirements.txt is newer than the stamp file
-if [ -f "$STAMP_FILE" ] && [ "$REQUIREMENTS" -ot "$STAMP_FILE" ]; then
-    log_skip "Python packages (requirements.txt unchanged since last install)"
-else
-    log_info "Installing Python packages from requirements.txt..."
-    sudo -u "$REAL_USER" "${VENV_DIR}/bin/pip" install -q -r "$REQUIREMENTS"
-    touch "$STAMP_FILE"
-    log_success "Python packages installed"
-fi
-
-# ── 5. Node packages (frontend) ───────────────────────────────────────────────
-log_section "Frontend Node Packages"
-
-FRONTEND_DIR="${REPO_ROOT}/frontend"
-if [ ! -f "${FRONTEND_DIR}/package.json" ]; then
-    log_warn "frontend/package.json not found — skipping npm install (frontend not scaffolded yet)"
-elif [ -d "${FRONTEND_DIR}/node_modules" ]; then
-    # Re-run only if package.json changed since node_modules was last modified
-    if [ "${FRONTEND_DIR}/package.json" -ot "${FRONTEND_DIR}/node_modules" ]; then
-        log_skip "node_modules (package.json unchanged)"
+    if have node && have npm; then
+        log_skip "Node.js $(node --version) / npm $(npm --version)"
     else
-        log_info "package.json changed — running npm install..."
+        log_info "Installing Node.js LTS via NodeSource..."
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+        apt-get install -y -qq nodejs
+        log_success "Node.js $(node --version) / npm $(npm --version) installed"
+    fi
+
+    # ── 4. Python packages ────────────────────────────────────────────────────
+    log_section "Python Packages"
+
+    REQUIREMENTS="${REPO_ROOT}/sentinel/requirements.txt"
+    STAMP_FILE="${REPO_ROOT}/.install_stamp"
+    VENV_DIR="${REPO_ROOT}/.venv"
+
+    # Debian/Ubuntu system Python is externally-managed (PEP 668) — use a venv,
+    # which is also where run.sh looks for its interpreter.
+    if [ ! -d "$VENV_DIR" ]; then
+        log_info "Creating Python virtual environment..."
+        sudo -u "$REAL_USER" python3 -m venv "$VENV_DIR"
+    fi
+
+    # Reinstall if requirements.txt is newer than the stamp file
+    if [ -f "$STAMP_FILE" ] && [ "$REQUIREMENTS" -ot "$STAMP_FILE" ]; then
+        log_skip "Python packages (requirements.txt unchanged since last install)"
+    else
+        log_info "Installing Python packages from requirements.txt..."
+        sudo -u "$REAL_USER" "${VENV_DIR}/bin/pip" install -q -r "$REQUIREMENTS"
+        touch "$STAMP_FILE"
+        log_success "Python packages installed"
+    fi
+
+    # ── 5. Node packages (frontend) ───────────────────────────────────────────
+    log_section "Frontend Node Packages"
+
+    FRONTEND_DIR="${REPO_ROOT}/frontend"
+    if [ ! -f "${FRONTEND_DIR}/package.json" ]; then
+        log_warn "frontend/package.json not found — skipping npm install (frontend not scaffolded yet)"
+    elif [ -d "${FRONTEND_DIR}/node_modules" ]; then
+        # Re-run only if package.json changed since node_modules was last modified
+        if [ "${FRONTEND_DIR}/package.json" -ot "${FRONTEND_DIR}/node_modules" ]; then
+            log_skip "node_modules (package.json unchanged)"
+        else
+            log_info "package.json changed — running npm install..."
+            sudo -u "$REAL_USER" bash -c "cd '${FRONTEND_DIR}' && npm install --silent"
+            log_success "npm install complete"
+        fi
+    else
+        log_info "Running npm install in frontend/..."
         sudo -u "$REAL_USER" bash -c "cd '${FRONTEND_DIR}' && npm install --silent"
         log_success "npm install complete"
     fi
-else
-    log_info "Running npm install in frontend/..."
-    sudo -u "$REAL_USER" bash -c "cd '${FRONTEND_DIR}' && npm install --silent"
-    log_success "npm install complete"
 fi
 
 # ── 6. Secrets scaffold ───────────────────────────────────────────────────────
@@ -251,6 +312,9 @@ log_section ".env File"
 ENV_FILE="${REPO_ROOT}/.env"
 if [ -f "$ENV_FILE" ]; then
     log_skip ".env already exists"
+    if grep -q "^DEPLOYMENT_TIER=" "$ENV_FILE" && ! grep -q "^DEPLOYMENT_TIER=${TIER}$" "$ENV_FILE"; then
+        log_warn "Requested tier '${TIER}' doesn't match .env's existing DEPLOYMENT_TIER — edit .env by hand to change tier on an existing install"
+    fi
 else
     # Read the generated db_pass so DATABASE_URL is fully populated from the start
     _db_pass=$(cat "${SECRETS_DIR}/db_pass.txt" | tr -d '[:space:]')
@@ -260,6 +324,11 @@ else
 #
 # Secrets are read from secrets/*.txt files (via *_FILE env vars in run.sh).
 # Only non-sensitive config lives here.
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+# minimal | intermediate | full — must match whichever --profile you bring
+# the stack up with. See sentinel/deployment_tiers.py.
+DEPLOYMENT_TIER=${TIER}
 
 # ── Router ────────────────────────────────────────────────────────────────────
 ROUTER_ADAPTER=sagemcom
@@ -300,7 +369,15 @@ fi
 # ── 8. Config dirs required by docker-compose ────────────────────────────────
 log_section "Docker Compose Config Dirs"
 
-for dir in suricata opencanary; do
+# Only scaffold config dirs for containers this tier actually starts —
+# opencanary.conf/suricata.yaml are meaningless bind mounts for a container
+# that's excluded from the compose profile.
+CONFIG_DIRS=()
+[ "$TIER" = "intermediate" ] || [ "$TIER" = "full" ] && CONFIG_DIRS+=(opencanary)
+[ "$TIER" = "full" ] && CONFIG_DIRS+=(suricata)
+
+for dir in "${CONFIG_DIRS[@]:-}"; do
+    [ -z "$dir" ] && continue
     if [ -d "${REPO_ROOT}/${dir}" ]; then
         log_skip "${dir}/ directory"
     else
@@ -310,19 +387,24 @@ for dir in suricata opencanary; do
     fi
 done
 
-# ── 9. ML model dir (host/console dev) ────────────────────────────────────────
-log_section "ML Model Directory"
-
-# sentinel/config.py defaults ML_MODEL_DIR to /data/models (the Docker volume
-# mount). run.sh runs the backend directly on the host, where that path
-# doesn't exist and can't be created without root, so provide a repo-local
-# fallback that the .env scaffold above points ML_MODEL_DIR at.
-if [ -d "${REPO_ROOT}/data/models" ]; then
-    log_skip "data/models/ directory"
+if $PULL_MODE; then
+    log_section "ML Model Directory"
+    log_skip "data/models/ (--pull mode: only needed for scripts/run.sh's host-console dev mode)"
 else
-    mkdir -p "${REPO_ROOT}/data/models"
-    chown -R "$REAL_USER:$REAL_USER" "${REPO_ROOT}/data"
-    log_success "Created data/models/"
+    # ── 9. ML model dir (host/console dev) ────────────────────────────────────
+    log_section "ML Model Directory"
+
+    # sentinel/config.py defaults ML_MODEL_DIR to /data/models (the Docker volume
+    # mount). run.sh runs the backend directly on the host, where that path
+    # doesn't exist and can't be created without root, so provide a repo-local
+    # fallback that the .env scaffold above points ML_MODEL_DIR at.
+    if [ -d "${REPO_ROOT}/data/models" ]; then
+        log_skip "data/models/ directory"
+    else
+        mkdir -p "${REPO_ROOT}/data/models"
+        chown -R "$REAL_USER:$REAL_USER" "${REPO_ROOT}/data"
+        log_success "Created data/models/"
+    fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
@@ -332,7 +414,19 @@ echo "  Next steps:"
 echo "  1. Edit ${BOLD}secrets/router_password.txt${NC} with your router admin password"
 echo "  2. Edit ${BOLD}secrets/otx_api_key.txt${NC} with your AlienVault OTX key (optional)"
 echo "  3. Edit ${BOLD}.env${NC} — set SNIFF_IFACE to your LAN interface (ip link show)"
-echo "  4. Run:  ${BOLD}./scripts/run.sh${NC}"
+case "$TIER" in
+    minimal)      _compose_cmd="docker compose up -d" ;;
+    intermediate) _compose_cmd="docker compose --profile intermediate up -d" ;;
+    full)         _compose_cmd="docker compose --profile full up -d" ;;
+esac
+if $PULL_MODE; then
+    echo "  4. Log in to the registry: ${BOLD}docker login registry.gitlab.com${NC}"
+    echo "  5. Pull the published images: ${BOLD}IMAGE_TAG=latest docker compose pull${NC}"
+    echo "  6. Start the stack (tier: ${BOLD}${TIER}${NC}): ${BOLD}${_compose_cmd}${NC}"
+else
+    echo "  4. Dev mode (backend/frontend on host, infra in Docker): ${BOLD}./scripts/run.sh${NC}"
+    echo "     Full container deployment (tier: ${BOLD}${TIER}${NC}): ${BOLD}${_compose_cmd}${NC}"
+fi
 echo ""
 if id -nG "$REAL_USER" | grep -qw docker; then
     true

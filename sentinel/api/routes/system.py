@@ -11,6 +11,7 @@ from sqlalchemy import select, text
 from sentinel.api.serializers import wan_stats_to_dict
 from sentinel.db.models import WanStats
 from sentinel.db.session import get_session
+from sentinel.deployment_tiers import active_service_keys
 from sentinel.scheduler.scheduler import get_scheduler
 
 bp = Blueprint('system', __name__)
@@ -60,9 +61,20 @@ async def health():
     redis_ok = await _check_redis()
 
     scheduler_status = {'scheduler_running': False, 'last_poll_at': None, 'last_poll_error': None}
+    # Same shape security_services_snapshot() returns when a scheduler
+    # exists — the scheduler not being initialised (e.g. SCHEDULER_ENABLED=
+    # false) doesn't mean the frontend should get a different/smaller JSON
+    # shape to handle. Tier falls back to 'minimal' for the same "never
+    # assume more than what's provably running" reason services_for_tier()
+    # defaults unknown tiers to minimal.
     security_services = {
-        'arp_watch_active': False, 'fingerprint_active': False,
+        'deployment_tier': 'minimal',
+        'active_services': active_service_keys('minimal'),
+        'arp_watch_active': False, 'dhcp_watch_active': False, 'fingerprint_active': False,
+        'sniff_iface': '',
         'nmap_last_scan_at': None, 'canary_last_check_at': None,
+        'zeek_dns_last_check_at': None, 'zeek_beacon_last_scan_at': None,
+        'clamav_reachable': None, 'suricata_last_check_at': None,
     }
     threat_intel_feeds: dict = {}
     try:

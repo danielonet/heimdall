@@ -105,6 +105,28 @@ class TestToDeviceSnapshotInterfaceType:
         snap = adapter._to_device_snapshot(host)
         assert snap.interface_name == 'Ethernet'
 
+    def test_presence_in_associated_devices_overrides_stale_ethernet(self, adapter):
+        """Confirmed in production: a phone (DetectedDeviceType='Smartphone')
+        with InterfaceType='Ethernet' in Device/Hosts, but a real entry in
+        AssociatedDevices — that's WiFi-only data, so it wins."""
+        host = _wifi_host(InterfaceType='Ethernet', DetectedDeviceType='Smartphone')
+        associated = {'da:d4:19:31:c0:e9': _associated_client()}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.interface_name == 'WiFi'
+
+    def test_presence_in_associated_devices_overrides_missing_interface_type(self, adapter):
+        host = _wifi_host()
+        del host['InterfaceType']
+        associated = {'da:d4:19:31:c0:e9': _associated_client()}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.interface_name == 'WiFi'
+
+    def test_genuinely_wired_device_unaffected_by_unrelated_associated_entries(self, adapter):
+        host = _wired_host()
+        associated = {'11:22:33:44:55:66': _associated_client()}  # a different device's MAC
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.interface_name == 'Ethernet'
+
 
 class TestToDeviceSnapshotSignal:
     def test_signal_strength_negative_dbm(self, adapter):
