@@ -95,6 +95,8 @@ class TestCanaryPollJob:
         assert alert.alert_type == 'HONEYPOT_ACCESS'
         assert alert.device_mac == _MAC
         assert alert.severity == 'CRITICAL'
+        assert alert.mitigation is not None  # see sentinel/security/remediation.py
+        assert 'telnet' in alert.mitigation.lower()
 
     async def test_auto_block_armed_blocks_the_source_device(self, scheduler):
         """A honeypot hit is inherently malicious — it must auto-block exactly

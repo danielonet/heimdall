@@ -95,6 +95,7 @@ class TestSuricataPollJob:
         assert alert.alert_type == 'IDS_SIGNATURE_MATCH'
         assert alert.device_mac == _MAC
         assert 'ET MALWARE Test Signature' in alert.description
+        assert alert.mitigation is not None  # see sentinel/security/remediation.py
 
     async def test_severity_1_maps_to_critical_alert(self, scheduler):
         await _seed_device(is_blocked=False)

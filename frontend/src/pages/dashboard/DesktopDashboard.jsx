@@ -6,7 +6,7 @@ import { ThroughputArrows } from '../../components/ThroughputArrows'
 import { MacAddress } from '../../components/MacAddress'
 import { Badge } from '../../components/Badge'
 import { BlockButton } from '../../components/BlockButton'
-import { CriticalAlertBanner } from '../../components/dashboard/CriticalAlertBanner'
+import { SelectedAlertPanel } from '../../components/dashboard/SelectedAlertPanel'
 import { AlertFeed } from '../../components/dashboard/AlertFeed'
 import { TrafficBarChart } from '../../components/dashboard/TrafficBarChart'
 import { ServiceStatusPanel } from '../../components/dashboard/ServiceStatusPanel'
@@ -23,7 +23,7 @@ const HOSTS_SHOWN = 8
 // default row-stretch behavior pulls Hosts/Bandwidth tall to match it, and
 // the whole page can push Ports below the fold. See docs/
 // dashboard-rail-and-palette-plan.md.
-export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, health, ports, alertsTotal }) {
+export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, ports, alertsTotal }) {
   const onlineDevices = devices.filter(isDeviceOnline)
   const onlineCount = onlineDevices.length
   const hiddenCount = Math.max(onlineCount - HOSTS_SHOWN, 0)
@@ -85,10 +85,10 @@ export function DesktopDashboard({ devices, alerts, criticalAlert, threatScore, 
           <div className="flex flex-1 gap-px overflow-hidden">
             <div className="flex-[2] border border-border bg-surface p-4">
               <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">OPEN ALERTS</div>
-              <AlertFeed alerts={alerts} />
+              <AlertFeed alerts={alerts} onSelect={onSelectAlert} />
             </div>
             <div className="flex-1">
-              <CriticalAlertBanner alert={criticalAlert} />
+              <SelectedAlertPanel alert={bannerAlert} />
             </div>
           </div>
 

@@ -225,6 +225,12 @@ class Alert(Base):
     severity: Mapped[str] = mapped_column(String(10))  # INFO | WARNING | CRITICAL
     description: Mapped[str | None] = mapped_column(Text)
     raw_data: Mapped[dict | None] = mapped_column(JSONB)
+    # Canned "what to do about this" guidance — see
+    # sentinel/security/remediation.py:build_mitigation(). Only ever set by
+    # SentinelScheduler._raise_threat_alert (confirmed-attack alert types);
+    # NULL for RuleEngine/detector-pipeline alerts, which have no fixed
+    # alert_type to key remediation copy off of.
+    mitigation: Mapped[str | None] = mapped_column(Text)
     acknowledged: Mapped[bool] = mapped_column(Boolean, server_default='false')
     resolved: Mapped[bool] = mapped_column(Boolean, server_default='false')
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

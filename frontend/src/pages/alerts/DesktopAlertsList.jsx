@@ -5,6 +5,7 @@ import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { AlertHistogram } from '../../components/alerts/AlertHistogram'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
+import { MitigationNote } from '../../components/alerts/MitigationNote'
 
 const SEVERITY_OPTIONS = [['all', 'ALL'], ['CRITICAL', 'CRITICAL'], ['WARNING', 'WARNING'], ['INFO', 'INFO']]
 const ACK_OPTIONS = [['all', 'ALL'], ['open', 'OPEN'], ['acked', 'ACKED']]
@@ -70,7 +71,10 @@ export function DesktopAlertsList({
             <SeverityBar severity={a.severity} />
             <div className="min-w-0 flex-1">
               <div className="text-[11px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
-              <div className="truncate text-[10px] text-text-secondary">{a.description}</div>
+              <div className="truncate text-[10px] text-text-secondary" title={a.description}>
+                {a.description}
+              </div>
+              <MitigationNote text={a.mitigation} />
             </div>
             <div className="w-36 flex-shrink-0 text-[10px]">
               {a.device_mac ? (

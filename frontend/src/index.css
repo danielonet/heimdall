@@ -79,7 +79,7 @@
   :root {
     /* Tells the browser this page is already intentionally dark-themed, so
        Android Chrome's "force dark" heuristic doesn't try to auto-invert our
-       custom palette (it otherwise mangles colors like the CriticalAlertBanner's
+       custom palette (it otherwise mangles colors like the SelectedAlertPanel's
        translucent red tint into stray solid colors). */
     color-scheme: dark;
   }

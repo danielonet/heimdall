@@ -3,12 +3,12 @@ import { StatusDot } from '../../components/StatusDot'
 import { TrafficDisplay } from '../../components/TrafficDisplay'
 import { MacAddress } from '../../components/MacAddress'
 import { Badge } from '../../components/Badge'
-import { CriticalAlertBanner } from '../../components/dashboard/CriticalAlertBanner'
+import { SelectedAlertPanel } from '../../components/dashboard/SelectedAlertPanel'
 import { AlertFeed } from '../../components/dashboard/AlertFeed'
 import { ServiceStatusPanel } from '../../components/dashboard/ServiceStatusPanel'
 import { isDeviceOnline } from '../../lib/deviceFilters'
 
-export function MobileDashboard({ devices, alerts, criticalAlert, threatScore, health, alertsTotal }) {
+export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, alertsTotal }) {
   const servicesOkCount = health
     ? Object.values(health.security_services || {}).filter((v) => v === true).length
     : null
@@ -24,7 +24,7 @@ export function MobileDashboard({ devices, alerts, criticalAlert, threatScore, h
         <MetricCard label="SERVICES ACTIVE" value={servicesOkCount ?? '—'} accent="blue" />
       </div>
 
-      <CriticalAlertBanner alert={criticalAlert} />
+      <SelectedAlertPanel alert={bannerAlert} />
 
       <div>
         <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">CONNECTED DEVICES</div>
@@ -53,7 +53,7 @@ export function MobileDashboard({ devices, alerts, criticalAlert, threatScore, h
 
       <div>
         <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">EVENT LOG</div>
-        <AlertFeed alerts={alerts} limit={5} />
+        <AlertFeed alerts={alerts} limit={5} onSelect={onSelectAlert} />
       </div>
     </div>
   )

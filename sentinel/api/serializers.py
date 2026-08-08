@@ -58,6 +58,7 @@ def alert_to_dict(alert: Alert) -> dict[str, Any]:
         'severity': alert.severity,
         'description': alert.description,
         'raw_data': alert.raw_data,
+        'mitigation': alert.mitigation,
         'acknowledged': alert.acknowledged,
         'resolved': alert.resolved,
         'created_at': alert.created_at.isoformat() if alert.created_at else None,

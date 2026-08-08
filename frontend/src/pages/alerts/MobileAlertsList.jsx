@@ -4,6 +4,7 @@ import { Badge } from '../../components/Badge'
 import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
+import { MitigationNote } from '../../components/alerts/MitigationNote'
 
 const FILTER_GROUPS = [
   ['SEVERITY', [['all', 'ALL'], ['CRITICAL', 'CRIT'], ['WARNING', 'WARN'], ['INFO', 'INFO']], 'severity', 'setSeverity'],
@@ -52,6 +53,7 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
             <div className="min-w-0 flex-1">
               <div className="text-[11px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
               <div className="text-[9px] text-text-secondary">{a.description}</div>
+              <MitigationNote text={a.mitigation} />
               <div className="mt-1 flex items-center gap-2 text-[9px] text-text-muted">
                 {a.device_mac && (
                   <Link to={`/devices/${a.device_mac}`} className="text-accent-blue">

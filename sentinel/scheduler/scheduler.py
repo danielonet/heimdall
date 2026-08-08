@@ -46,6 +46,7 @@ from sentinel.security.clamav_scanner import ClamAvScanner
 from sentinel.security.dhcp_watch import DhcpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.os_classification import os_family
+from sentinel.security.remediation import build_mitigation
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.suricata_parser import SuricataAlertIngester, SuricataEveLogReader
 from sentinel.security.threat_intel import ThreatIntelService
@@ -960,6 +961,11 @@ class SentinelScheduler:
         AppSettings.auto_block_expiry_hours (0 = auto-blocks never expire).
         Manual blocks (POST /devices/<mac>/block) never go through this
         method, so blocked_until stays NULL for them — indefinite by design.
+
+        Also stamps Alert.mitigation with canned "what to do about this"
+        guidance via build_mitigation() — None for alert types it doesn't
+        recognize, same fallback SettingsRepository-style callers already
+        tolerate elsewhere.
         """
         blocked_now = False
         block_failed = False
@@ -990,6 +996,7 @@ class SentinelScheduler:
             alert = Alert(
                 device_mac=mac, alert_type=alert_type, severity=severity,
                 description=description, raw_data=raw_data or {},
+                mitigation=build_mitigation(alert_type, raw_data),
             )
             session.add(alert)
         emit_alert(alert_to_dict(alert))
