@@ -673,7 +673,12 @@ class SentinelScheduler:
             logger.exception('Security digest job failed')
 
     async def _canary_poll_job(self) -> None:
-        """Tail the OpenCanary log and persist any new honeypot-interaction alerts."""
+        """Tail the OpenCanary log and raise a threat alert for any new
+        honeypot-interaction event. Any connection to a honeypot service is
+        inherently malicious (nothing legitimate ever talks to one), so this
+        goes through _raise_threat_alert like every other attack-signal
+        source — a real intrusion here should auto-block exactly as an
+        ARP-spoof or Suricata hit does, not just get logged."""
         self._last_canary_check_at = datetime.now(timezone.utc)
         lines = self._canary_reader.read_new_lines()
         for line in lines:
@@ -687,14 +692,10 @@ class SentinelScheduler:
 
     async def _persist_canary_alert(self, alert: Alert) -> None:
         src_host = alert.raw_data.get('src_host')
-        async with get_session() as session:
-            if src_host:
-                result = await session.execute(
-                    select(Device.mac_address).where(Device.ip_address == src_host)
-                )
-                alert.device_mac = result.scalars().first()
-            session.add(alert)
-        emit_alert(alert_to_dict(alert))
+        mac = await self._mac_for_ip(src_host) if src_host else None
+        await self._raise_threat_alert(
+            mac, alert.alert_type, alert.severity, alert.description, raw_data=alert.raw_data,
+        )
 
     async def _mac_for_ip(self, ip: str) -> str | None:
         """Resolve a source IP (as seen in a Zeek log line) to a known device_mac —
@@ -929,9 +930,14 @@ class SentinelScheduler:
     ) -> None:
         """Create+broadcast an Alert for a detected attack. If auto_block_on_threat
         is armed, blocks the device via the router adapter first so the alert
-        description can note it — the single place ArpWatcher/PassiveFingerprinter/
-        NetworkScanner-driven attack alerts go through, so all three respond
-        the same way.
+        description can note it — the single choke point every attack-signal
+        source (ArpWatcher, DhcpWatcher, PassiveFingerprinter, NetworkScanner,
+        Zeek DNS/beaconing/file-extraction, Suricata, OpenCanary) routes
+        through, so all of them respond the same way. Deliberately NOT used
+        by the ML/statistical detector pipeline (sentinel/detection/pipeline.py)
+        or its own alerts (anomalous-volume, signal-anomaly, vendor-mismatch,
+        etc.) — those are heuristic/probabilistic signals worth a human's
+        judgment, not a confirmed attack, so they must never auto-block.
 
         Always re-issues the block, even if device.is_blocked is already True
         — that DB flag is only ever a cache of the last known outcome, and

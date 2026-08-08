@@ -568,7 +568,17 @@ class SagemcomXmoAdapter(RouterAdapter):
         # in production: a phone showing InterfaceType='Ethernet' while
         # DetectedDeviceType correctly says 'Smartphone').
         interface_name = 'WiFi' if (iface_type == 'WiFi' or client) else 'Ethernet'
-        is_active = _is_active(host)
+        # Same reasoning as interface_name above, applied to liveness: Hosts'
+        # own Active field appears to lag well behind the device actually
+        # going away (confirmed in production — a powered-off device stayed
+        # "online" on the dashboard for a long time). AssociatedDevices'
+        # Active field is the router's live 802.11 association state — the
+        # xpath docs (docs/router/sagemcom-xmo-api.md) confirm it can be
+        # false on a stale per-AP entry, so it's a real, faster-updating
+        # signal, not just presence/absence. Only WiFi clients ever appear
+        # in AssociatedDevices at all, so wired devices keep relying on
+        # Hosts' Active exactly as before.
+        is_active = _is_active(client) if client else _is_active(host)
 
         signal_strength_dbm = _int_field(client, 'SignalStrength') if client else _int_field(host, 'X_SAGEMCOM_SignalStrength')
         # LastDataDownlinkRate is in kbps (confirmed live: 72222 ~= MaxBitRate

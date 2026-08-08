@@ -578,6 +578,35 @@ class TestToDeviceSnapshotActive:
         snap = adapter._to_device_snapshot(host)
         assert snap.is_online is False
 
+    def test_associated_devices_active_false_overrides_stale_host_active_true(self, adapter):
+        """Confirmed in production: Hosts' Active lags well behind a device
+        actually powering off. AssociatedDevices' own Active field is the
+        router's live association state and should win when present."""
+        host = _wifi_host(Active=True)
+        associated = {'da:d4:19:31:c0:e9': _associated_client(Active=False)}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.is_online is False
+
+    def test_associated_devices_active_true_overrides_stale_host_active_false(self, adapter):
+        host = _wifi_host(Active=False)
+        associated = {'da:d4:19:31:c0:e9': _associated_client(Active=True)}
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.is_online is True
+
+    def test_wired_device_unaffected_since_it_has_no_associated_devices_entry(self, adapter):
+        host = _wired_host(Active=True)
+        associated = {'11:22:33:44:55:66': _associated_client(Active=False)}  # a different device's MAC
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.is_online is True
+
+    def test_falls_back_to_host_active_when_mac_not_in_associated(self, adapter):
+        """A WiFi client the AP list doesn't currently return at all (not
+        even a stale entry) — Hosts' Active is the only signal left."""
+        host = _wifi_host(Active=True)
+        associated = {'11:22:33:44:55:66': _associated_client(Active=False)}  # a different device's MAC
+        snap = adapter._to_device_snapshot(host, associated)
+        assert snap.is_online is True
+
 
 class TestToDeviceSnapshotDefaults:
     def test_vendor_name_defaults_to_empty(self, adapter):

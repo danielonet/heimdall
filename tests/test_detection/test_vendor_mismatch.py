@@ -44,9 +44,16 @@ class TestInspectDevice:
         alert = await detector.inspect_device(_device('', 'Samsung Electronics'))
         assert alert is None
 
-    async def test_missing_vendor_no_alert(self):
+    async def test_missing_vendor_with_hostname_hint_raises_unverified_info_alert(self):
         detector = VendorMismatchDetector()
         alert = await detector.inspect_device(_device('daniels-iphone', ''))
+        assert alert is not None
+        assert alert.severity == 'INFO'
+        assert alert.alert_type == 'VENDOR_UNVERIFIED'
+
+    async def test_missing_vendor_with_no_hostname_hint_no_alert(self):
+        detector = VendorMismatchDetector()
+        alert = await detector.inspect_device(_device('kitchen-speaker', ''))
         assert alert is None
 
 
