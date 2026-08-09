@@ -217,6 +217,7 @@ class TestSettingsRepository:
             'armed_retrain_done', 'sniff_iface', 'router_username', 'ntfy_url', 'smtp_host',
             'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
             'auto_block_on_threat', 'auto_block_expiry_hours', 'last_digest_sent_at',
+            'alert_stale_hours',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):

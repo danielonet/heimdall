@@ -2,9 +2,11 @@ import { useMemo } from 'react'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { useDevices } from '../hooks/useDevices'
 import { useAlertGroups } from '../hooks/useAlertGroups'
+import { useSettings } from '../hooks/useSettings'
 import { useHealth } from '../hooks/useHealth'
 import { NetworkMap } from '../components/network-map/NetworkMap'
 import { computeNodeLayout } from '../lib/networkMapLayout'
+import { staleBeforeIso } from '../lib/alertStaleness'
 
 const LEGEND = [
   ['critical', 'CRITICAL / BLOCKED', 'bg-accent-red'],
@@ -16,9 +18,16 @@ const LEGEND = [
 export function NetworkMapPage() {
   const mode = useLayoutMode()
   const { data: devices } = useDevices()
+  const { data: appSettings } = useSettings()
+  // Memoized — see DashboardPage.jsx's identical comment on staleBeforeIso.
+  const staleFrom = useMemo(() => staleBeforeIso(appSettings?.alert_stale_hours), [appSettings?.alert_stale_hours])
   // resolved=false, not acknowledged=false — a device shouldn't keep getting
   // pulled toward the THREAT ring for an alert someone already resolved.
-  const { data: alertGroups } = useAlertGroups({ resolved: 'false' })
+  // Also excludes stale alerts (older than AppSettings.alert_stale_hours) —
+  // a months-old unresolved alert shouldn't permanently anchor a device
+  // near the center; see AlertsPage's STALE badge for where they still
+  // show up instead of just vanishing.
+  const { data: alertGroups } = useAlertGroups({ resolved: 'false', ...(staleFrom ? { from: staleFrom } : {}) })
   const { data: health } = useHealth()
 
   const layout = useMemo(() => computeNodeLayout(devices || [], alertGroups || []), [devices, alertGroups])

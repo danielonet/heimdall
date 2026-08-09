@@ -28,6 +28,8 @@ MIN_RETENTION_DAYS = 1
 MAX_RETENTION_DAYS = 3650  # 10 years
 MIN_SMTP_PORT = 1
 MAX_SMTP_PORT = 65535
+MIN_ALERT_STALE_HOURS = 1
+MAX_ALERT_STALE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertStalenessSection.jsx
 
 
 async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:
@@ -56,6 +58,7 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         smtp_use_tls=data['smtp_use_tls'],
         smtp_password_configured=bool(settings.SMTP_PASSWORD),
         auto_block_on_threat=data['auto_block_on_threat'],
+        alert_stale_hours=data['alert_stale_hours'],
     )
     if include_db_size:
         payload['db_size_mb'] = await _get_db_size_mb()
@@ -160,6 +163,16 @@ async def update_settings():
     if 'auto_block_on_threat' in body and not isinstance(body.get('auto_block_on_threat'), bool):
         return jsonify(error='auto_block_on_threat must be a boolean'), 400
 
+    alert_stale_hours = body.get('alert_stale_hours')
+    if 'alert_stale_hours' in body and (
+        not isinstance(alert_stale_hours, int) or isinstance(alert_stale_hours, bool)
+        or not (MIN_ALERT_STALE_HOURS <= alert_stale_hours <= MAX_ALERT_STALE_HOURS)
+    ):
+        return jsonify(
+            error=f'alert_stale_hours must be an integer between '
+                  f'{MIN_ALERT_STALE_HOURS} and {MAX_ALERT_STALE_HOURS}'
+        ), 400
+
     # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
@@ -221,6 +234,8 @@ async def update_settings():
 
     if 'auto_block_on_threat' in body:
         await repo.set_auto_block_on_threat(body['auto_block_on_threat'])
+    if 'alert_stale_hours' in body:
+        await repo.set_alert_stale_hours(alert_stale_hours)
 
     return jsonify(await _serialize(repo))
 

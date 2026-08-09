@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { useAlerts } from '../hooks/useAlerts'
 import { useAlertGroups } from '../hooks/useAlertGroups'
+import { useSettings } from '../hooks/useSettings'
 import { DesktopAlertsList } from './alerts/DesktopAlertsList'
 import { MobileAlertsList } from './alerts/MobileAlertsList'
 import { DesktopAlertGroupsList } from './alerts/DesktopAlertGroupsList'
 import { MobileAlertGroupsList } from './alerts/MobileAlertGroupsList'
+import { ClearAlertsButton } from '../components/alerts/ClearAlertsButton'
 
 const PER_PAGE = 25
 
@@ -33,6 +35,7 @@ function buildExportUrl({ severity, ackFilter, range }) {
 
 export function AlertsPage() {
   const mode = useLayoutMode()
+  const { data: appSettings } = useSettings()
   // Grouped is the default view — a large detector flood (hundreds/thousands
   // of rows for the same device+type) is unusable as a flat paginated list.
   const [view, setViewState] = useState('grouped')
@@ -83,6 +86,7 @@ export function AlertsPage() {
     setRange,
     setPage,
     histogramAlerts: histogramPage?.alerts || [],
+    staleHours: appSettings?.alert_stale_hours,
   }
 
   const ViewToggle = (
@@ -104,10 +108,14 @@ export function AlertsPage() {
       <a
         href={buildExportUrl({ severity, ackFilter, range })}
         title="Download the alerts matching the current filters as CSV"
-        className="ml-auto border border-border px-2 py-1 text-[9px] tracking-wider text-text-muted transition-colors hover:text-text-secondary"
+        className="border border-border px-2 py-1 text-[9px] tracking-wider text-text-muted transition-colors hover:text-text-secondary"
       >
         EXPORT CSV
       </a>
+      <ClearAlertsButton
+        label="CLEAR ALERTS…"
+        className="ml-auto border border-accent-red/30 bg-accent-red/5 px-2 py-1 text-[9px] tracking-wider text-accent-red transition-colors hover:bg-accent-red/20"
+      />
     </div>
   )
 
@@ -116,7 +124,7 @@ export function AlertsPage() {
     return (
       <div className={mode === 'mobile' ? 'space-y-3' : 'space-y-4 p-4'}>
         {ViewToggle}
-        <GroupsList groups={groups || []} isLoading={isGroupsLoading} />
+        <GroupsList groups={groups || []} isLoading={isGroupsLoading} staleHours={appSettings?.alert_stale_hours} />
       </div>
     )
   }

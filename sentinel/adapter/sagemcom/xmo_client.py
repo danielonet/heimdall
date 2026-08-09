@@ -15,6 +15,34 @@ _XMO_NO_ERR = 16777239
 _XMO_AUTH_ERR = 16777219
 
 
+def _parse_json_response(content: bytes) -> dict:
+    """Decodes+parses an XMO response body defensively against the router
+    firmware occasionally emitting a byte that isn't valid UTF-8 inside a
+    string field — observed live: a device hostname/SSID containing an
+    accented character (e.g. 'ö') that the router encoded as raw Latin-1/
+    cp1252 instead of UTF-8, despite JSON requiring Unicode text. httpx's own
+    resp.json() decodes resp.content with strict UTF-8 and has no fallback,
+    so a single bad byte anywhere in the ~40KB payload raised
+    UnicodeDecodeError, which tenacity's @retry on post() turned into 4
+    identical failures and the whole poll cycle aborting — every 15s,
+    indefinitely, since the same malformed field keeps coming back.
+
+    Falls back to a lossy decode (the offending byte(s) become U+FFFD)
+    rather than propagating the error — one mangled character in one field
+    is a far better outcome than the entire adapter never producing data.
+    """
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        logger.warning(
+            'XMO response contains non-UTF-8 byte(s) (router firmware quirk, likely an '
+            'accented device hostname/SSID) — decoding with U+FFFD replacement characters '
+            'instead of failing the poll cycle'
+        )
+        text = content.decode('utf-8', errors='replace')
+    return json.loads(text)
+
+
 class XmoClient:
     """Async HTTP client for the Sagemcom XMO JSON API.
 
@@ -47,7 +75,7 @@ class XmoClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _parse_json_response(resp.content)
         action = (data.get('reply', {}).get('actions') or [{}])[0]
         if action.get('error', {}).get('code') != _XMO_NO_ERR:
             error = action.get('error', {})
@@ -79,7 +107,7 @@ class XmoClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _parse_json_response(resp.content)
 
         if data.get('reply', {}).get('error', {}).get('code') == _XMO_AUTH_ERR:
             logger.warning('XMO auth error — re-logging in')

@@ -4,8 +4,9 @@ import { Badge } from '../../components/Badge'
 import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { BulkAckResolveButtons } from '../../components/alerts/BulkAckResolveButtons'
+import { isStale } from '../../lib/alertStaleness'
 
-export function DesktopAlertGroupsList({ groups, isLoading }) {
+export function DesktopAlertGroupsList({ groups, isLoading, staleHours }) {
   return (
     <div className="border border-border bg-surface">
       {isLoading && <div className="p-4 text-center text-[10px] text-text-muted">Loading…</div>}
@@ -42,6 +43,8 @@ export function DesktopAlertGroupsList({ groups, isLoading }) {
               <Badge variant="success">RESOLVED</Badge>
             ) : g.unacknowledged_count === 0 ? (
               <Badge variant="info">ACKED</Badge>
+            ) : isStale(g.last_seen, staleHours) ? (
+              <Badge variant="muted" title={`No new occurrence in over ${staleHours}h`}>STALE</Badge>
             ) : (
               <Badge variant="danger">OPEN</Badge>
             )}

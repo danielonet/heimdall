@@ -153,6 +153,7 @@ class SettingsRepository:
                 'auto_block_on_threat': row.auto_block_on_threat if row else True,
                 'auto_block_expiry_hours': row.auto_block_expiry_hours if row else 24,
                 'last_digest_sent_at': row.last_digest_sent_at if row else None,
+                'alert_stale_hours': row.alert_stale_hours if row else 24,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -245,6 +246,14 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.last_digest_sent_at = ts
+
+    async def get_alert_stale_hours(self) -> int:
+        return (await self.get_all())['alert_stale_hours']
+
+    async def set_alert_stale_hours(self, hours: int) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.alert_stale_hours = hours
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

@@ -3,7 +3,11 @@ confirmed against a live F@st 5670 router — the XMO docs' description of
 this shape (callbacks[0].result) turned out to be wrong; the real value lives
 at callbacks[0].parameters.value, sometimes wrapped one level deeper by the
 xpath's own last segment (with any bracket qualifier stripped)."""
-from sentinel.adapter.sagemcom.xmo_client import XmoClient
+import json
+
+import pytest
+
+from sentinel.adapter.sagemcom.xmo_client import XmoClient, _parse_json_response
 from sentinel.adapter.sagemcom.xmo_auth import XmoAuth
 
 
@@ -76,3 +80,30 @@ class TestExtractResult:
             }
         }
         assert _client()._extract_result(resp, 1) == 'second'
+
+
+class TestParseJsonResponse:
+    """Regression tests for a live production failure: a device
+    hostname/SSID containing an accented character (e.g. 'ö') that the
+    router's firmware encoded as a raw Latin-1/cp1252 byte instead of UTF-8,
+    despite JSON requiring Unicode text. httpx's resp.json() decodes strictly
+    as UTF-8 with no fallback, so this raised UnicodeDecodeError -> tenacity
+    retried 4 times identically -> the whole poll cycle failed, every 15s,
+    forever (the malformed field never changes)."""
+
+    def test_parses_valid_utf8_json(self):
+        content = json.dumps({'reply': {'hostname': 'Ätzend-PC'}}).encode('utf-8')
+        assert _parse_json_response(content) == {'reply': {'hostname': 'Ätzend-PC'}}
+
+    def test_falls_back_to_replacement_char_on_invalid_utf8_byte(self):
+        """0xf6 mid-string is not a valid UTF-8 start byte on its own — the
+        exact shape of the byte that broke a live poll cycle."""
+        content = b'{"reply": {"hostname": "S\xf6dermalm"}}'
+        result = _parse_json_response(content)
+        assert result['reply']['hostname'] == 'S�dermalm'
+
+    def test_genuinely_malformed_json_still_raises(self):
+        """The fallback only forgives the encoding, not broken JSON syntax —
+        must not silently swallow a truly corrupt response."""
+        with pytest.raises(json.JSONDecodeError):
+            _parse_json_response(b'{not valid json at all')

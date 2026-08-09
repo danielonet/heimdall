@@ -6,6 +6,7 @@ import { TimeAgo } from '../../components/TimeAgo'
 import { AlertHistogram } from '../../components/alerts/AlertHistogram'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
 import { MitigationNote } from '../../components/alerts/MitigationNote'
+import { isStale } from '../../lib/alertStaleness'
 
 const SEVERITY_OPTIONS = [['all', 'ALL'], ['CRITICAL', 'CRITICAL'], ['WARNING', 'WARNING'], ['INFO', 'INFO']]
 const ACK_OPTIONS = [['all', 'ALL'], ['open', 'OPEN'], ['acked', 'ACKED']]
@@ -44,6 +45,7 @@ export function DesktopAlertsList({
   setRange,
   setPage,
   histogramAlerts,
+  staleHours,
 }) {
   const totalPages = Math.max(1, Math.ceil(total / perPage))
 
@@ -93,6 +95,8 @@ export function DesktopAlertsList({
                 <Badge variant="success">RESOLVED</Badge>
               ) : a.acknowledged ? (
                 <Badge variant="info">ACKED</Badge>
+              ) : isStale(a.created_at, staleHours) ? (
+                <Badge variant="muted" title={`No activity in over ${staleHours}h`}>STALE</Badge>
               ) : (
                 <Badge variant="danger">OPEN</Badge>
               )}

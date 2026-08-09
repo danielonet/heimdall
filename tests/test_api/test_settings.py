@@ -158,6 +158,44 @@ class TestUpdateSettings:
         assert resp.get_json()['ml_learning_period_hours'] == settings.ML_LEARNING_PERIOD_HOURS
 
 
+class TestAlertStaleHours:
+    def test_default_is_24(self, client):
+        resp = client.get('/api/settings')
+        assert resp.get_json()['alert_stale_hours'] == 24
+
+    def test_updates_the_threshold(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': 72}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['alert_stale_hours'] == 72
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['alert_stale_hours'] == 72
+
+    def test_rejects_zero(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': 0}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_negative(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': -1}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_absurdly_large_values(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': 999999}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_non_integer(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': 'a lot'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_boolean(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': True}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_requires_auth(self, client):
+        resp = client.patch('/api/settings', json={'alert_stale_hours': 48})
+        assert resp.status_code == 401
+
+
 class TestPurge:
     def test_requires_auth(self, client):
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD})

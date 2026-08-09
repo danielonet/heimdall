@@ -4,8 +4,9 @@ import { Badge } from '../../components/Badge'
 import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { BulkAckResolveButtons } from '../../components/alerts/BulkAckResolveButtons'
+import { isStale } from '../../lib/alertStaleness'
 
-export function MobileAlertGroupsList({ groups, isLoading }) {
+export function MobileAlertGroupsList({ groups, isLoading, staleHours }) {
   return (
     <div>
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}
@@ -45,6 +46,8 @@ export function MobileAlertGroupsList({ groups, isLoading }) {
               <Badge variant="success">RESOLVED</Badge>
             ) : g.unacknowledged_count === 0 ? (
               <Badge variant="info">ACKED</Badge>
+            ) : isStale(g.last_seen, staleHours) ? (
+              <Badge variant="muted">STALE</Badge>
             ) : (
               <Badge variant="danger">OPEN</Badge>
             )}

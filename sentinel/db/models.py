@@ -132,6 +132,15 @@ class AppSettings(Base):
     # never sent yet. See SentinelScheduler._security_digest_job.
     last_digest_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
+    # Alerts tab. An alert older than this is still kept forever (nothing
+    # deletes it), but is excluded from the Dashboard's OPEN ALERTS
+    # feed/threat score and from the Network Map's urgency layout — see
+    # frontend/src/lib/alertStaleness.js — and shown with a STALE badge on
+    # the full Alerts page instead of the usual OPEN styling, so a months-old
+    # unresolved alert doesn't keep pulling a device toward the map's center
+    # or reading as an active, alarming threat every time the page is opened.
+    alert_stale_hours: Mapped[int] = mapped_column(Integer, server_default='24')
+
 
 class TrustedMac(Base):
     """A permanently-trusted MAC address, independent of the devices table's

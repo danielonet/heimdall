@@ -5,6 +5,7 @@ import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
 import { MitigationNote } from '../../components/alerts/MitigationNote'
+import { isStale } from '../../lib/alertStaleness'
 
 const FILTER_GROUPS = [
   ['SEVERITY', [['all', 'ALL'], ['CRITICAL', 'CRIT'], ['WARNING', 'WARN'], ['INFO', 'INFO']], 'severity', 'setSeverity'],
@@ -12,7 +13,7 @@ const FILTER_GROUPS = [
   ['RANGE', [['24h', '24H'], ['7d', '7D'], ['all', 'ALL']], 'range', 'setRange'],
 ]
 
-export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, setSeverity, setAckFilter, setRange, setPage }) {
+export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, setSeverity, setAckFilter, setRange, setPage, staleHours }) {
   const totalPages = Math.max(1, Math.ceil(total / perPage))
   const setters = { setSeverity, setAckFilter, setRange }
 
@@ -68,6 +69,8 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
                 <Badge variant="success">DONE</Badge>
               ) : a.acknowledged ? (
                 <Badge variant="info">ACKED</Badge>
+              ) : isStale(a.created_at, staleHours) ? (
+                <Badge variant="muted">STALE</Badge>
               ) : (
                 <Badge variant="danger">OPEN</Badge>
               )}
