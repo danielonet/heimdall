@@ -65,6 +65,41 @@ class Device(Base):
     last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class DeviceTypeProfile(Base):
+    """Admin-editable detector-threshold overrides keyed by Device.device_type.
+
+    device_type is not a closed enum — it's whatever free-text string the
+    router's own DHCP-fingerprint database returns (e.g. 'Smartphone',
+    'Network Attached Storage'), blank/None when it can't classify a device
+    at all. This table is therefore an open-ended, admin-growable collection
+    (rows only exist for types someone has actually tuned), not a fixed
+    lookup — see sentinel/detection/device_profiles.py's DEFAULT_PROFILE for
+    the fallback used when no row matches. Was a hardcoded Python dict until
+    this table replaced it, specifically to let an admin fix the case where a
+    device type's defaults are wrong for their network (e.g. a phone that
+    legitimately bursts data and shouldn't alert every time) without a code
+    change/redeploy.
+    """
+
+    __tablename__ = 'device_type_profiles'
+
+    device_type: Mapped[str] = mapped_column(String(50), primary_key=True)
+    # HighUploadDetector's ratio threshold — see sentinel/detection/detectors/high_upload.py.
+    high_upload_ratio_threshold: Mapped[float] = mapped_column(Float)
+    # AnomalousVolumeDetector's consecutive-poll requirement — see
+    # sentinel/detection/detectors/anomalous_volume.py.
+    volume_sustained_polls: Mapped[int] = mapped_column(Integer)
+    # IsolationForest's contamination rate for this device type's nightly
+    # retrain — see sentinel/ml/trainer.py:ModelTrainer.retrain_all() and
+    # sentinel/ml/anomaly_engine.py. Not applied to the very first (bootstrap)
+    # fit, which keeps using the global Settings.ML_CONTAMINATION default —
+    # see AnomalyEngine.retrain_from_history()'s docstring for why.
+    contamination: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AppSettings(Base):
     """Singleton row (id always 1) for runtime-configurable settings that must
     take effect without restarting the process — the ML learning-period

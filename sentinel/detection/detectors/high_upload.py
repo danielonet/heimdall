@@ -55,7 +55,7 @@ class HighUploadDetector(BaseDetector):
             return None
 
         ratio = sample.bytes_sent_delta / max(sample.bytes_recv_delta, 1)
-        ratio_threshold = get_profile(snapshot.device_type)['high_upload_ratio_threshold']
+        ratio_threshold = (await get_profile(snapshot.device_type))['high_upload_ratio_threshold']
         if ratio <= ratio_threshold:
             self._consecutive_high[mac] = 0
             return None

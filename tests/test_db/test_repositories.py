@@ -14,14 +14,17 @@ from flask import Flask
 from sqlalchemy import delete
 
 from sentinel.config import settings
-from sentinel.db.models import AppSettings, Device, TrustedMac
-from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
+from sentinel.db.models import AppSettings, Device, DeviceTypeProfile, TrustedMac
+from sentinel.db.repositories import (
+    DeviceRepository, DeviceTypeProfileRepository, SettingsRepository, TrustedMacRepository,
+)
 from sentinel.db.session import get_engine, get_session, init_db
 
 pytestmark = pytest.mark.asyncio
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
 _MAC_2 = '11:22:33:44:55:66'
+_TEST_DEVICE_TYPE = '__test_device_type__'
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -36,6 +39,7 @@ async def _init_db():
         await session.execute(delete(Device).where(Device.mac_address.in_([_MAC, _MAC_2])))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_([_MAC, _MAC_2])))
         await session.execute(delete(AppSettings))
+        await session.execute(delete(DeviceTypeProfile).where(DeviceTypeProfile.device_type == _TEST_DEVICE_TYPE))
     await get_engine().dispose()
 
 
@@ -254,3 +258,56 @@ class TestSettingsRepository:
         """smtp_password is deliberately never stored in this table — see
         Settings.SMTP_PASSWORD_FILE."""
         assert 'smtp_password' not in await SettingsRepository().get_smtp_settings()
+
+
+class TestDeviceTypeProfileRepository:
+    """CRUD coverage for the admin-editable device_type_profiles table —
+    see tests/test_detection/test_device_profiles.py for the seeded rows
+    (Smartphone/NAS/IP Camera/Printer) this migration ships with."""
+
+    async def test_get_profile_for_unknown_type_returns_default_without_a_db_row(self):
+        from sentinel.detection.device_profiles import DEFAULT_PROFILE
+        assert await DeviceTypeProfileRepository().get_profile(_TEST_DEVICE_TYPE) == DEFAULT_PROFILE
+
+    async def test_upsert_then_get_profile_round_trips(self):
+        repo = DeviceTypeProfileRepository()
+        await repo.upsert_profile(
+            _TEST_DEVICE_TYPE, high_upload_ratio_threshold=4.5, volume_sustained_polls=7, contamination=0.12,
+        )
+        profile = await repo.get_profile(_TEST_DEVICE_TYPE)
+        assert profile == {
+            'high_upload_ratio_threshold': 4.5, 'volume_sustained_polls': 7, 'contamination': 0.12,
+        }
+
+    async def test_upsert_twice_updates_the_same_row_not_a_duplicate(self):
+        repo = DeviceTypeProfileRepository()
+        await repo.upsert_profile(
+            _TEST_DEVICE_TYPE, high_upload_ratio_threshold=1.0, volume_sustained_polls=1, contamination=0.01,
+        )
+        await repo.upsert_profile(
+            _TEST_DEVICE_TYPE, high_upload_ratio_threshold=2.0, volume_sustained_polls=2, contamination=0.02,
+        )
+        profile = await repo.get_profile(_TEST_DEVICE_TYPE)
+        assert profile['high_upload_ratio_threshold'] == 2.0
+
+        all_profiles = await repo.get_all_profiles()
+        matching = [p for p in all_profiles if p.device_type == _TEST_DEVICE_TYPE]
+        assert len(matching) == 1
+
+    async def test_delete_profile_reverts_to_default(self):
+        from sentinel.detection.device_profiles import DEFAULT_PROFILE
+        repo = DeviceTypeProfileRepository()
+        await repo.upsert_profile(
+            _TEST_DEVICE_TYPE, high_upload_ratio_threshold=9.0, volume_sustained_polls=9, contamination=0.09,
+        )
+        assert await repo.delete_profile(_TEST_DEVICE_TYPE) is True
+        assert await repo.get_profile(_TEST_DEVICE_TYPE) == DEFAULT_PROFILE
+
+    async def test_delete_nonexistent_profile_returns_false(self):
+        assert await DeviceTypeProfileRepository().delete_profile(_TEST_DEVICE_TYPE) is False
+
+    async def test_get_all_profiles_includes_seeded_smartphone_row(self):
+        all_profiles = await DeviceTypeProfileRepository().get_all_profiles()
+        smartphone = next((p for p in all_profiles if p.device_type == 'Smartphone'), None)
+        assert smartphone is not None
+        assert smartphone.volume_sustained_polls > 3  # the direct fix — see the migration's docstring

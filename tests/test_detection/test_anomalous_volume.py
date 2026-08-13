@@ -1,13 +1,31 @@
 import dataclasses
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from flask import Flask
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
+from sentinel.db.session import init_db
 from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
 from sentinel.detection.device_profiles import DEFAULT_PROFILE, get_profile
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _init_db():
+    """AnomalousVolumeDetector's get_profile() call is DB-backed for a
+    non-blank device_type (see TestDeviceTypeAwareStreak below) — tests
+    using _SNAPSHOT's default blank device_type never touch the DB at all
+    (DeviceTypeProfileRepository.get_profile short-circuits before querying),
+    so this is harmless overhead for them and required for the others."""
+    app = Flask(__name__)
+    app.config['DATABASE_URL'] = os.environ.get(
+        'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
+    )
+    init_db(app)
+    yield
 
 _SUSTAINED_POLLS = DEFAULT_PROFILE['volume_sustained_polls']  # blank device_type resolves to this
 
@@ -182,7 +200,7 @@ class TestDeviceTypeAwareStreak:
         requires a longer sustained streak before trusting the ML agreement
         enough to alert, vs. the default streak length."""
         nas_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Network Attached Storage')
-        nas_sustained_polls = get_profile('Network Attached Storage')['volume_sustained_polls']
+        nas_sustained_polls = (await get_profile('Network Attached Storage'))['volume_sustained_polls']
         assert nas_sustained_polls > _SUSTAINED_POLLS  # otherwise this test proves nothing
         detector = _detector(anomalous=True)
         for _ in range(nas_sustained_polls - 1):

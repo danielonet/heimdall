@@ -40,10 +40,17 @@ _VOLUME_FEATURE_INDICES = [FEATURE_NAMES.index('throughput_up_kbps'), FEATURE_NA
 class AnomalyEngine:
     """Buffers samples per device until there's enough to train, then scores each new one."""
 
-    def __init__(self, model_store: ModelStore, min_samples: int, contamination: float) -> None:
+    def __init__(
+        self, model_store: ModelStore, min_samples: int, contamination: float,
+        magnitude_multiplier: float = 0.5,
+    ) -> None:
         self._store = model_store
         self._min_samples = min_samples
         self._contamination = contamination
+        # See is_anomalous()/_fit_and_save() — how far past the calibrated
+        # 0.0 boundary (in units of that device's own fitted training-score
+        # std) a sample must be before it counts as anomalous at all.
+        self._magnitude_multiplier = magnitude_multiplier
         self._buffers: dict[str, list[np.ndarray]] = {}
         self._model_cache: dict[str, dict] = {}
 
@@ -84,14 +91,26 @@ class AnomalyEngine:
 
     def is_anomalous(self, sample: TrafficSample) -> bool:
         """True if both IsolationForest and LOF agree this sample is an outlier
-        (per the design doc: two models must agree, to cut down false positives).
-        Read-only — does not buffer or train; call score() for that.
+        (per the design doc: two models must agree, to cut down false positives)
+        AND the IsolationForest score clears a magnitude bar beyond the bare
+        calibrated boundary — see magnitude_threshold below. Read-only — does
+        not buffer or train; call score() for that.
         """
         model = self._get_model(sample.mac_address)
         if model is None:
             return False
 
         vec = build_feature_vector(sample).reshape(1, -1)
+        # Self-relative, not a fixed cross-device constant: model.get(...) with
+        # a 0.0 default means a model persisted before this magnitude gate
+        # existed (missing 'score_std') falls back to exactly today's
+        # behavior — bare ANOMALY_THRESHOLD — until its next retrain
+        # recomputes the stat. See ANOMALY_THRESHOLD's own comment for why a
+        # *shared* constant across devices caused a real incident; comparing
+        # each device's score against a spread derived from that same
+        # device's own fitted distribution is a different, safer shape.
+        score_std = model.get('score_std', 0.0)
+        magnitude_threshold = ANOMALY_THRESHOLD - (self._magnitude_multiplier * score_std)
         # bool(...) on both sides, not just lof: `numpy_bool and python_bool`
         # short-circuits to the *numpy* bool when the left side is falsy, so
         # without this is_anomalous() could return np.False_ instead of
@@ -99,26 +118,49 @@ class AnomalyEngine:
         # same object (`np.False_ is False` is False), which breaks any
         # caller doing an identity check against this method's declared
         # `-> bool` return type.
-        iso_anomalous = bool(model['iso'].decision_function(vec)[0] < ANOMALY_THRESHOLD)
+        iso_anomalous = bool(model['iso'].decision_function(vec)[0] < magnitude_threshold)
         lof_anomalous = bool(model['lof'].predict(vec)[0])  # PyOD: 1 = outlier
         return iso_anomalous and lof_anomalous
 
     def train(self, mac: str) -> None:
-        """Fit fresh models from this device's buffered samples, if there are enough."""
+        """Fit fresh models from this device's buffered samples, if there are enough.
+
+        Always uses the global default contamination — this is the bootstrap
+        fit, triggered inline as a side effect of score() during the live
+        15s poll loop, which has no async DB access to resolve a per-device-
+        type override with (see retrain_from_history's docstring for why
+        that's fine: this fit is short-lived, superseded by the next nightly
+        retrain within at most 24h).
+        """
         buf = self._buffers.get(mac, [])
         if len(buf) < self._min_samples:
             return
-        self._fit_and_save(mac, np.vstack(buf))
+        self._fit_and_save(mac, np.vstack(buf), self._contamination)
 
-    def retrain_from_history(self, mac: str, feature_vectors: list[np.ndarray]) -> None:
-        """Refit this device's models from historical data (nightly retraining)."""
+    def retrain_from_history(
+        self, mac: str, feature_vectors: list[np.ndarray], contamination: float | None = None,
+    ) -> None:
+        """Refit this device's models from historical data (nightly retraining).
+
+        contamination overrides the engine's global default for just this
+        fit — ModelTrainer.retrain_all() resolves it per-device-type via
+        DeviceTypeProfileRepository before calling this, so a device type
+        prone to short, legitimate, recurring bursts (e.g. a phone during a
+        video call) can be fit with a higher rate than the default, instead
+        of that pattern being flagged as an outlier forever regardless of
+        how much history accumulates (contamination is a *rate*, not an
+        absolute rarity cutoff — see device_profiles.py's module docstring).
+        None (the default) keeps today's behavior for any caller that
+        doesn't pass one, e.g. existing tests/callers.
+        """
         if len(feature_vectors) < self._min_samples:
             logger.info(
                 'Skipping retrain for %s — only %d samples (need %d)',
                 mac, len(feature_vectors), self._min_samples,
             )
             return
-        self._fit_and_save(mac, np.vstack(feature_vectors))
+        effective_contamination = contamination if contamination is not None else self._contamination
+        self._fit_and_save(mac, np.vstack(feature_vectors), effective_contamination)
 
     def reset(self) -> None:
         """Clear all in-memory state — bootstrap buffers and the loaded-model
@@ -141,7 +183,7 @@ class AnomalyEngine:
         if len(self._buffers[mac]) >= self._min_samples:
             self.train(mac)
 
-    def _fit_and_save(self, mac: str, X: np.ndarray) -> None:
+    def _fit_and_save(self, mac: str, X: np.ndarray, contamination: float) -> None:
         volume_std = X[:, _VOLUME_FEATURE_INDICES].std(axis=0)
         if np.allclose(volume_std, 0):
             # A model fit on flat up/down throughput (e.g. a data source that
@@ -158,13 +200,19 @@ class AnomalyEngine:
             self._buffers.pop(mac, None)
             return
 
-        iso = IsolationForest(n_estimators=100, contamination=self._contamination, random_state=42)
+        iso = IsolationForest(n_estimators=100, contamination=contamination, random_state=42)
         iso.fit(X)
 
         lof = LOF(n_neighbors=min(20, max(len(X) // 5, 1)))
         lof.fit(X)
 
-        models = {'iso': iso, 'lof': lof}
+        # This device's own fitted score spread — see is_anomalous()'s
+        # magnitude_threshold. Computed from the training set itself, not a
+        # held-out sample, so it reflects exactly the distribution
+        # decision_function() was calibrated against.
+        score_std = float(iso.decision_function(X).std())
+
+        models = {'iso': iso, 'lof': lof, 'score_std': score_std}
         self._store.save(mac, models)
         self._model_cache[mac] = models
         self._buffers.pop(mac, None)  # bootstrap buffer no longer needed once trained

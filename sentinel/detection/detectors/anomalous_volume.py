@@ -88,7 +88,7 @@ class AnomalousVolumeDetector(BaseDetector):
 
         streak = self._consecutive_anomalous.get(mac, 0) + 1
         self._consecutive_anomalous[mac] = streak
-        sustained_polls = get_profile(snapshot.device_type)['volume_sustained_polls']
+        sustained_polls = (await get_profile(snapshot.device_type))['volume_sustained_polls']
         if streak < sustained_polls:
             return None  # matched, but not sustained long enough yet
         self._consecutive_anomalous[mac] = 0  # reset so the next fire needs its own fresh streak

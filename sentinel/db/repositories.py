@@ -11,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
-from sentinel.db.models import AppSettings, Device, TrustedMac
+from sentinel.db.models import AppSettings, Device, DeviceTypeProfile, TrustedMac
 from sentinel.db.session import get_session
+from sentinel.detection.device_profiles import DEFAULT_PROFILE
 
 _SETTINGS_ROW_ID = 1
 
@@ -71,6 +72,62 @@ class DeviceRepository:
         async with get_session() as session:
             device = await session.get(Device, mac_address)
             return device.ap_alias if device else None
+
+
+class DeviceTypeProfileRepository:
+    """Read/write access to the admin-editable device_type_profiles table —
+    replaces what used to be sentinel/detection/device_profiles.py's
+    hardcoded DEVICE_TYPE_PROFILES dict. get_profile() keeps the exact same
+    merge-over-default fallback semantics that dict had (unknown/blank
+    device_type -> DEFAULT_PROFILE untouched), just DB-backed and read fresh
+    on every call — same "no caching, admin's change takes effect on the
+    very next poll" convention as SettingsRepository.
+    """
+
+    async def get_profile(self, device_type: str | None) -> dict:
+        if not device_type:
+            return dict(DEFAULT_PROFILE)
+        async with get_session() as session:
+            row = await session.get(DeviceTypeProfile, device_type)
+        if row is None:
+            return dict(DEFAULT_PROFILE)
+        return {
+            **DEFAULT_PROFILE,
+            'high_upload_ratio_threshold': row.high_upload_ratio_threshold,
+            'volume_sustained_polls': row.volume_sustained_polls,
+            'contamination': row.contamination,
+        }
+
+    async def get_all_profiles(self) -> list[DeviceTypeProfile]:
+        async with get_session() as session:
+            result = await session.execute(select(DeviceTypeProfile).order_by(DeviceTypeProfile.device_type))
+            return list(result.scalars().all())
+
+    async def upsert_profile(
+        self, device_type: str, *,
+        high_upload_ratio_threshold: float, volume_sustained_polls: int, contamination: float,
+    ) -> DeviceTypeProfile:
+        async with get_session() as session:
+            row = await session.get(DeviceTypeProfile, device_type)
+            if row is None:
+                row = DeviceTypeProfile(device_type=device_type)
+                session.add(row)
+            row.high_upload_ratio_threshold = high_upload_ratio_threshold
+            row.volume_sustained_polls = volume_sustained_polls
+            row.contamination = contamination
+            await session.flush()
+            await session.refresh(row)
+            return row
+
+    async def delete_profile(self, device_type: str) -> bool:
+        """Removes the override row, reverting that type to DEFAULT_PROFILE.
+        Returns False if no such row existed (caller can 404)."""
+        async with get_session() as session:
+            row = await session.get(DeviceTypeProfile, device_type)
+            if row is None:
+                return False
+            await session.delete(row)
+            return True
 
 
 class TrustedMacRepository:

@@ -146,3 +146,83 @@ def _vecs(n: int) -> list:
     """n feature vectors with realistic jitter in the throughput columns —
     a constant vector would trip the zero-throughput-variance training guard."""
     return [np.array([95.0 + (i % 11), 190.0 + (i % 23), 0.5, 12.0, 0.0, 0.0]) for i in range(n)]
+
+
+class _FakeIso:
+    """Duck-typed IsolationForest stand-in — a fixed decision_function() score,
+    so the magnitude-gate arithmetic in is_anomalous() can be tested precisely
+    without depending on an actual fit's exact output."""
+
+    def __init__(self, score: float) -> None:
+        self._score = score
+
+    def decision_function(self, vec):
+        return np.array([self._score])
+
+
+class _FakeLof:
+    def __init__(self, outlier: bool = True) -> None:
+        self._outlier = outlier
+
+    def predict(self, vec):
+        return np.array([1 if self._outlier else 0])
+
+
+class TestFitStoresScoreStd:
+    """See is_anomalous()'s magnitude_threshold — the spread it's computed
+    against must actually get persisted at fit time."""
+
+    def test_trained_model_has_a_nonnegative_score_std(self, engine):
+        mac = 'aa:bb:cc:dd:ee:ff'
+        for i in range(MIN_SAMPLES):
+            engine.score(_varying_sample(mac, offset_s=i))
+        model = engine._model_cache[mac]
+        assert 'score_std' in model
+        assert model['score_std'] >= 0.0
+
+    def test_retrain_from_history_also_stores_score_std(self, engine):
+        mac = 'aa:bb:cc:dd:ee:ff'
+        engine.retrain_from_history(mac, _vecs(MIN_SAMPLES))
+        assert 'score_std' in engine._model_cache[mac]
+
+
+class TestMagnitudeGate:
+    """AnomalyEngine.is_anomalous() requires the IsolationForest score to
+    clear magnitude_multiplier * that device's own score_std beyond the bare
+    calibrated 0.0 boundary — see the ML_ANOMALY_MAGNITUDE_MULTIPLIER config
+    comment for why this is self-relative (per-device), not a fixed constant."""
+
+    _MAC = 'aa:bb:cc:dd:ee:ff'
+
+    def test_missing_score_std_falls_back_to_the_bare_boundary(self, engine):
+        """A model persisted before this gate existed (no score_std key) —
+        must reproduce exactly today's pre-Layer-2 behavior: any negative
+        score past 0.0 counts, no extra magnitude required."""
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof()}
+        assert engine.is_anomalous(_sample(self._MAC)) is True
+
+    def test_mild_score_within_the_magnitude_band_is_not_flagged(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof(), 'score_std': 1.0}
+        # threshold = 0.0 - 0.5*1.0 = -0.5; -0.01 is past 0.0 but not past -0.5.
+        assert engine.is_anomalous(_sample(self._MAC)) is False
+
+    def test_extreme_score_beyond_the_magnitude_band_is_flagged(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.9), 'lof': _FakeLof(), 'score_std': 1.0}
+        assert engine.is_anomalous(_sample(self._MAC)) is True
+
+    def test_score_std_of_zero_reduces_to_the_bare_boundary(self, engine):
+        """A device whose training scores had ~zero spread (e.g. very
+        regular traffic) — the magnitude band collapses to nothing, same as
+        the missing-score_std case, not to "never flags"."""
+        engine._magnitude_multiplier = 0.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof(), 'score_std': 0.0}
+        assert engine.is_anomalous(_sample(self._MAC)) is True
+
+    def test_lof_disagreement_still_suppresses_even_with_an_extreme_iso_score(self, engine):
+        """The magnitude gate is additive on top of the existing two-model
+        AND, not a replacement for it."""
+        engine._magnitude_multiplier = 0.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-100.0), 'lof': _FakeLof(outlier=False), 'score_std': 1.0}
+        assert engine.is_anomalous(_sample(self._MAC)) is False

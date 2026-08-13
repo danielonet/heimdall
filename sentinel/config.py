@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # ── ML ────────────────────────────────────────────────────────────────────
     ML_MIN_SAMPLES_TO_TRAIN: int = 100
     ML_CONTAMINATION: float = 0.05
+    # AnomalyEngine.is_anomalous() requires decision_function() to be not just
+    # past the calibrated 0.0 boundary but beyond MAGNITUDE_MULTIPLIER times
+    # that device's own fitted training-score spread — a mild/borderline
+    # outlier (barely past the boundary) no longer counts the same as an
+    # extreme one. Self-relative (each device compared only to its own
+    # history), not a fixed cross-device constant — see anomaly_engine.py's
+    # ANOMALY_THRESHOLD comment for why a shared constant caused a real
+    # incident previously; this is a different shape of comparison.
+    ML_ANOMALY_MAGNITUDE_MULTIPLIER: float = 0.5
     ML_RETRAIN_CRON: str = '0 3 * * *'       # 03:00 daily
     ML_MODEL_DIR: str = '/data/models'       # matches the ml-models Docker volume;
                                               # override in .env for host/console dev

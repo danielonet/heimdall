@@ -32,6 +32,7 @@ from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.deployment_tiers import active_service_keys, services_for_tier
 from sentinel.detection.correlation import CrossAlertCorrelator
+from sentinel.detection.observed_extremes import compute_observed_extremes
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
 from sentinel.detection.wan_bandwidth import WanBandwidthDetector
@@ -77,6 +78,7 @@ class SentinelScheduler:
         ml_model_dir: str,
         ml_min_samples: int,
         ml_contamination: float,
+        ml_anomaly_magnitude_multiplier: float,
         ml_retrain_cron: str,
         sniff_iface: str,
         otx_api_key: str,
@@ -106,6 +108,7 @@ class SentinelScheduler:
         self._ml_model_dir = ml_model_dir
         self._ml_min_samples = ml_min_samples
         self._ml_contamination = ml_contamination
+        self._ml_anomaly_magnitude_multiplier = ml_anomaly_magnitude_multiplier
         self._ml_retrain_cron = ml_retrain_cron
         self._sniff_iface = sniff_iface
         self._router_ip: str = ''  # resolved in _run_loop via _resolve_router_ip
@@ -172,6 +175,10 @@ class SentinelScheduler:
         self._last_zeek_file_scan_at: datetime | None = None
         self._clamav_reachable: bool | None = None
         self._last_suricata_check_at: datetime | None = None
+        # See _observed_extremes_job/observed_extremes_snapshot — refreshed
+        # hourly, not per-request (a full traffic_samples scan).
+        self._observed_extremes: dict | None = None
+        self._observed_extremes_computed_at: datetime | None = None
         # ip -> quiet-until, see _persist_arp_alert.
         self._ip_conflict_quiet_until: dict[str, datetime] = {}
 
@@ -227,6 +234,7 @@ class SentinelScheduler:
             model_store=ModelStore(self._ml_model_dir),
             min_samples=self._ml_min_samples,
             contamination=self._ml_contamination,
+            magnitude_multiplier=self._ml_anomaly_magnitude_multiplier,
         )
         self._pipeline = create_default_pipeline(self._anomaly_engine)
         self._wan_bandwidth_detector = WanBandwidthDetector()
@@ -340,6 +348,13 @@ class SentinelScheduler:
             CronTrigger.from_crontab(self._security_digest_cron),
             id='security_digest',
             replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._observed_extremes_job,
+            'interval',
+            seconds=3600,
+            id='observed_extremes_refresh',
+            next_run_time=datetime.now(),  # fire immediately so the panel isn't empty for the first hour
         )
         self._scheduler.add_job(
             self._startup_job,
@@ -1007,6 +1022,18 @@ class SentinelScheduler:
         except Exception:
             logger.exception('Nightly ML retrain failed')
 
+    async def _observed_extremes_job(self) -> None:
+        """Refreshes the cached RATIO/POLLS/CONTAM. observed-extremes stats
+        — see sentinel/detection/observed_extremes.py. On failure, the
+        previous successfully-computed result (if any) is left in place
+        rather than cleared, so a transient DB hiccup doesn't blank out an
+        otherwise-still-valid reference panel until the next hourly run."""
+        try:
+            self._observed_extremes = await compute_observed_extremes()
+            self._observed_extremes_computed_at = datetime.now(timezone.utc)
+        except Exception:
+            logger.exception('Observed-extremes refresh failed')
+
     async def _resolve_sniff_iface(self) -> str:
         """The admin's configured SNIFF_IFACE (SettingsRepository), falling
         back to this scheduler's own env-config default if the DB isn't
@@ -1183,6 +1210,18 @@ class SentinelScheduler:
             ),
         }
 
+    def observed_extremes_snapshot(self) -> dict[str, Any]:
+        """The most recently computed RATIO/POLLS/CONTAM. observed-extremes
+        stats — see sentinel/detection/observed_extremes.py and
+        _observed_extremes_job. computed_at is None before the first hourly
+        run completes (e.g. right after a fresh start)."""
+        return {
+            'extremes': self._observed_extremes,
+            'computed_at': (
+                self._observed_extremes_computed_at.isoformat() if self._observed_extremes_computed_at else None
+            ),
+        }
+
     def memory_diagnostics_snapshot(self) -> dict[str, Any]:
         """Sizes of the in-memory collections most likely to grow unbounded
         on a long-running process — every one is keyed by MAC/IP and nothing
@@ -1330,6 +1369,7 @@ def init_scheduler(app: Flask) -> None:
         ml_model_dir=app.config['ML_MODEL_DIR'],
         ml_min_samples=app.config['ML_MIN_SAMPLES_TO_TRAIN'],
         ml_contamination=app.config['ML_CONTAMINATION'],
+        ml_anomaly_magnitude_multiplier=app.config['ML_ANOMALY_MAGNITUDE_MULTIPLIER'],
         ml_retrain_cron=app.config['ML_RETRAIN_CRON'],
         sniff_iface=app.config['SNIFF_IFACE'],
         otx_api_key=app.config['OTX_API_KEY'],

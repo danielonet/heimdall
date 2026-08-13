@@ -1,12 +1,29 @@
 import dataclasses
+import os
 from datetime import datetime, timezone
 
 import pytest
+from flask import Flask
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
+from sentinel.db.session import init_db
 from sentinel.detection.detectors.high_upload import HighUploadDetector
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _init_db():
+    """HighUploadDetector's get_profile() call is DB-backed for a non-blank
+    device_type (see the IP Camera/Printer/unrecognized-string tests below)
+    — tests using _SNAPSHOT's default blank device_type never touch the DB
+    at all, so this is harmless overhead for them and required for the rest."""
+    app = Flask(__name__)
+    app.config['DATABASE_URL'] = os.environ.get(
+        'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
+    )
+    init_db(app)
+    yield
 
 _SNAPSHOT = DeviceSnapshot(
     mac_address='aa:bb:cc:dd:ee:ff',

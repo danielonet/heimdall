@@ -6,13 +6,15 @@ trainer goes through the module-level get_session() singleton).
 import os
 from datetime import datetime, timedelta, timezone
 
+import joblib
 import pytest
 import pytest_asyncio
 from flask import Flask
 from sqlalchemy import delete
 
 from sentinel.adapter.models import TrafficGranularity
-from sentinel.db.models import TrafficSample
+from sentinel.db.models import Device, TrafficSample
+from sentinel.db.repositories import DeviceTypeProfileRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
@@ -22,6 +24,12 @@ pytestmark = pytest.mark.asyncio
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
 _MIN_SAMPLES = 5
+# A dedicated test type, not a real seeded one (e.g. 'Smartphone') — that
+# row is admin-editable in production and this dev environment's copy of it
+# has in fact already been edited via the Rules page UI, so asserting
+# against its seed-migration value would be asserting against a moving
+# target. See TestDeviceTypeAwareContamination.
+_TEST_DEVICE_TYPE = '__test_trainer_device_type__'
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -34,6 +42,8 @@ async def _init_db():
     yield
     async with get_session() as session:
         await session.execute(delete(TrafficSample).where(TrafficSample.mac_address == _MAC))
+        await session.execute(delete(Device).where(Device.mac_address == _MAC))
+    await DeviceTypeProfileRepository().delete_profile(_TEST_DEVICE_TYPE)
     await get_engine().dispose()
 
 
@@ -89,3 +99,47 @@ class TestRetrainAll:
         await ModelTrainer(engine).retrain_all()
 
         assert not (tmp_path / 'aa-bb-cc-dd-ee-ff.joblib').exists()
+
+
+class TestDeviceTypeAwareContamination:
+    """See device_profiles.py's module docstring: contamination is a *rate*,
+    not an absolute rarity cutoff — a device type prone to short, legitimate,
+    recurring bursts needs a higher rate so that pattern stops being flagged
+    as an outlier forever. ModelTrainer.retrain_all() resolves this per mac
+    from its device_type profile (seeded by the device_type_profiles
+    migration) instead of always using the engine's own global default."""
+
+    async def test_uses_the_device_types_configured_contamination_for_the_fit(self, engine, tmp_path):
+        await DeviceTypeProfileRepository().upsert_profile(
+            _TEST_DEVICE_TYPE, high_upload_ratio_threshold=2.5, volume_sustained_polls=6, contamination=0.33,
+        )
+        async with get_session() as session:
+            session.add(Device(mac_address=_MAC, hostname='test-phone', device_type=_TEST_DEVICE_TYPE))
+        await _seed_samples(_MIN_SAMPLES, TrafficGranularity.PER_DEVICE.value)
+
+        await ModelTrainer(engine).retrain_all()
+
+        models = joblib.load(tmp_path / 'aa-bb-cc-dd-ee-ff.joblib')
+        assert models['iso'].get_params()['contamination'] == 0.33
+
+    async def test_unrecognized_device_type_falls_back_to_default_profile_not_engine_default(self, engine, tmp_path):
+        """engine fixture's own contamination is 0.1 — DEFAULT_PROFILE's is
+        0.05. An unrecognized device_type must resolve to the latter, not
+        silently keep using whatever the engine happened to be constructed
+        with."""
+        async with get_session() as session:
+            session.add(Device(mac_address=_MAC, hostname='test-device', device_type='Toaster'))
+        await _seed_samples(_MIN_SAMPLES, TrafficGranularity.PER_DEVICE.value)
+
+        await ModelTrainer(engine).retrain_all()
+
+        models = joblib.load(tmp_path / 'aa-bb-cc-dd-ee-ff.joblib')
+        assert models['iso'].get_params()['contamination'] == 0.05
+
+    async def test_no_device_row_falls_back_to_default_profile(self, engine, tmp_path):
+        await _seed_samples(_MIN_SAMPLES, TrafficGranularity.PER_DEVICE.value)
+
+        await ModelTrainer(engine).retrain_all()
+
+        models = joblib.load(tmp_path / 'aa-bb-cc-dd-ee-ff.joblib')
+        assert models['iso'].get_params()['contamination'] == 0.05
