@@ -175,6 +175,11 @@ class AppSettings(Base):
     # unresolved alert doesn't keep pulling a device toward the map's center
     # or reading as an active, alarming threat every time the page is opened.
     alert_stale_hours: Mapped[int] = mapped_column(Integer, server_default='24')
+    # Hours of no recurrence before the alert_auto_resolve sweep job closes
+    # an open alert with no natural "this stopped" signal of its own.
+    # Deliberately separate from alert_stale_hours — see the
+    # a4e19d6b3c72_app_settings_alert_auto_resolve migration docstring.
+    alert_auto_resolve_hours: Mapped[int] = mapped_column(Integer, server_default='72')
 
 
 class TrustedMac(Base):
@@ -278,6 +283,19 @@ class Alert(Base):
     acknowledged: Mapped[bool] = mapped_column(Boolean, server_default='false')
     resolved: Mapped[bool] = mapped_column(Boolean, server_default='false')
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Lifecycle fields — see sentinel/db/repositories.py:AlertRepository.
+    # A still-true condition touches this same row (bumping last_seen/
+    # occurrence_count, overwriting description/raw_data/severity with the
+    # latest values) instead of inserting a fresh row every poll.
+    last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    occurrence_count: Mapped[int] = mapped_column(Integer, server_default='1')
+    resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Disambiguates cases where (device_mac, alert_type) alone would wrongly
+    # merge distinct incidents — e.g. RuleEngine's f'rule:{rule.id}', nmap's
+    # f'port:{port}'. NULL (the common case) matched NULL-safely via
+    # isnot_distinct_from() in AlertRepository.
+    dedup_key: Mapped[str | None] = mapped_column(String(100))
 
 
 class Rule(Base):

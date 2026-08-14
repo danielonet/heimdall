@@ -196,6 +196,51 @@ class TestAlertStaleHours:
         assert resp.status_code == 401
 
 
+class TestAlertAutoResolveHours:
+    def test_default_is_72(self, client):
+        resp = client.get('/api/settings')
+        assert resp.get_json()['alert_auto_resolve_hours'] == 72
+
+    def test_updates_the_threshold(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': 48}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['alert_auto_resolve_hours'] == 48
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['alert_auto_resolve_hours'] == 48
+
+    def test_rejects_zero(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': 0}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_negative(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': -1}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_absurdly_large_values(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': 999999}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_non_integer(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': 'a lot'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_boolean(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': True}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_requires_auth(self, client):
+        resp = client.patch('/api/settings', json={'alert_auto_resolve_hours': 48})
+        assert resp.status_code == 401
+
+    def test_independent_from_alert_stale_hours(self, client, auth_headers):
+        """Deliberately separate settings — changing one must not affect
+        the other. See the a4e19d6b3c72 migration docstring."""
+        client.patch('/api/settings', json={'alert_stale_hours': 10}, headers=auth_headers)
+        resp = client.get('/api/settings')
+        assert resp.get_json()['alert_auto_resolve_hours'] == 72
+
+
 class TestPurge:
     def test_requires_auth(self, client):
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD})

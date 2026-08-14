@@ -3,27 +3,36 @@ import os
 from datetime import datetime, timezone
 
 import pytest
+import pytest_asyncio
 from flask import Flask
+from sqlalchemy import delete
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
-from sentinel.db.session import init_db
+from sentinel.db.models import Alert
+from sentinel.db.repositories import AlertRepository
+from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.detectors.high_upload import HighUploadDetector
 
 pytestmark = pytest.mark.asyncio
 
+_MAC = 'aa:bb:cc:dd:ee:ff'
 
-@pytest.fixture(autouse=True)
-def _init_db():
+
+@pytest_asyncio.fixture(autouse=True)
+async def _init_db():
     """HighUploadDetector's get_profile() call is DB-backed for a non-blank
-    device_type (see the IP Camera/Printer/unrecognized-string tests below)
-    — tests using _SNAPSHOT's default blank device_type never touch the DB
-    at all, so this is harmless overhead for them and required for the rest."""
+    device_type (see the IP Camera/Printer/unrecognized-string tests below),
+    and resolve() calls are real DB I/O once an alert has been open — every
+    test in this file needs the DB now."""
     app = Flask(__name__)
     app.config['DATABASE_URL'] = os.environ.get(
         'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
     )
     init_db(app)
     yield
+    async with get_session() as session:
+        await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
+    await get_engine().dispose()
 
 _SNAPSHOT = DeviceSnapshot(
     mac_address='aa:bb:cc:dd:ee:ff',
@@ -83,12 +92,13 @@ class TestInspectTraffic:
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
 
-    async def test_no_re_alert_within_the_cooldown_even_with_a_fresh_sustained_streak(self):
+    async def test_fires_again_on_a_second_fresh_streak_no_cooldown(self):
         """Regression: an attack tool sustaining a high ratio continuously
         used to re-fire every SUSTAINED_POLLS worth of polls for as long as
         it kept running — confirmed in production, 1,885 alerts from one
-        device over 4 days. A second, genuinely fresh 3-poll streak must
-        still be suppressed while the cooldown from the first fire holds."""
+        device over 4 days. That's now AlertRepository.upsert()'s job (at
+        the poll_cycle level) — this detector itself has no cooldown of its
+        own, so a second, genuinely fresh 3-poll streak must fire again."""
         detector = HighUploadDetector()
         sample = _sample(sent=100_000, recv=1_000)
         await detector.inspect_traffic(sample, _SNAPSHOT)
@@ -99,7 +109,40 @@ class TestInspectTraffic:
         await detector.inspect_traffic(sample, _SNAPSHOT)
         await detector.inspect_traffic(sample, _SNAPSHOT)
         second_alert = await detector.inspect_traffic(sample, _SNAPSHOT)  # a fresh 3-poll streak
-        assert second_alert is None  # still cooling down
+        assert second_alert is not None
+
+    async def test_streak_reset_resolves_the_open_alert_row(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='HIGH_UPLOAD', severity='WARNING', description='seed',
+        )
+
+        detector = HighUploadDetector()
+        sample = _sample(sent=100_000, recv=1_000)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        await detector.inspect_traffic(sample, _SNAPSHOT)  # fires, sets _alert_open
+        assert detector._alert_open[_MAC] is True
+
+        low = _sample(sent=20_000, recv=20_000)
+        await detector.inspect_traffic(low, _SNAPSHOT)  # ratio drops back under threshold
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_resolve_is_not_called_when_nothing_was_ever_open(self, monkeypatch):
+        called = False
+
+        async def _boom(*args, **kwargs):
+            nonlocal called
+            called = True
+            return True
+
+        monkeypatch.setattr(AlertRepository, 'resolve', _boom)
+        detector = HighUploadDetector()
+        await detector.inspect_traffic(_sample(sent=100, recv=10), _SNAPSHOT)  # below MIN_BYTES
+        assert called is False
 
     async def test_low_ratio_poll_breaks_the_streak(self):
         detector = HighUploadDetector()

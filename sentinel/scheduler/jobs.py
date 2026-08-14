@@ -31,7 +31,7 @@ from sentinel.api.websocket import (
     emit_wan_status,
 )
 from sentinel.db.models import Alert, Device, PortStats, TrafficSample, WanStats, WanStatusHistory
-from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.detection.pipeline import DetectionPipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -76,7 +76,7 @@ async def poll_cycle(
     alerts = await _run_detection(pipeline, devices, traffic_samples)
     scores_by_mac = _score_traffic_samples(anomaly_engine, traffic_samples)
     if wan_stats is not None:
-        wan_alert = wan_bandwidth_detector.inspect(wan_stats)
+        wan_alert = await wan_bandwidth_detector.inspect(wan_stats)
         if wan_alert is not None:
             alerts.append(wan_alert)
 
@@ -86,14 +86,20 @@ async def poll_cycle(
         await _insert_port_stats(session, port_stats)
         await _insert_wan_stats(session, wan_stats)
         wan_changed = await _record_wan_status(session, router_info)
-        for alert in alerts:
-            session.add(alert)
+
+    # Persisted separately from the rest of this poll's writes — each alert
+    # touches (upsert) rather than always inserting, so a still-true
+    # condition bumps its one open row's last_seen/occurrence_count instead
+    # of flooding new rows; only genuinely new (is_new=True) alerts are
+    # pushed live, since a touch is already covered by the frontend's
+    # existing 15s poll. See AlertRepository.
+    persisted_new_alerts = await _persist_alerts(alerts)
 
     await _run_rules(rule_engine, devices, traffic_samples)
 
     await _publish_events(redis_client, devices, traffic_samples, port_stats, router_info)
     _broadcast_updates(devices, newly_seen_macs, port_stats)
-    for alert in alerts:
+    for alert in persisted_new_alerts:
         emit_alert(alert_to_dict(alert))
     if wan_changed:
         emit_wan_status(router_info.wan_status)
@@ -235,6 +241,29 @@ async def _run_detection(
         alerts.extend(await pipeline.process_traffic(sample, snapshot))
 
     return alerts
+
+
+async def _persist_alerts(alerts: list[Alert]) -> list[Alert]:
+    """Route each pipeline/WAN-bandwidth-produced Alert through
+    AlertRepository.upsert() instead of a raw insert. Returns only the
+    alerts that were genuinely new (the "fire" transition) — a touch on an
+    already-open alert doesn't need a live push, see poll_cycle.
+    """
+    alert_repo = AlertRepository()
+    new_alerts: list[Alert] = []
+    for alert in alerts:
+        persisted, is_new = await alert_repo.upsert(
+            device_mac=alert.device_mac,
+            alert_type=alert.alert_type,
+            severity=alert.severity,
+            description=alert.description,
+            raw_data=alert.raw_data,
+            mitigation=alert.mitigation,
+            dedup_key=alert.dedup_key,
+        )
+        if is_new:
+            new_alerts.append(persisted)
+    return new_alerts
 
 
 async def _run_rules(

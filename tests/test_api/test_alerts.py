@@ -67,6 +67,23 @@ class TestListAlerts:
         assert body['per_page'] == 2
 
 
+_EXPORT_HEADER = (
+    'id,created_at,last_seen,occurrence_count,severity,alert_type,device_mac,hostname,'
+    'description,acknowledged,acknowledged_at,resolved,resolved_at'
+)
+
+
+def _export_row(client, **params) -> dict:
+    """GET /api/alerts/export and return the single data row as a
+    header-name -> value dict — robust to column position, unlike indexing
+    into row.split(',')."""
+    resp = client.get('/api/alerts/export', query_string=params)
+    lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
+    header = lines[0].split(',')
+    row = lines[1].split(',')
+    return dict(zip(header, row))
+
+
 class TestExportAlerts:
     def test_empty_export_has_header_row_only(self, client):
         resp = client.get('/api/alerts/export')
@@ -74,21 +91,19 @@ class TestExportAlerts:
         assert resp.content_type.startswith('text/csv')
         lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
         assert len(lines) == 1
-        assert lines[0] == 'id,created_at,severity,alert_type,device_mac,hostname,description,acknowledged,resolved'
+        assert lines[0] == _EXPORT_HEADER
 
     def test_includes_seeded_alert_fields(self, client):
         alert_id = _seed_alert(
             device_mac='aa:bb:cc:dd:ee:ff', alert_type='ARP_SPOOF', severity='CRITICAL',
             description='spoofing suspected',
         )
-        resp = client.get('/api/alerts/export')
-        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
-        assert len(lines) == 2
-        row = lines[1].split(',')
-        assert row[0] == str(alert_id)
-        assert row[2] == 'CRITICAL'
-        assert row[3] == 'ARP_SPOOF'
-        assert row[4] == 'aa:bb:cc:dd:ee:ff'
+        row = _export_row(client)
+        assert row['id'] == str(alert_id)
+        assert row['severity'] == 'CRITICAL'
+        assert row['alert_type'] == 'ARP_SPOOF'
+        assert row['device_mac'] == 'aa:bb:cc:dd:ee:ff'
+        assert row['occurrence_count'] == '1'
 
     def test_joins_device_hostname(self, client):
         import asyncio
@@ -101,32 +116,25 @@ class TestExportAlerts:
         asyncio.run(_seed_device())
         _seed_alert(device_mac='aa:bb:cc:dd:ee:ff')
 
-        resp = client.get('/api/alerts/export')
-        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
-        assert 'daniel-laptop' in lines[1]
+        row = _export_row(client)
+        assert row['hostname'] == 'daniel-laptop'
 
     def test_no_matching_device_leaves_hostname_blank(self, client):
         _seed_alert(device_mac='aa:bb:cc:dd:ee:ff')
-        resp = client.get('/api/alerts/export')
-        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
-        row = lines[1].split(',')
-        assert row[5] == ''
+        row = _export_row(client)
+        assert row['hostname'] == ''
 
     def test_filter_by_severity(self, client):
         _seed_alert(severity='CRITICAL')
         _seed_alert(severity='WARNING')
-        resp = client.get('/api/alerts/export?severity=WARNING')
-        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
-        assert len(lines) == 2
-        assert 'WARNING' in lines[1]
+        row = _export_row(client, severity='WARNING')
+        assert row['severity'] == 'WARNING'
 
     def test_filter_by_acknowledged(self, client):
         _seed_alert(acknowledged=True)
         _seed_alert(acknowledged=False)
-        resp = client.get('/api/alerts/export?acknowledged=true')
-        lines = resp.get_data(as_text=True).strip('\r\n').split('\r\n')
-        assert len(lines) == 2
-        assert lines[1].split(',')[-2] == 'True'
+        row = _export_row(client, acknowledged='true')
+        assert row['acknowledged'] == 'True'
 
     def test_content_disposition_offers_a_download(self, client):
         resp = client.get('/api/alerts/export')
@@ -151,6 +159,41 @@ class TestGetAlert:
         assert resp.get_json()['id'] == alert_id
 
 
+class TestListAlertsFromFilter:
+    def test_from_filters_on_last_seen_not_created_at(self, client):
+        """AlertRepository.upsert() touches (rather than re-inserts) a
+        still-recurring alert, so created_at is set once at first occurrence
+        and never advances — the Dashboard's staleness cutoff (`from`) must
+        still find a still-active alert whose created_at predates the
+        window, as long as last_seen is recent."""
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+
+        old_id = _seed_alert(created_at=datetime.now(timezone.utc) - timedelta(days=10))
+
+        async def _backdate_created_at_only():
+            async with get_session() as session:
+                alert = await session.get(Alert, old_id)
+                alert.last_seen = datetime.now(timezone.utc) - timedelta(minutes=1)
+        asyncio.run(_backdate_created_at_only())
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        resp = client.get(f'/api/alerts?from={cutoff}')
+        ids = [a['id'] for a in resp.get_json()['alerts']]
+        assert old_id in ids
+
+
+class TestListAlertsLifecycleFields:
+    def test_serializer_includes_lifecycle_fields(self, client):
+        _seed_alert()
+        resp = client.get('/api/alerts')
+        alert = resp.get_json()['alerts'][0]
+        assert alert['occurrence_count'] == 1
+        assert alert['last_seen'] is not None
+        assert alert['resolved_at'] is None
+        assert alert['acknowledged_at'] is None
+
+
 class TestPatchAlert:
     def test_not_found(self, client):
         resp = client.patch('/api/alerts/999999', json={'acknowledged': True})
@@ -160,12 +203,28 @@ class TestPatchAlert:
         alert_id = _seed_alert()
         resp = client.patch(f'/api/alerts/{alert_id}', json={'acknowledged': True})
         assert resp.status_code == 200
-        assert resp.get_json()['acknowledged'] is True
+        body = resp.get_json()
+        assert body['acknowledged'] is True
+        assert body['acknowledged_at'] is not None
 
     def test_resolve(self, client):
         alert_id = _seed_alert()
         resp = client.patch(f'/api/alerts/{alert_id}', json={'resolved': True})
-        assert resp.get_json()['resolved'] is True
+        body = resp.get_json()
+        assert body['resolved'] is True
+        assert body['resolved_at'] is not None
+
+    def test_reopen_clears_resolved_at(self, client):
+        """PATCH {"resolved": false} on an already-resolved alert — the way
+        back from a wrong auto-resolve, now that `resolved` can flip
+        automatically post-lifecycle-redesign, not just via a human."""
+        alert_id = _seed_alert()
+        client.patch(f'/api/alerts/{alert_id}', json={'resolved': True})
+
+        resp = client.patch(f'/api/alerts/{alert_id}', json={'resolved': False})
+        body = resp.get_json()
+        assert body['resolved'] is False
+        assert body['resolved_at'] is None
 
 
 class TestListAlertsGrouped:

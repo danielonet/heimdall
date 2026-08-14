@@ -87,34 +87,46 @@ class TestToDeviceSnapshotBasicFields:
 
 
 class TestToDeviceSnapshotInterfaceType:
+    """interface_name is decided from Layer1Interface (see _parse_port_alias)
+    — the confirmed-reliable positive "genuinely wired" signal — never from
+    Device/Hosts' InterfaceType (unreliable on this firmware) or from mere
+    absence in AssociatedDevices. See the regression class below for the
+    production bug this specifically guards against.
+    """
+
     def test_wifi_interface_name(self, adapter):
         snap = adapter._to_device_snapshot(_wifi_host(InterfaceType='WiFi'))
         assert snap.interface_name == 'WiFi'
 
     def test_ethernet_interface_name(self, adapter):
-        snap = adapter._to_device_snapshot(_wired_host(InterfaceType='Ethernet'))
-        assert snap.interface_name == 'Ethernet'
-
-    def test_unknown_interface_type_becomes_ethernet(self, adapter):
-        snap = adapter._to_device_snapshot(_wifi_host(InterfaceType='Unknown'))
-        assert snap.interface_name == 'Ethernet'
-
-    def test_missing_interface_type_defaults_to_ethernet(self, adapter):
-        host = _wifi_host()
-        del host['InterfaceType']
+        host = _wired_host(InterfaceType='Ethernet', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
         snap = adapter._to_device_snapshot(host)
         assert snap.interface_name == 'Ethernet'
 
-    def test_presence_in_associated_devices_overrides_stale_ethernet(self, adapter):
+    def test_unknown_interface_type_is_not_enough_to_become_ethernet(self, adapter):
+        """InterfaceType is unreliable on this firmware — an unrecognized
+        value alone must not misclassify a device as wired; only a real
+        Layer1Interface PHY path does."""
+        snap = adapter._to_device_snapshot(_wifi_host(InterfaceType='Unknown'))
+        assert snap.interface_name == 'WiFi'
+
+    def test_missing_interface_type_is_not_enough_to_become_ethernet(self, adapter):
+        host = _wifi_host()
+        del host['InterfaceType']
+        snap = adapter._to_device_snapshot(host)
+        assert snap.interface_name == 'WiFi'
+
+    def test_presence_in_associated_devices_confirms_wifi_despite_stale_ethernet_type(self, adapter):
         """Confirmed in production: a phone (DetectedDeviceType='Smartphone')
         with InterfaceType='Ethernet' in Device/Hosts, but a real entry in
-        AssociatedDevices — that's WiFi-only data, so it wins."""
+        AssociatedDevices (WiFi-only data) and no Layer1Interface — correctly
+        WiFi regardless of the stale InterfaceType value."""
         host = _wifi_host(InterfaceType='Ethernet', DetectedDeviceType='Smartphone')
         associated = {'da:d4:19:31:c0:e9': _associated_client()}
         snap = adapter._to_device_snapshot(host, associated)
         assert snap.interface_name == 'WiFi'
 
-    def test_presence_in_associated_devices_overrides_missing_interface_type(self, adapter):
+    def test_presence_in_associated_devices_confirms_wifi_despite_missing_interface_type(self, adapter):
         host = _wifi_host()
         del host['InterfaceType']
         associated = {'da:d4:19:31:c0:e9': _associated_client()}
@@ -122,9 +134,39 @@ class TestToDeviceSnapshotInterfaceType:
         assert snap.interface_name == 'WiFi'
 
     def test_genuinely_wired_device_unaffected_by_unrelated_associated_entries(self, adapter):
-        host = _wired_host()
+        host = _wired_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
         associated = {'11:22:33:44:55:66': _associated_client()}  # a different device's MAC
         snap = adapter._to_device_snapshot(host, associated)
+        assert snap.interface_name == 'Ethernet'
+
+
+class TestToDeviceSnapshotInterfaceTypeRegression:
+    """Regression coverage for a real production bug: several WiFi-only
+    phones (no Ethernet port at all) showed an ETH badge on the dashboard.
+    Root cause — the old logic defaulted anything it couldn't *positively*
+    prove was WiFi to 'Ethernet':
+    `'WiFi' if (iface_type == 'WiFi' or client) else 'Ethernet'`. Device/
+    Hosts' InterfaceType is unreliable on this firmware, and a WiFi device
+    genuinely absent from *this poll's* AssociatedDevices response (a roam,
+    a per-AP-entry lag — see _get_associated_devices' "prefer whichever the
+    router reports Active" handling for stale multi-AP entries) would
+    silently flip to Ethernet with neither signal firing. Layer1Interface
+    is the only signal confirmed to reliably distinguish the two."""
+
+    def test_wifi_device_transiently_missing_from_associated_devices_stays_wifi(self, adapter):
+        """The exact production scenario: InterfaceType isn't a clean
+        'WiFi' this poll (blank/stale) and the device isn't in this poll's
+        AssociatedDevices map either — must still resolve to WiFi, not
+        Ethernet, since there's no Layer1Interface PHY path at all."""
+        host = _wifi_host(InterfaceType='')
+        snap = adapter._to_device_snapshot(host, associated={})
+        assert snap.interface_name == 'WiFi'
+
+    def test_wired_device_correctly_classified_even_with_blank_interface_type(self, adapter):
+        """The positive Layer1Interface signal is sufficient on its own —
+        a genuinely wired device doesn't depend on InterfaceType agreeing."""
+        host = _wired_host(InterfaceType='', Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY3]')
+        snap = adapter._to_device_snapshot(host)
         assert snap.interface_name == 'Ethernet'
 
 
@@ -175,14 +217,34 @@ class TestToDeviceSnapshotPortAlias:
         snap = adapter._to_device_snapshot(host)
         assert snap.port_alias == 'PHY2'
 
-    def test_wifi_host_has_no_port_alias(self, adapter):
-        """WiFi hosts don't have a meaningful Layer1Interface — even if one
-        somehow carried a PHY-looking value, it must not surface as port_alias."""
-        host = _wifi_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
+    def test_a_host_with_no_layer1_interface_has_no_port_alias(self, adapter):
+        """Real WiFi hosts have Layer1Interface blank (confirmed live — see
+        _parse_port_alias's docstring), so this is the normal WiFi case."""
+        host = _wifi_host()
+        assert 'Layer1Interface' not in host
         snap = adapter._to_device_snapshot(host)
         assert snap.port_alias == ''
 
+    def test_a_populated_layer1_interface_wins_regardless_of_interface_type(self, adapter):
+        """Layer1Interface is the authoritative wired signal (see
+        TestToDeviceSnapshotInterfaceTypeRegression) — a host claiming
+        InterfaceType='WiFi' while also carrying a real PHY path is treated
+        as genuinely wired, not the reverse. This mirrors the fix: trusting
+        the unreliable InterfaceType field over Layer1Interface was the
+        root cause of the ETH-badge-on-a-WiFi-phone production bug."""
+        host = _wifi_host(Layer1Interface='Device/Ethernet/Interfaces/Interface[PHY2]')
+        snap = adapter._to_device_snapshot(host)
+        assert snap.port_alias == 'PHY2'
+        assert snap.interface_name == 'Ethernet'
+
     def test_missing_layer1_interface_defaults_to_empty(self, adapter):
+        """Note: on real hardware this combination shouldn't occur — a
+        genuinely wired host always carries Layer1Interface (confirmed
+        live). This _wired_host() fixture omits it only to exercise
+        _parse_port_alias's empty-input path in isolation; with it missing,
+        _to_device_snapshot now also classifies this host as WiFi (see
+        TestToDeviceSnapshotInterfaceTypeRegression) — Layer1Interface is
+        the sole source of truth for both port_alias and interface_name."""
         host = _wired_host()
         assert 'Layer1Interface' not in host
         snap = adapter._to_device_snapshot(host)

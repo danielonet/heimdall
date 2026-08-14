@@ -154,6 +154,41 @@ class TestRaiseThreatAlert:
         await scheduler._raise_threat_alert(None, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected, no known MAC')
         # Must not raise — the assertion here is simply that this completes.
 
+    async def test_repeated_event_coalesces_into_one_touched_row(self, scheduler):
+        """No resolve() call for this source (no natural "this stopped"
+        signal) — but a still-recurring attack signal must still touch the
+        same open row via AlertRepository.upsert(), not flood inserts."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected again')
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
+        assert 'again' in alerts[0].description
+
+    async def test_dedup_key_keeps_distinct_findings_on_the_same_device_separate(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._raise_threat_alert(
+            _MAC, 'HIGH_RISK_PORT_OPENED', 'CRITICAL', 'port 22 opened', dedup_key='port:22',
+        )
+        await scheduler._raise_threat_alert(
+            _MAC, 'HIGH_RISK_PORT_OPENED', 'CRITICAL', 'port 3389 opened', dedup_key='port:3389',
+        )
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC, Alert.alert_type == 'HIGH_RISK_PORT_OPENED')
+            )
+            alerts = result.scalars().all()
+        assert len(alerts) == 2
+
 
 class TestRaiseThreatAlertBlockExpiry:
     """blocked_at/blocked_until — see _raise_threat_alert's docstring for

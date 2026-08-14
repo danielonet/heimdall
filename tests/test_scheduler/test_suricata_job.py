@@ -97,6 +97,19 @@ class TestSuricataPollJob:
         assert 'ET MALWARE Test Signature' in alert.description
         assert alert.mitigation is not None  # see sentinel/security/remediation.py
 
+    async def test_repeated_signature_match_coalesces_into_one_touched_row(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        scheduler._suricata_reader = _FakeReader([_alert_line(), _alert_line()])
+
+        await scheduler._suricata_poll_job()
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
+
     async def test_severity_1_maps_to_critical_alert(self, scheduler):
         await _seed_device(is_blocked=False)
         await SettingsRepository().set_auto_block_on_threat(False)

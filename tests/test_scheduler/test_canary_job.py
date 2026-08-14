@@ -98,6 +98,21 @@ class TestCanaryPollJob:
         assert alert.mitigation is not None  # see sentinel/security/remediation.py
         assert 'telnet' in alert.mitigation.lower()
 
+    async def test_repeated_honeypot_hits_coalesce_into_one_touched_row(self, scheduler):
+        """No natural "this stopped" signal for a log-line-triggered source
+        — dedup is AlertRepository.upsert()'s job, not this job's."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        scheduler._canary_reader = _FakeReader([_honeypot_line(), _honeypot_line()])
+
+        await scheduler._canary_poll_job()
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
+
     async def test_auto_block_armed_blocks_the_source_device(self, scheduler):
         """A honeypot hit is inherently malicious — it must auto-block exactly
         like ARP-spoof/Suricata/Zeek findings do, not just get logged."""

@@ -117,6 +117,36 @@ class TestHighRiskPortRegression:
 
         assert await _latest_alert('HIGH_RISK_PORT_OPENED') is None
 
+    async def test_two_different_newly_opened_ports_do_not_coalesce(self, scheduler):
+        """dedup_key=port — a second, different port opening on a later
+        scan is a distinct finding, not a repeat of the first."""
+        await _seed_device(nmap_profile={'ports': []})
+        await SettingsRepository().set_auto_block_on_threat(False)
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[
+                OpenPort(port=23, protocol='tcp', service='telnet', version='', state='open'),
+            ]),
+        )
+        await scheduler._nmap_scan_job()
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+            device.nmap_profile = {'ports': [{'port': 23, 'state': 'open'}]}
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[
+                OpenPort(port=23, protocol='tcp', service='telnet', version='', state='open'),
+                OpenPort(port=3389, protocol='tcp', service='rdp', version='', state='open'),
+            ]),
+        )
+        await scheduler._nmap_scan_job()
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC, Alert.alert_type == 'HIGH_RISK_PORT_OPENED')
+            )
+            alerts = result.scalars().all()
+        assert len(alerts) == 2
+
 
 class TestVulnScanRegression:
     async def test_vuln_findings_alert(self, scheduler):
@@ -132,6 +162,25 @@ class TestVulnScanRegression:
         alert = await _latest_alert('VULNERABILITY_DETECTED')
         assert alert is not None
         assert 'some-vuln-script' in alert.description
+
+    async def test_repeated_scan_with_the_same_findings_coalesces_into_one_touched_row(self, scheduler):
+        await _seed_device(nmap_profile={'ports': []})
+        await SettingsRepository().set_auto_block_on_threat(False)
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[]),
+            vuln_findings={'some-vuln-script': 'VULNERABLE'},
+        )
+
+        await scheduler._nmap_scan_job()
+        await scheduler._nmap_scan_job()
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC, Alert.alert_type == 'VULNERABILITY_DETECTED')
+            )
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
 
 
 class TestCredentialExposure:

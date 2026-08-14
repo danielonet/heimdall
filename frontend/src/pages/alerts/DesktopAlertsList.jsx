@@ -72,7 +72,17 @@ export function DesktopAlertsList({
           <div key={a.id} className="flex items-center gap-3 border-b border-border/50 p-3 last:border-none">
             <SeverityBar severity={a.severity} />
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
+              <div className="text-[11px] text-text-primary">
+                {a.alert_type.replaceAll('_', ' ')}
+                {a.occurrence_count > 1 && (
+                  <span
+                    className="ml-2 text-[9px] text-text-muted"
+                    title={`Recurred ${a.occurrence_count} times — last seen ${a.last_seen ?? a.created_at}`}
+                  >
+                    ×{a.occurrence_count}
+                  </span>
+                )}
+              </div>
               <div className="truncate text-[10px] text-text-secondary" title={a.description}>
                 {a.description}
               </div>
@@ -95,7 +105,7 @@ export function DesktopAlertsList({
                 <Badge variant="success">RESOLVED</Badge>
               ) : a.acknowledged ? (
                 <Badge variant="info">ACKED</Badge>
-              ) : isStale(a.created_at, staleHours) ? (
+              ) : isStale(a.last_seen ?? a.created_at, staleHours) ? (
                 <Badge variant="muted" title={`No activity in over ${staleHours}h`}>STALE</Badge>
               ) : (
                 <Badge variant="danger">OPEN</Badge>

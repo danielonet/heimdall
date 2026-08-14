@@ -157,7 +157,7 @@ class TestAlertAction:
         )
 
         async with get_session() as session:
-            result = await session.execute(select(Alert))
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
             assert result.scalars().all() == []
 
     async def test_device_snapshot_trigger(self, engine):
@@ -172,6 +172,54 @@ class TestAlertAction:
         async with get_session() as session:
             result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
             assert len(result.scalars().all()) == 1
+
+    async def test_repeated_matches_coalesce_into_one_row_with_a_climbing_count(self, engine):
+        """Regression: every ALERT/BLOCK_DEVICE/TAG_DEVICE/NOTIFY rule used
+        to re-fire a brand-new row every poll unless the user opted into
+        RATE_LIMIT — dedup is now AlertRepository.upsert()'s job."""
+        await _seed_device()
+        await _create_rule(
+            {'trigger': 'TRAFFIC_SAMPLE', 'field': 'throughput_up_kbps', 'op': 'GT', 'value': 50},
+            {'type': 'ALERT', 'severity': 'WARNING'},
+        )
+        await engine.load_active_rules()
+        sample = _sample(throughput_up_kbps=100)
+
+        await engine.process_traffic(sample, _snapshot())
+        await engine.process_traffic(sample, _snapshot())
+        await engine.process_traffic(sample, _snapshot())
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 3
+
+    async def test_condition_stopping_resolves_the_alert_and_a_fresh_match_reopens_it(self, engine):
+        await _seed_device()
+        await _create_rule(
+            {'trigger': 'TRAFFIC_SAMPLE', 'field': 'throughput_up_kbps', 'op': 'GT', 'value': 50},
+            {'type': 'ALERT'},
+        )
+        await engine.load_active_rules()
+        high = _sample(throughput_up_kbps=100)
+        low = _sample(throughput_up_kbps=10)
+
+        await engine.process_traffic(high, _snapshot())
+        async with get_session() as session:
+            first = (await session.execute(select(Alert).where(Alert.device_mac == _MAC))).scalars().one()
+
+        await engine.process_traffic(low, _snapshot())  # condition stops
+        async with get_session() as session:
+            resolved = await session.get(Alert, first.id)
+        assert resolved.resolved is True
+
+        await engine.process_traffic(high, _snapshot())  # fires again — a fresh incident
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+            alerts = result.scalars().all()
+        assert len(alerts) == 2
+        assert any(a.id != first.id and a.resolved is False for a in alerts)
 
     async def test_rule_last_triggered_is_updated(self, engine):
         await _seed_device()
@@ -200,11 +248,13 @@ class TestWindowPolls:
         await engine.process_traffic(sample, _snapshot())
         await engine.process_traffic(sample, _snapshot())
         async with get_session() as session:
-            assert (await session.execute(select(Alert))).scalars().all() == []
+            assert (await session.execute(select(Alert).where(Alert.device_mac == _MAC))).scalars().all() == []
 
         await engine.process_traffic(sample, _snapshot())
         async with get_session() as session:
-            assert len((await session.execute(select(Alert))).scalars().all()) == 1
+            assert len(
+                (await session.execute(select(Alert).where(Alert.device_mac == _MAC))).scalars().all()
+            ) == 1
 
     async def test_streak_resets_on_non_match(self, engine):
         await _seed_device()
@@ -219,7 +269,7 @@ class TestWindowPolls:
         await engine.process_traffic(_sample(throughput_up_kbps=100), _snapshot())  # streak=1 again
 
         async with get_session() as session:
-            assert (await session.execute(select(Alert))).scalars().all() == []
+            assert (await session.execute(select(Alert).where(Alert.device_mac == _MAC))).scalars().all() == []
 
 
 class TestBlockDeviceAction:

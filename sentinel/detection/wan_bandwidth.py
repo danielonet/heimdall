@@ -12,36 +12,38 @@ from __future__ import annotations
 
 import statistics
 from collections import deque
-from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sentinel.adapter.models import WanStats
 from sentinel.db.models import Alert
+from sentinel.db.repositories import AlertRepository
 
 WINDOW_SIZE = 20  # ~5 minutes of history at the default 15s poll interval
 MIN_SAMPLES = 10  # don't judge "abnormal" against too short a baseline
 STDDEV_MULTIPLIER = 3.0
 SUSTAINED_POLLS = 2
-COOLDOWN_MINUTES = 30
+_ALERT_TYPE = 'WAN_BANDWIDTH_SPIKE'
 
 
 class WanBandwidthDetector:
     """Flags total (up+down) WAN throughput more than STDDEV_MULTIPLIER
     standard deviations above the rolling mean of the last WINDOW_SIZE
-    polls, sustained for SUSTAINED_POLLS in a row, then quiet for
-    COOLDOWN_MINUTES — same streak+cooldown shape as HighUploadDetector,
-    but with an adaptive rather than fixed threshold: a fixed Mbps number
-    would need hand-tuning per household's actual ISP plan, while a rolling
-    baseline adapts automatically and needs no new admin-configurable
-    setting.
+    polls, sustained for SUSTAINED_POLLS in a row — same streak shape as
+    HighUploadDetector, with an adaptive rather than fixed threshold: a
+    fixed Mbps number would need hand-tuning per household's actual ISP
+    plan, while a rolling baseline adapts automatically and needs no new
+    admin-configurable setting. Deduped via AlertRepository.upsert() (see
+    poll_cycle) rather than a cooldown timer — a still-elevated household
+    total just bumps the same open row's occurrence_count; resolve() fires
+    the moment throughput drops back under threshold.
     """
 
     def __init__(self) -> None:
         self._history: deque[int] = deque(maxlen=WINDOW_SIZE)
         self._consecutive_high = 0
-        self._quiet_until: Optional[datetime] = None
+        self._alert_open = False
 
-    def inspect(self, wan_sample: WanStats) -> Optional[Alert]:
+    async def inspect(self, wan_sample: WanStats) -> Optional[Alert]:
         total_kbps = wan_sample.throughput_up_kbps + wan_sample.throughput_dn_kbps
 
         if len(self._history) < MIN_SAMPLES:
@@ -55,17 +57,16 @@ class WanBandwidthDetector:
         threshold = mean + STDDEV_MULTIPLIER * stdev
         if stdev == 0 or total_kbps <= threshold:
             self._consecutive_high = 0
+            if self._alert_open:
+                await AlertRepository().resolve(device_mac=None, alert_type=_ALERT_TYPE)
+                self._alert_open = False
             return None
 
         self._consecutive_high += 1
         if self._consecutive_high < SUSTAINED_POLLS:
             return None  # matched, but not sustained long enough yet
         self._consecutive_high = 0  # reset so we don't alert every poll
-
-        now = datetime.now(timezone.utc)
-        if self._quiet_until is not None and self._quiet_until > now:
-            return None  # still quiet from a previous fire
-        self._quiet_until = now + timedelta(minutes=COOLDOWN_MINUTES)
+        self._alert_open = True
 
         return Alert(
             device_mac=None,

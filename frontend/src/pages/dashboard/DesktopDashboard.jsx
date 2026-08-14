@@ -83,11 +83,18 @@ export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, 
           </div>
 
           <div className="flex flex-1 gap-px overflow-hidden">
-            <div className="flex-[2] border border-border bg-surface p-4">
+            {/* min-w-0: a flex item's default min-width is auto (fit its
+            content), not 0 — a long, unbreakable alert description inside
+            AlertFeed's truncate divs was forcing this box past its flex-[2]
+            share of the row, which pushed SelectedAlertPanel off-screen
+            entirely (its sibling flex-1 box was rendering at x>1700 on a
+            1600px-wide viewport) instead of just truncating the text as
+            intended. See AlertFeed's own min-w-0 usage per-row for the same fix. */}
+            <div className="min-w-0 flex-[2] border border-border bg-surface p-4">
               <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">OPEN ALERTS</div>
               <AlertFeed alerts={alerts} onSelect={onSelectAlert} />
             </div>
-            <div className="flex-1">
+            <div className="min-w-0 flex-1">
               <SelectedAlertPanel alert={bannerAlert} />
             </div>
           </div>

@@ -30,6 +30,8 @@ MIN_SMTP_PORT = 1
 MAX_SMTP_PORT = 65535
 MIN_ALERT_STALE_HOURS = 1
 MAX_ALERT_STALE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertStalenessSection.jsx
+MIN_ALERT_AUTO_RESOLVE_HOURS = 1
+MAX_ALERT_AUTO_RESOLVE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertAutoResolveSection.jsx
 
 
 async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:
@@ -59,6 +61,7 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         smtp_password_configured=bool(settings.SMTP_PASSWORD),
         auto_block_on_threat=data['auto_block_on_threat'],
         alert_stale_hours=data['alert_stale_hours'],
+        alert_auto_resolve_hours=data['alert_auto_resolve_hours'],
     )
     if include_db_size:
         payload['db_size_mb'] = await _get_db_size_mb()
@@ -173,6 +176,16 @@ async def update_settings():
                   f'{MIN_ALERT_STALE_HOURS} and {MAX_ALERT_STALE_HOURS}'
         ), 400
 
+    alert_auto_resolve_hours = body.get('alert_auto_resolve_hours')
+    if 'alert_auto_resolve_hours' in body and (
+        not isinstance(alert_auto_resolve_hours, int) or isinstance(alert_auto_resolve_hours, bool)
+        or not (MIN_ALERT_AUTO_RESOLVE_HOURS <= alert_auto_resolve_hours <= MAX_ALERT_AUTO_RESOLVE_HOURS)
+    ):
+        return jsonify(
+            error=f'alert_auto_resolve_hours must be an integer between '
+                  f'{MIN_ALERT_AUTO_RESOLVE_HOURS} and {MAX_ALERT_AUTO_RESOLVE_HOURS}'
+        ), 400
+
     # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
@@ -236,6 +249,8 @@ async def update_settings():
         await repo.set_auto_block_on_threat(body['auto_block_on_threat'])
     if 'alert_stale_hours' in body:
         await repo.set_alert_stale_hours(alert_stale_hours)
+    if 'alert_auto_resolve_hours' in body:
+        await repo.set_alert_auto_resolve_hours(alert_auto_resolve_hours)
 
     return jsonify(await _serialize(repo))
 

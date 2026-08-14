@@ -33,6 +33,19 @@ export function AckResolveButtons({ alert }) {
           RESOLVE
         </button>
       )}
+      {alert.resolved && (
+        // resolved can now flip automatically (a detector's own resolve()
+        // call, or the alert_auto_resolve sweep), not just via a deliberate
+        // human action — REOPEN is the way back from a wrong auto-resolve.
+        <button
+          type="button"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate({ resolved: false })}
+          className="border border-accent-amber/30 bg-accent-amber/5 px-2 py-0.5 text-[9px] tracking-wider text-accent-amber transition-colors hover:bg-accent-amber/20 disabled:opacity-40"
+        >
+          REOPEN
+        </button>
+      )}
     </div>
   )
 }

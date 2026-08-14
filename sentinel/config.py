@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     # (e.g. NEW_DEVICE immediately followed by ARP_SPOOF). See
     # sentinel/detection/correlation.py.
     CORRELATION_SCAN_INTERVAL_SECONDS: int = 300
+    # How often to sweep for open alerts past AppSettings.
+    # alert_auto_resolve_hours with no recurrence and auto-resolve them —
+    # an interval, not a nightly cron, same reasoning as
+    # BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS. See SentinelScheduler._alert_auto_resolve_job.
+    ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS: int = 1800
     # Daily by default — edit for weekly (e.g. '0 7 * * 1' for Monday).
     # Env-only, like every other *_CRON setting (not SettingsRepository-backed).
     SECURITY_DIGEST_CRON: str = '0 7 * * *'

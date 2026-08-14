@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -31,7 +31,17 @@ _RANK_TO_SEVERITY = {3: 'CRITICAL', 2: 'WARNING', 1: 'INFO'}
 
 @bp.route('', methods=['GET'])
 async def list_alerts():
-    """Paginated alert list, filterable by severity, device_mac, acknowledged, from, to."""
+    """Paginated alert list, filterable by severity, device_mac, acknowledged, from, to.
+
+    from/to filter on last_seen, not created_at — the Dashboard's staleness
+    cutoff (see frontend/src/lib/alertStaleness.js:staleBeforeIso) uses this
+    same `from` param to hide alerts with no recent activity. Since
+    AlertRepository.upsert() touches (rather than re-inserts) a still-
+    recurring alert, created_at is set once at first occurrence and never
+    advances — filtering on it would wrongly hide/exclude an alert that's
+    still actively recurring today just because it first fired outside the
+    window. Same reasoning as CrossAlertCorrelator's last_seen fix.
+    """
     page = max(request.args.get('page', 1, type=int), 1)
     per_page = min(request.args.get('per_page', 50, type=int), MAX_PER_PAGE)
 
@@ -56,13 +66,13 @@ async def list_alerts():
 
     from_ts = _parse_timestamp(request.args.get('from'))
     if from_ts:
-        query = query.where(Alert.created_at >= from_ts)
-        count_query = count_query.where(Alert.created_at >= from_ts)
+        query = query.where(Alert.last_seen >= from_ts)
+        count_query = count_query.where(Alert.last_seen >= from_ts)
 
     to_ts = _parse_timestamp(request.args.get('to'))
     if to_ts:
-        query = query.where(Alert.created_at <= to_ts)
-        count_query = count_query.where(Alert.created_at <= to_ts)
+        query = query.where(Alert.last_seen <= to_ts)
+        count_query = count_query.where(Alert.last_seen <= to_ts)
 
     query = query.order_by(Alert.created_at.desc()).limit(per_page).offset((page - 1) * per_page)
 
@@ -180,11 +190,11 @@ async def export_alerts():
 
     from_ts = _parse_timestamp(request.args.get('from'))
     if from_ts:
-        query = query.where(Alert.created_at >= from_ts)
+        query = query.where(Alert.last_seen >= from_ts)  # see list_alerts' docstring
 
     to_ts = _parse_timestamp(request.args.get('to'))
     if to_ts:
-        query = query.where(Alert.created_at <= to_ts)
+        query = query.where(Alert.last_seen <= to_ts)
 
     query = query.order_by(Alert.created_at.desc()).limit(MAX_EXPORT_ROWS)
 
@@ -194,20 +204,24 @@ async def export_alerts():
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        'id', 'created_at', 'severity', 'alert_type', 'device_mac', 'hostname',
-        'description', 'acknowledged', 'resolved',
+        'id', 'created_at', 'last_seen', 'occurrence_count', 'severity', 'alert_type', 'device_mac', 'hostname',
+        'description', 'acknowledged', 'acknowledged_at', 'resolved', 'resolved_at',
     ])
     for alert, hostname in rows:
         writer.writerow([
             alert.id,
             alert.created_at.isoformat() if alert.created_at else '',
+            alert.last_seen.isoformat() if alert.last_seen else '',
+            alert.occurrence_count,
             alert.severity,
             alert.alert_type,
             alert.device_mac or '',
             hostname or '',
             alert.description or '',
             alert.acknowledged,
+            alert.acknowledged_at.isoformat() if alert.acknowledged_at else '',
             alert.resolved,
+            alert.resolved_at.isoformat() if alert.resolved_at else '',
         ])
 
     filename = f'heimdall-alerts-{datetime.now().strftime("%Y%m%d-%H%M%S")}.csv'
@@ -231,11 +245,16 @@ async def bulk_patch_alerts():
     if not device_mac and not alert_type:
         return jsonify(error='device_mac or alert_type is required'), 400
 
+    now = datetime.now(timezone.utc)
     values = {}
     if 'acknowledged' in body:
-        values['acknowledged'] = bool(body['acknowledged'])
+        acknowledged = bool(body['acknowledged'])
+        values['acknowledged'] = acknowledged
+        values['acknowledged_at'] = now if acknowledged else None
     if 'resolved' in body:
-        values['resolved'] = bool(body['resolved'])
+        resolved = bool(body['resolved'])
+        values['resolved'] = resolved
+        values['resolved_at'] = now if resolved else None
     if not values:
         return jsonify(error='acknowledged or resolved is required'), 400
 
@@ -263,8 +282,17 @@ async def get_alert(alert_id: int):
 
 @bp.route('/<int:alert_id>', methods=['PATCH'])
 async def patch_alert(alert_id: int):
-    """Acknowledge or resolve an alert — body: {"acknowledged": true} or {"resolved": true}."""
+    """Acknowledge or resolve an alert — body: {"acknowledged": true} or {"resolved": true}.
+
+    Also the REOPEN path: {"resolved": false} on an already-resolved alert
+    — needed now that `resolved` can flip automatically post-lifecycle-
+    redesign (a detector's resolve() call, or the alert_auto_resolve sweep),
+    not just via a deliberate human action, so there must be a way back
+    from a wrong auto-resolve. No new endpoint needed — this already
+    accepted the same body shape before the redesign.
+    """
     body = request.get_json(silent=True) or {}
+    now = datetime.now(timezone.utc)
 
     async with get_session() as session:
         alert = await session.get(Alert, alert_id)
@@ -273,8 +301,10 @@ async def patch_alert(alert_id: int):
 
         if 'acknowledged' in body:
             alert.acknowledged = bool(body['acknowledged'])
+            alert.acknowledged_at = now if alert.acknowledged else None
         if 'resolved' in body:
             alert.resolved = bool(body['resolved'])
+            alert.resolved_at = now if alert.resolved else None
 
         payload = alert_to_dict(alert)
 

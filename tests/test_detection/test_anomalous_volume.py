@@ -3,29 +3,36 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytest_asyncio
 from flask import Flask
+from sqlalchemy import delete
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
-from sentinel.db.session import init_db
+from sentinel.db.models import Alert
+from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
 from sentinel.detection.device_profiles import DEFAULT_PROFILE, get_profile
 
 pytestmark = pytest.mark.asyncio
 
+_MAC = 'aa:bb:cc:dd:ee:ff'
 
-@pytest.fixture(autouse=True)
-def _init_db():
+
+@pytest_asyncio.fixture(autouse=True)
+async def _init_db():
     """AnomalousVolumeDetector's get_profile() call is DB-backed for a
-    non-blank device_type (see TestDeviceTypeAwareStreak below) — tests
-    using _SNAPSHOT's default blank device_type never touch the DB at all
-    (DeviceTypeProfileRepository.get_profile short-circuits before querying),
-    so this is harmless overhead for them and required for the others."""
+    non-blank device_type (see TestDeviceTypeAwareStreak below), and every
+    fire/resolve now goes through AlertRepository (real DB I/O) instead of
+    returning an unpersisted Alert — so every test in this file needs the DB."""
     app = Flask(__name__)
     app.config['DATABASE_URL'] = os.environ.get(
         'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
     )
     init_db(app)
     yield
+    async with get_session() as session:
+        await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
+    await get_engine().dispose()
 
 _SUSTAINED_POLLS = DEFAULT_PROFILE['volume_sustained_polls']  # blank device_type resolves to this
 
@@ -118,15 +125,60 @@ class TestInspectTraffic:
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # needs a fresh streak
         assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is not None
 
-    async def test_no_alert_again_during_the_cooldown(self):
-        """Regression: previously nothing stopped a sustained condition from
-        re-firing every single poll for its whole duration."""
+    async def test_fires_again_once_a_fresh_streak_completes_no_cooldown(self):
+        """Regression: the old COOLDOWN_MINUTES gate is gone — dedup is now
+        AlertRepository.upsert()'s job (at the poll_cycle level), not this
+        detector's. A second full streak must fire a second (unpersisted)
+        Alert immediately, with no quiet period in between."""
         detector = _detector(anomalous=True)
         for _ in range(_SUSTAINED_POLLS):
             first = await detector.inspect_traffic(_sample(), _SNAPSHOT)
         assert first is not None
-        for _ in range(_SUSTAINED_POLLS + 2):
-            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None  # still in cooldown
+        for _ in range(_SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+        second = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert second is not None
+
+    async def test_streak_reset_resolves_the_open_alert_row(self):
+        """Once a fire has set _alert_open, the next non-matching sample
+        must resolve() the real DB row a prior poll_cycle would have
+        upserted — this detector's half of the fire/resolve lifecycle."""
+        from sentinel.db.repositories import AlertRepository
+
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='ANOMALOUS_VOLUME', severity='WARNING', description='seed',
+        )
+        assert alert.resolved is False
+
+        detector = _detector(anomalous=True)
+        for _ in range(_SUSTAINED_POLLS):
+            await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert detector._alert_open[_MAC] is True
+
+        detector._engine._anomalous = False
+        await detector.inspect_traffic(_sample(), _SNAPSHOT)
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_resolve_is_not_called_when_nothing_was_ever_open(self, monkeypatch):
+        """Guards against a DB round trip on every non-matching poll for a
+        device that has never fired."""
+        from sentinel.db import repositories as repo_module
+
+        called = False
+
+        async def _boom(*args, **kwargs):
+            nonlocal called
+            called = True
+            return True
+
+        monkeypatch.setattr(repo_module.AlertRepository, 'resolve', _boom)
+        detector = _detector(anomalous=False)
+        await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert called is False
 
     async def test_non_anomalous_sample_produces_no_alert(self):
         detector = _detector(anomalous=False)

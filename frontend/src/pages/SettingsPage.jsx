@@ -4,6 +4,7 @@ import { useHealth } from '../hooks/useHealth'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
+import { AlertAutoResolveSection } from '../components/settings/AlertAutoResolveSection'
 import { AlertStalenessSection } from '../components/settings/AlertStalenessSection'
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { ClearAlertsSection } from '../components/settings/ClearAlertsSection'
@@ -97,6 +98,7 @@ export function SettingsPage() {
       <div className={fourUpClass}>
         <AutoBlockSection />
         <AlertStalenessSection />
+        <AlertAutoResolveSection />
         <ClearAlertsSection />
         <PurgeDatabaseSection />
       </div>

@@ -69,6 +69,12 @@ async def _dns_queries() -> list[DnsQuery]:
         return list(result.scalars().all())
 
 
+async def _all_alerts() -> list[Alert]:
+    async with get_session() as session:
+        result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
+        return list(result.scalars().all())
+
+
 class _FakeReader:
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
@@ -154,6 +160,42 @@ class TestZeekDnsPollJob:
         assert alert.alert_type == 'DNS_MALICIOUS_QUERY'
         assert 'auto-blocked' in alert.description
 
+    async def test_repeated_query_to_the_same_domain_coalesces_into_one_touched_row(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        sched._threat_intel._domains.add('malicious.example.com')
+        sched._zeek_dns_reader = _FakeReader([
+            f'{{"id.orig_h": "{_IP}", "query": "malicious.example.com"}}',
+            f'{{"id.orig_h": "{_IP}", "query": "malicious.example.com"}}',
+        ])
+        sched._zeek_dns_ingester = ZeekDnsIngester()
+
+        await sched._zeek_dns_poll_job()
+
+        alerts = await _all_alerts()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
+
+    async def test_a_different_malicious_domain_does_not_coalesce(self, scheduler):
+        """dedup_key=domain — a second, different malicious query on the
+        same device is a distinct finding, not a repeat of the first."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        sched._threat_intel._domains.add('malicious-1.example.com')
+        sched._threat_intel._domains.add('malicious-2.example.com')
+        sched._zeek_dns_reader = _FakeReader([
+            f'{{"id.orig_h": "{_IP}", "query": "malicious-1.example.com"}}',
+            f'{{"id.orig_h": "{_IP}", "query": "malicious-2.example.com"}}',
+        ])
+        sched._zeek_dns_ingester = ZeekDnsIngester()
+
+        await sched._zeek_dns_poll_job()
+
+        alerts = await _all_alerts()
+        assert len(alerts) == 2
+
     async def test_malformed_lines_are_skipped(self, scheduler):
         sched = scheduler
         sched._zeek_dns_reader = _FakeReader(['not json {{{'])
@@ -188,6 +230,22 @@ class TestZeekBeaconScanJob:
         await sched._zeek_beacon_scan_job()  # must not raise
 
         assert await _latest_alert() is None
+
+    async def test_a_second_scan_of_the_same_pair_coalesces_into_one_touched_row(self, scheduler):
+        """dedup_key=dst — the same (src, dst) beaconing pair found again on
+        a later scan touches the same row instead of flooding inserts."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        pair = {'src': _IP, 'dst': '203.0.113.10', 'count': 20, 'interval_mean_s': 60.0, 'interval_std_s': 0.5}
+        sched._zeek_beacon_detector = _FakeBeaconDetector([pair])
+
+        await sched._zeek_beacon_scan_job()
+        await sched._zeek_beacon_scan_job()
+
+        alerts = await _all_alerts()
+        assert len(alerts) == 1
+        assert alerts[0].occurrence_count == 2
 
 
 class TestZeekFileScanJob:

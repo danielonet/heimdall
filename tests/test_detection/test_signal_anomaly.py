@@ -1,14 +1,38 @@
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytest_asyncio
+from flask import Flask
+from sqlalchemy import delete
 
 from sentinel.adapter.models import DeviceSnapshot
+from sentinel.db.models import Alert
+from sentinel.db.repositories import AlertRepository
+from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.detectors.signal_anomaly import SignalAnomalyDetector
 
 pytestmark = pytest.mark.asyncio
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
+_OTHER_MACS = ('aa:aa:aa:aa:aa:aa', 'bb:bb:bb:bb:bb:bb')
 _LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)  # well past any learning period
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _init_db():
+    """A confirmed sustained shift sets _alert_open, so any subsequent poll
+    within RSSI_DELTA_THRESHOLD_DBM of the new baseline now calls
+    AlertRepository().resolve() — real DB I/O — for most tests below."""
+    app = Flask(__name__)
+    app.config['DATABASE_URL'] = os.environ.get(
+        'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
+    )
+    init_db(app)
+    yield
+    async with get_session() as session:
+        await session.execute(delete(Alert).where(Alert.device_mac.in_((_MAC, *_OTHER_MACS))))
+    await get_engine().dispose()
 
 
 class _FakeDeviceRepository:
@@ -105,13 +129,12 @@ class TestInspectDevice:
         second_alert = await detector.inspect_device(_device(rssi=-80))
         assert second_alert is None
 
-    async def test_oscillating_signal_does_not_re_alert_within_the_cooldown(self):
+    async def test_fires_again_on_a_second_genuine_shift_no_cooldown(self):
         """Regression: confirmed in production — a device with a genuinely
         noisy/marginal signal produced 21 alerts in about an hour, oscillating
-        back and forth past the threshold each time. Unlike staying flat at
-        the new baseline (test_does_not_re_alert_every_poll_after_confirming),
-        this is a *second, genuine* sustained shift — it must still be
-        suppressed while in cooldown from the first."""
+        back and forth past the threshold each time. Dedup for that flood is
+        now AlertRepository.upsert()'s job (at the poll_cycle level), not a
+        cooldown here — a second, genuine sustained shift must fire again."""
         detector = _detector()
         await detector.inspect_device(_device(rssi=-45))
         await detector.inspect_device(_device(rssi=-80))
@@ -122,7 +145,39 @@ class TestInspectDevice:
         # repeat of the same value.
         await detector.inspect_device(_device(rssi=-50))
         second_alert = await detector.inspect_device(_device(rssi=-50))
-        assert second_alert is None  # still cooling down
+        assert second_alert is not None
+
+    async def test_settling_resolves_the_open_alert_row(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='SIGNAL_ANOMALY', severity='WARNING', description='seed',
+        )
+
+        detector = _detector()
+        await detector.inspect_device(_device(rssi=-45))
+        await detector.inspect_device(_device(rssi=-80))
+        await detector.inspect_device(_device(rssi=-80))  # confirmed, fires
+        assert detector._alert_open[_MAC] is True
+
+        await detector.inspect_device(_device(rssi=-80))  # settles at the new baseline
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_resolve_is_not_called_when_nothing_was_ever_open(self, monkeypatch):
+        called = False
+
+        async def _boom(*args, **kwargs):
+            nonlocal called
+            called = True
+            return True
+
+        monkeypatch.setattr(AlertRepository, 'resolve', _boom)
+        detector = _detector()
+        await detector.inspect_device(_device(rssi=-60))
+        await detector.inspect_device(_device(rssi=-62))  # small change, no shift ever confirmed
+        assert called is False
 
     async def test_wired_devices_are_skipped(self):
         detector = _detector()

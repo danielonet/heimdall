@@ -559,15 +559,27 @@ class SagemcomXmoAdapter(RouterAdapter):
         mac = _norm_mac(host.get('PhysAddress', ''))
         client = (associated or {}).get(mac, {})
 
-        iface_type = host.get('InterfaceType', '')
-        # Device/Hosts' InterfaceType is unreliable on this firmware — several
-        # of its other fields are known-stale/blank for WiFi clients too (see
-        # _get_hosts()'s docstring). AssociatedDevices is queried straight off
-        # the AP objects and is WiFi-only data, so a MAC's presence there is
-        # definitive proof it's on WiFi even when Hosts disagrees (confirmed
-        # in production: a phone showing InterfaceType='Ethernet' while
-        # DetectedDeviceType correctly says 'Smartphone').
-        interface_name = 'WiFi' if (iface_type == 'WiFi' or client) else 'Ethernet'
+        # Layer1Interface is the authoritative wired signal: confirmed live
+        # to carry a real PHY interface path (e.g.
+        # 'Device/Ethernet/Interfaces/Interface[PHY5]') only for genuinely
+        # wired hosts, and to be blank for every WiFi host (see
+        # _parse_port_alias's docstring). Computed once here and reused
+        # below instead of re-parsed for port_alias.
+        #
+        # This must be the *positive* signal 'Ethernet' is decided from —
+        # not a fallback for "didn't prove WiFi". The previous logic
+        # (`'WiFi' if iface_type == 'WiFi' or client else 'Ethernet'`)
+        # defaulted anything ambiguous to Ethernet: Device/Hosts'
+        # InterfaceType is unreliable on this firmware (several of its
+        # other fields are known-stale/blank for WiFi clients too — see
+        # _get_hosts()'s docstring), and a WiFi phone briefly missing from
+        # this poll's AssociatedDevices response (a roam, a per-AP-entry
+        # lag — see _get_associated_devices' own "prefer whichever the
+        # router reports Active" comment) would silently flip a real WiFi
+        # device to Ethernet — confirmed in production: several WiFi-only
+        # phones showing an ETH badge with no physical cable involved.
+        port_alias = _parse_port_alias(host.get('Layer1Interface', ''))
+        interface_name = 'Ethernet' if port_alias else 'WiFi'
         # Same reasoning as interface_name above, applied to liveness: Hosts'
         # own Active field appears to lag well behind the device actually
         # going away (confirmed in production — a powered-off device stayed
@@ -597,7 +609,7 @@ class SagemcomXmoAdapter(RouterAdapter):
             signal_strength_dbm=signal_strength_dbm,
             signal_rate_mbps=signal_rate_mbps,
             is_online=bool(is_active),
-            port_alias=_parse_port_alias(host.get('Layer1Interface', '')) if interface_name == 'Ethernet' else '',
+            port_alias=port_alias,
             # The router's own DHCP-fingerprint classification (matched against
             # Device/DeviceDiscovery/DeviceIdentification/DHCPFingerprintDatabase)
             # — confirmed live values include 'Smartphone', 'Multimedia device';

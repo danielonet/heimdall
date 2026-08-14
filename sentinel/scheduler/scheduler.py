@@ -28,7 +28,7 @@ from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
-from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
+from sentinel.db.repositories import AlertRepository, SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.deployment_tiers import active_service_keys, services_for_tier
 from sentinel.detection.correlation import CrossAlertCorrelator
@@ -98,6 +98,7 @@ class SentinelScheduler:
         suricata_poll_interval_s: int,
         block_expiry_check_interval_s: int,
         correlation_scan_interval_s: int,
+        alert_auto_resolve_check_interval_s: int,
         security_digest_cron: str,
         deployment_tier: str = 'full',
     ) -> None:
@@ -129,6 +130,7 @@ class SentinelScheduler:
         self._suricata_poll_interval_s = suricata_poll_interval_s
         self._block_expiry_check_interval_s = block_expiry_check_interval_s
         self._correlation_scan_interval_s = correlation_scan_interval_s
+        self._alert_auto_resolve_check_interval_s = alert_auto_resolve_check_interval_s
         self._security_digest_cron = security_digest_cron
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -344,6 +346,12 @@ class SentinelScheduler:
             id='correlation_scan',
         )
         self._scheduler.add_job(
+            self._alert_auto_resolve_job,
+            'interval',
+            seconds=self._alert_auto_resolve_check_interval_s,
+            id='alert_auto_resolve',
+        )
+        self._scheduler.add_job(
             self._security_digest_job,
             CronTrigger.from_crontab(self._security_digest_cron),
             id='security_digest',
@@ -469,6 +477,7 @@ class SentinelScheduler:
                         f'{ip} newly exposes {service} on port {port} '
                         f'(closed on the previous scan)',
                         raw_data={'ip': ip, 'port': port, 'service': service},
+                        dedup_key=f'port:{port}',
                     )
 
                 if scan.os != 'Unknown' and previous_passive_os:
@@ -634,6 +643,25 @@ class SentinelScheduler:
         except Exception:
             logger.exception('Cross-alert correlation scan failed')
 
+    async def _alert_auto_resolve_job(self) -> None:
+        """Closes every open alert whose last_seen predates
+        AppSettings.alert_auto_resolve_hours (default 72h) — the fallback
+        for sources with no natural "this stopped" signal of their own
+        (ArpWatcher/DhcpWatcher/PassiveFingerprinter/OpenCanary/Zeek/
+        Suricata/nmap's CRITICAL finding types — everything that routes
+        through _raise_threat_alert/_persist_ip_conflict_alert without ever
+        calling resolve()). Read fresh from SettingsRepository every run so
+        an admin's change in the Settings tab takes effect on the very next
+        sweep. See AlertRepository.resolve_stale_open.
+        """
+        try:
+            hours = await SettingsRepository().get_alert_auto_resolve_hours()
+            closed = await AlertRepository().resolve_stale_open(timedelta(hours=hours))
+            if closed:
+                logger.info('Alert auto-resolve: closed %d alert(s) past %dh with no recurrence', closed, hours)
+        except Exception:
+            logger.exception('Alert auto-resolve sweep failed')
+
     async def _security_digest_job(self) -> None:
         """Periodic 'here's what happened' summary. Unlike live per-alert
         notifications (which only fire for alerts matched by an admin-
@@ -751,6 +779,7 @@ class SentinelScheduler:
                 mac, 'DNS_MALICIOUS_QUERY', 'CRITICAL',
                 f'{source_ip} queried {query}, which is on the URLhaus malicious-domain feed',
                 raw_data={'source_ip': source_ip, 'query': query},
+                dedup_key=query,
             )
 
     async def _zeek_beacon_scan_job(self) -> None:
@@ -772,6 +801,7 @@ class SentinelScheduler:
                 f"at suspiciously regular ~{pair['interval_mean_s']}s intervals "
                 f"(stddev {pair['interval_std_s']}s) — possible C2 beaconing",
                 raw_data=pair,
+                dedup_key=pair['dst'],
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
 
@@ -887,13 +917,20 @@ class SentinelScheduler:
             f'(currently trusted). Likely two devices configured with the same static IP, not '
             f'an attack; give one of them a different address to resolve.'
         )
-        async with get_session() as session:
-            alert = Alert(
-                device_mac=new_mac, alert_type='IP_CONFLICT', severity='INFO',
-                description=description, raw_data=event,
-            )
-            session.add(alert)
-        emit_alert(alert_to_dict(alert))
+        # dedup_key=ip — two different IPs conflicting for the same trusted
+        # device are distinct incidents (see test_conflict_quiet_window_is_
+        # keyed_by_ip_not_by_device) and must not coalesce into one row just
+        # because they share device_mac/alert_type. No resolve() call —
+        # like every other event-triggered source with no natural "this
+        # stopped" signal, only the alert_auto_resolve sweep job closes
+        # this. The _ip_conflict_quiet_until gate above already limits how
+        # often this even reaches upsert().
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=new_mac, alert_type='IP_CONFLICT', severity='INFO',
+            description=description, raw_data=event, dedup_key=ip,
+        )
+        if is_new:
+            emit_alert(alert_to_dict(alert))
 
     def _on_dhcp_alert(self, event: dict) -> None:
         """Sync callback invoked from DhcpWatcher's own daemon thread."""
@@ -942,18 +979,29 @@ class SentinelScheduler:
 
     async def _raise_threat_alert(
         self, mac: str | None, alert_type: str, severity: str, description: str,
-        raw_data: dict | None = None,
+        raw_data: dict | None = None, dedup_key: str | None = None,
     ) -> None:
-        """Create+broadcast an Alert for a detected attack. If auto_block_on_threat
-        is armed, blocks the device via the router adapter first so the alert
-        description can note it — the single choke point every attack-signal
-        source (ArpWatcher, DhcpWatcher, PassiveFingerprinter, NetworkScanner,
-        Zeek DNS/beaconing/file-extraction, Suricata, OpenCanary) routes
-        through, so all of them respond the same way. Deliberately NOT used
-        by the ML/statistical detector pipeline (sentinel/detection/pipeline.py)
-        or its own alerts (anomalous-volume, signal-anomaly, vendor-mismatch,
-        etc.) — those are heuristic/probabilistic signals worth a human's
-        judgment, not a confirmed attack, so they must never auto-block.
+        """Create/touch+broadcast an Alert for a detected attack. If
+        auto_block_on_threat is armed, blocks the device via the router
+        adapter first so the alert description can note it — the single
+        choke point every attack-signal source (ArpWatcher, DhcpWatcher,
+        PassiveFingerprinter, NetworkScanner, Zeek DNS/beaconing/file-
+        extraction, Suricata, OpenCanary) routes through, so all of them
+        respond the same way. Deliberately NOT used by the ML/statistical
+        detector pipeline (sentinel/detection/pipeline.py) or its own alerts
+        (anomalous-volume, signal-anomaly, vendor-mismatch, etc.) — those
+        are heuristic/probabilistic signals worth a human's judgment, not a
+        confirmed attack, so they must never auto-block.
+
+        Routes persistence through AlertRepository.upsert() — these sources
+        have no natural "this stopped" signal of their own (a packet or log
+        line, not a poll-driven condition), so nothing here ever resolve()s;
+        only the alert_auto_resolve sweep job closes them. dedup_key
+        disambiguates cases where (mac, alert_type) alone would wrongly
+        merge distinct incidents (e.g. two different high-risk ports opening
+        on the same device). Only a genuinely new alert (the "fire"
+        transition) is pushed live — a touch on an already-open alert is
+        already covered by the frontend's existing 15s poll.
 
         Always re-issues the block, even if device.is_blocked is already True
         — that DB flag is only ever a cache of the last known outcome, and
@@ -962,7 +1010,7 @@ class SentinelScheduler:
         actually still on the network, and this method silently did nothing
         because it *believed* the cache). adapter.block_device() is idempotent
         (it just re-asserts the same blacklist state), so there's no cost to
-        always calling it.
+        always calling it — on both a fire and a touch.
 
         The description only ever claims "auto-blocked" if adapter.block_device()
         itself confirmed success — a False return (or a raised exception) is
@@ -999,8 +1047,8 @@ class SentinelScheduler:
         elif block_failed:
             description = f'{description} — AUTO-BLOCK FAILED, device is still on the network (see backend logs)'
 
-        async with get_session() as session:
-            if blocked_now:
+        if blocked_now:
+            async with get_session() as session:
                 device = await session.get(Device, mac)
                 if device is not None:
                     device.is_blocked = True
@@ -1008,13 +1056,15 @@ class SentinelScheduler:
                     now = datetime.now(timezone.utc)
                     device.blocked_at = now
                     device.blocked_until = now + timedelta(hours=expiry_hours) if expiry_hours > 0 else None
-            alert = Alert(
-                device_mac=mac, alert_type=alert_type, severity=severity,
-                description=description, raw_data=raw_data or {},
-                mitigation=build_mitigation(alert_type, raw_data),
-            )
-            session.add(alert)
-        emit_alert(alert_to_dict(alert))
+
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=mac, alert_type=alert_type, severity=severity,
+            description=description, raw_data=raw_data or {},
+            mitigation=build_mitigation(alert_type, raw_data),
+            dedup_key=dedup_key,
+        )
+        if is_new:
+            emit_alert(alert_to_dict(alert))
 
     async def _retrain_job(self) -> None:
         try:
@@ -1389,6 +1439,7 @@ def init_scheduler(app: Flask) -> None:
         suricata_poll_interval_s=app.config['SURICATA_POLL_INTERVAL_SECONDS'],
         block_expiry_check_interval_s=app.config['BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS'],
         correlation_scan_interval_s=app.config['CORRELATION_SCAN_INTERVAL_SECONDS'],
+        alert_auto_resolve_check_interval_s=app.config['ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
         deployment_tier=app.config['DEPLOYMENT_TIER'],
     )

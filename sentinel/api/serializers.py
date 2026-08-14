@@ -62,6 +62,11 @@ def alert_to_dict(alert: Alert) -> dict[str, Any]:
         'acknowledged': alert.acknowledged,
         'resolved': alert.resolved,
         'created_at': alert.created_at.isoformat() if alert.created_at else None,
+        # Lifecycle fields — see sentinel/db/repositories.py:AlertRepository.
+        'last_seen': alert.last_seen.isoformat() if alert.last_seen else None,
+        'occurrence_count': alert.occurrence_count,
+        'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
+        'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
     }
 
 

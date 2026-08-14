@@ -141,6 +141,28 @@ class TestFindNewIncidents:
         assert matches[0]['trigger_alert_id'] == trigger_id
         assert matches[0]['follow_alert_id'] == follow_id
 
+    async def test_a_recurring_trigger_is_found_via_last_seen_not_created_at(self, correlator):
+        """AlertRepository.upsert() touches (rather than re-inserts) a
+        still-recurring trigger alert, so created_at is set once at first
+        occurrence and never advances. A trigger first created outside
+        _LOOKBACK_HOURS (48h) but still actively recurring (last_seen
+        recent) must still be found — filtering on created_at here would
+        silently drop it from the correlator's lookback window."""
+        now = datetime.now(timezone.utc)
+        trigger_id = await _add_alert(
+            _MAC, 'CREDENTIAL_EXPOSURE_DETECTED', now - timedelta(hours=50),
+            last_seen=now - timedelta(minutes=10),
+        )
+        follow_id = await _add_alert(_MAC, 'C2_BEACONING', now - timedelta(hours=30))
+
+        async with get_session() as session:
+            incidents = await correlator.find_new_incidents(session)
+
+        matches = [i for i in incidents if i['mac'] == _MAC]
+        assert len(matches) == 1
+        assert matches[0]['trigger_alert_id'] == trigger_id
+        assert matches[0]['follow_alert_id'] == follow_id
+
     async def test_unrelated_alert_types_produce_nothing(self, correlator):
         now = datetime.now(timezone.utc)
         await _add_alert(_MAC, 'HIGH_UPLOAD', now - timedelta(minutes=30))

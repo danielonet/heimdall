@@ -35,7 +35,8 @@ from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
-from sentinel.db.models import Alert, Device, Rule
+from sentinel.db.models import Device, Rule
+from sentinel.db.repositories import AlertRepository
 from sentinel.db.session import get_session
 from sentinel.notifications.service import NotificationService
 
@@ -85,6 +86,10 @@ class RuleEngine:
         self._rules: list[Rule] = []
         self._streaks: dict[tuple[int, str], int] = {}           # (rule_id, mac) -> consecutive matches
         self._rate_limited_until: dict[tuple[int, str], datetime] = {}
+        # (rule_id, mac) -> whether this pair currently has an open
+        # RULE_TRIGGERED alert — guards resolve() so a pair that's never
+        # fired doesn't cost a DB round trip on every non-matching poll.
+        self._alert_open: dict[tuple[int, str], bool] = {}
 
     @property
     def streak_count(self) -> int:
@@ -133,6 +138,11 @@ class RuleEngine:
         matched, actual = evaluate_condition(rule.condition_json, obj)
         if not matched:
             self._streaks[key] = 0
+            if self._alert_open.get(key):
+                await AlertRepository().resolve(
+                    device_mac=mac, alert_type='RULE_TRIGGERED', dedup_key=f'rule:{rule.id}',
+                )
+                self._alert_open[key] = False
             return
 
         window_polls = rule.condition_json.get('window_polls', 1)
@@ -180,16 +190,21 @@ class RuleEngine:
         await self._mark_triggered(rule.id)
 
     async def _create_alert(self, rule: Rule, mac: str, severity: str, description: str) -> None:
-        async with get_session() as session:
-            alert = Alert(
-                device_mac=mac,
-                alert_type='RULE_TRIGGERED',
-                severity=severity,
-                description=description,
-                raw_data={'rule_id': rule.id, 'rule_name': rule.name},
-            )
-            session.add(alert)
-        emit_alert(alert_to_dict(alert))
+        # dedup_key disambiguates rules — without it, two different rules
+        # firing on the same device would wrongly coalesce under the shared
+        # alert_type='RULE_TRIGGERED'. Marks (rule.id, mac) as having an
+        # open alert so _evaluate's non-match branch knows to resolve() it.
+        self._alert_open[(rule.id, mac)] = True
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=mac,
+            alert_type='RULE_TRIGGERED',
+            severity=severity,
+            description=description,
+            raw_data={'rule_id': rule.id, 'rule_name': rule.name},
+            dedup_key=f'rule:{rule.id}',
+        )
+        if is_new:
+            emit_alert(alert_to_dict(alert))
 
     async def _block_device(self, mac: str) -> None:
         try:

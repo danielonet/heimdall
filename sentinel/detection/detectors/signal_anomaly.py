@@ -16,15 +16,17 @@ confirmed shifts during learning (so it reflects settled behaviour by the
 time alerts unlock), only the alert itself is withheld — see
 AnomalousVolumeDetector / Settings.ML_LEARNING_PERIOD_HOURS.
 
-Also cooled down for COOLDOWN_MINUTES after firing — confirmed in production:
-a device with a genuinely noisy/marginal signal (weak-signal spot, power-save
-wake cycles) can clear RSSI_DELTA_THRESHOLD_DBM for SUSTAINED_POLLS in a row
-repeatedly as it keeps oscillating, and since the baseline snaps to whatever
-value it just fired on, the very next real oscillation could immediately
-satisfy the condition again — one device produced 21 alerts in about an hour
-bouncing between roughly -55 and -92 dBm. Same fix pattern as
-AnomalousVolumeDetector / RuleEngine's RATE_LIMIT: the baseline still keeps
-tracking through the cooldown, only the alert is withheld.
+Deduped via AlertRepository.upsert() (see poll_cycle) rather than a
+cooldown timer — confirmed in production: a device with a genuinely
+noisy/marginal signal (weak-signal spot, power-save wake cycles) can clear
+RSSI_DELTA_THRESHOLD_DBM for SUSTAINED_POLLS in a row repeatedly as it
+keeps oscillating, and since the baseline snaps to whatever value it just
+fired on, the very next real oscillation could immediately satisfy the
+condition again — one device produced 21 alerts in about an hour bouncing
+between roughly -55 and -92 dBm. The baseline still keeps tracking through
+every shift; this detector only decides when to fire and when to resolve()
+its own open alert (once the RSSI settles back within
+RSSI_DELTA_THRESHOLD_DBM of the current baseline) — see AnomalousVolumeDetector.
 """
 from __future__ import annotations
 
@@ -33,12 +35,11 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample
 from sentinel.db.models import Alert
-from sentinel.db.repositories import DeviceRepository, SettingsRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository
 from sentinel.detection.detectors.base import BaseDetector
 
 RSSI_DELTA_THRESHOLD_DBM = 15
 SUSTAINED_POLLS = 2
-COOLDOWN_MINUTES = 30
 
 
 class SignalAnomalyDetector(BaseDetector):
@@ -46,13 +47,14 @@ class SignalAnomalyDetector(BaseDetector):
     and holds there for SUSTAINED_POLLS consecutive polls."""
 
     severity = 'WARNING'
+    _ALERT_TYPE = 'SIGNAL_ANOMALY'
 
     def __init__(self, device_repo: DeviceRepository, settings_repo: SettingsRepository) -> None:
         self._device_repo = device_repo
         self._settings_repo = settings_repo
         self._baseline_rssi: dict[str, int] = {}
         self._consecutive_shifted: dict[str, int] = {}
-        self._quiet_until: dict[str, datetime] = {}
+        self._alert_open: dict[str, bool] = {}
 
     async def inspect_device(self, snapshot: DeviceSnapshot) -> Optional[Alert]:
         if snapshot.interface_name != 'WiFi':
@@ -72,6 +74,9 @@ class SignalAnomalyDetector(BaseDetector):
             # baseline track it, and clear any pending (unconfirmed) shift.
             self._baseline_rssi[mac] = current
             self._consecutive_shifted[mac] = 0
+            if self._alert_open.get(mac):
+                await AlertRepository().resolve(device_mac=mac, alert_type=self._ALERT_TYPE)
+                self._alert_open[mac] = False
             return None
 
         count = self._consecutive_shifted.get(mac, 0) + 1
@@ -85,16 +90,12 @@ class SignalAnomalyDetector(BaseDetector):
         old_baseline = baseline
         self._baseline_rssi[mac] = current
 
-        now = datetime.now(timezone.utc)
-        if self._quiet_until.get(mac, now) > now:
-            return None  # still quiet from a previous fire — baseline updated, alert withheld
-
         first_seen = await self._device_repo.get_first_seen(mac)
         learning_period_hours = await self._settings_repo.get_ml_learning_period_hours()
         if first_seen is None or datetime.now(timezone.utc) - first_seen < timedelta(hours=learning_period_hours):
             return None  # still learning — baseline updated, but alert withheld
 
-        self._quiet_until[mac] = now + timedelta(minutes=COOLDOWN_MINUTES)
+        self._alert_open[mac] = True
 
         return Alert(
             device_mac=mac,

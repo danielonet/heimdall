@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
-from sentinel.db.models import AppSettings, Device, DeviceTypeProfile, TrustedMac
+from sentinel.db.models import Alert, AppSettings, Device, DeviceTypeProfile, TrustedMac
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
 
@@ -173,6 +173,98 @@ class TrustedMacRepository:
             return result.first() is None
 
 
+class AlertRepository:
+    """Read/write access to the alerts table's fire/active/resolve
+    lifecycle — see the alert lifecycle redesign plan. Every alert-creation
+    call site (the detection pipeline, RuleEngine, SentinelScheduler's
+    confirmed-attack sources) routes through upsert()/resolve() instead of
+    inserting a fresh row on every poll a condition stays true: a still-true
+    condition touches the one open row (bumping last_seen/occurrence_count,
+    overwriting description/raw_data/severity with the latest values) rather
+    than flooding inserts.
+    """
+
+    async def upsert(
+        self, *, device_mac: str | None, alert_type: str, severity: str, description: str | None,
+        raw_data: dict | None = None, mitigation: str | None = None, dedup_key: str | None = None,
+    ) -> tuple[Alert, bool]:
+        """Finds the OPEN (resolved=False) row matching device_mac +
+        alert_type + dedup_key. Found -> UPDATE in place (touch) and return
+        (alert, False). Not found -> INSERT (the "fire" transition) and
+        return (alert, True).
+
+        device_mac and dedup_key are both nullable and matched NULL-safely
+        via isnot_distinct_from() — plain `==` never matches SQL NULL, which
+        would silently defeat the upsert for e.g. WanBandwidthDetector's
+        always-null device_mac.
+        """
+        async with get_session() as session:
+            stmt = select(Alert).where(
+                Alert.device_mac.isnot_distinct_from(device_mac),
+                Alert.alert_type == alert_type,
+                Alert.dedup_key.isnot_distinct_from(dedup_key),
+                Alert.resolved.is_(False),
+            )
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                row = Alert(
+                    device_mac=device_mac, alert_type=alert_type, severity=severity,
+                    description=description, raw_data=raw_data, mitigation=mitigation,
+                    dedup_key=dedup_key,
+                )
+                session.add(row)
+                await session.flush()
+                await session.refresh(row)
+                return row, True
+
+            row.severity = severity
+            row.description = description
+            row.raw_data = raw_data
+            row.mitigation = mitigation
+            row.last_seen = datetime.now(timezone.utc)
+            row.occurrence_count += 1
+            await session.flush()
+            await session.refresh(row)
+            return row, False
+
+    async def resolve(
+        self, *, device_mac: str | None, alert_type: str, dedup_key: str | None = None,
+    ) -> bool:
+        """UPDATE resolved=true, resolved_at=now() on the still-open row
+        matching device_mac + alert_type + dedup_key. Returns whether a row
+        was actually closed (False if nothing was open)."""
+        async with get_session() as session:
+            stmt = select(Alert).where(
+                Alert.device_mac.isnot_distinct_from(device_mac),
+                Alert.alert_type == alert_type,
+                Alert.dedup_key.isnot_distinct_from(dedup_key),
+                Alert.resolved.is_(False),
+            )
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                return False
+            row.resolved = True
+            row.resolved_at = datetime.now(timezone.utc)
+            return True
+
+    async def resolve_stale_open(self, older_than: timedelta) -> int:
+        """Bulk sweep for sources with no natural "this stopped" signal of
+        their own (ArpWatcher/DhcpWatcher/OpenCanary/Zeek/Suricata/nmap
+        findings) — closes every open row whose last_seen predates the
+        cutoff. Returns the count closed. Used by
+        SentinelScheduler._alert_auto_resolve_job.
+        """
+        cutoff = datetime.now(timezone.utc) - older_than
+        async with get_session() as session:
+            stmt = select(Alert).where(Alert.resolved.is_(False), Alert.last_seen < cutoff)
+            rows = (await session.execute(stmt)).scalars().all()
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                row.resolved = True
+                row.resolved_at = now
+            return len(rows)
+
+
 class SettingsRepository:
     """Read/write access to the singleton app_settings row — the runtime-
     overridable layer on top of the static, env-backed Settings object (see
@@ -211,6 +303,7 @@ class SettingsRepository:
                 'auto_block_expiry_hours': row.auto_block_expiry_hours if row else 24,
                 'last_digest_sent_at': row.last_digest_sent_at if row else None,
                 'alert_stale_hours': row.alert_stale_hours if row else 24,
+                'alert_auto_resolve_hours': row.alert_auto_resolve_hours if row else 72,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -311,6 +404,14 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.alert_stale_hours = hours
+
+    async def get_alert_auto_resolve_hours(self) -> int:
+        return (await self.get_all())['alert_auto_resolve_hours']
+
+    async def set_alert_auto_resolve_hours(self, hours: int) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.alert_auto_resolve_hours = hours
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

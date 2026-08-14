@@ -11,19 +11,15 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
 from sentinel.db.models import Alert
-from sentinel.db.repositories import DeviceRepository, SettingsRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository
 from sentinel.detection.detectors.base import BaseDetector
 from sentinel.detection.device_profiles import get_profile
 from sentinel.ml.anomaly_engine import AnomalyEngine
 
 
-COOLDOWN_MINUTES = 30  # quiet period per device after a fire, even if the condition persists
-
-
 class AnomalousVolumeDetector(BaseDetector):
     """Fires when both IsolationForest and LOF agree a PER_DEVICE sample is an
-    outlier, sustained across several consecutive samples, then goes quiet
-    for COOLDOWN_MINUTES.
+    outlier, sustained across several consecutive samples.
 
     The number of consecutive samples required is looked up per
     snapshot.device_type via device_profiles.get_profile()
@@ -31,15 +27,16 @@ class AnomalousVolumeDetector(BaseDetector):
     variable than a printer's, so it takes a longer streak before a NAS's
     anomaly is trusted enough to alert on.
 
-    Both this streak requirement and the cooldown exist for the same
-    reason: even a correctly-calibrated model with contamination=0.05 is
-    *designed* to flag ~5% of samples — at a 15s poll interval that's still
-    roughly one alert every 5 minutes per device from statistical noise
-    alone if a single sample were enough, and once a device is flagged
-    nothing stopped it from re-firing every poll for as long as the
-    underlying condition lasted. Both match patterns already used
-    elsewhere: the streak mirrors HighUploadDetector's; the cooldown
-    mirrors RuleEngine's RATE_LIMIT action.
+    This streak requirement exists because even a correctly-calibrated
+    model with contamination=0.05 is *designed* to flag ~5% of samples — at
+    a 15s poll interval that's still roughly one alert every 5 minutes per
+    device from statistical noise alone if a single sample were enough.
+    Once a device is flagged, the returned Alert is deduped by
+    AlertRepository.upsert() (see poll_cycle) instead of flooding a fresh
+    row every poll the condition stays true — this detector only needs to
+    know when to fire and when to resolve() its own open alert (guarded by
+    _alert_open so a device that's never fired doesn't cost a DB round trip
+    on every non-matching poll), not to rate-limit itself.
 
     Suppressed for SettingsRepository's ml_learning_period_hours after a
     device's first_seen — a model trained on as few as ML_MIN_SAMPLES_TO_TRAIN
@@ -56,6 +53,7 @@ class AnomalousVolumeDetector(BaseDetector):
     """
 
     severity = 'WARNING'
+    _ALERT_TYPE = 'ANOMALOUS_VOLUME'
 
     def __init__(
         self,
@@ -67,7 +65,7 @@ class AnomalousVolumeDetector(BaseDetector):
         self._device_repo = device_repo
         self._settings_repo = settings_repo
         self._consecutive_anomalous: dict[str, int] = {}
-        self._quiet_until: dict[str, datetime] = {}
+        self._alert_open: dict[str, bool] = {}
 
     async def inspect_device(self, snapshot: DeviceSnapshot) -> Optional[Alert]:
         return None
@@ -84,6 +82,9 @@ class AnomalousVolumeDetector(BaseDetector):
 
         if not self._engine.is_anomalous(sample):
             self._consecutive_anomalous[mac] = 0
+            if self._alert_open.get(mac):
+                await AlertRepository().resolve(device_mac=mac, alert_type=self._ALERT_TYPE)
+                self._alert_open[mac] = False
             return None
 
         streak = self._consecutive_anomalous.get(mac, 0) + 1
@@ -92,11 +93,7 @@ class AnomalousVolumeDetector(BaseDetector):
         if streak < sustained_polls:
             return None  # matched, but not sustained long enough yet
         self._consecutive_anomalous[mac] = 0  # reset so the next fire needs its own fresh streak
-
-        now = datetime.now(timezone.utc)
-        if self._quiet_until.get(mac, now) > now:
-            return None  # still quiet from a previous fire
-        self._quiet_until[mac] = now + timedelta(minutes=COOLDOWN_MINUTES)
+        self._alert_open[mac] = True
 
         return Alert(
             device_mac=mac,

@@ -84,7 +84,14 @@ class CrossAlertCorrelator:
                 .where(
                     Alert.alert_type.in_(pattern['trigger_types']),
                     Alert.device_mac.isnot(None),
-                    Alert.created_at >= lookback_cutoff,
+                    # last_seen, not created_at — AlertRepository.upsert()
+                    # touches (rather than re-inserts) a still-recurring
+                    # trigger alert, so created_at is set once at first
+                    # occurrence and never advances. Filtering on created_at
+                    # here would let a still-active trigger silently fall
+                    # out of the lookback window the moment it's more than
+                    # _LOOKBACK_HOURS old, even though it's still recurring.
+                    Alert.last_seen >= lookback_cutoff,
                 )
                 .order_by(Alert.created_at)
             )).scalars().all()

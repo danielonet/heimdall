@@ -52,7 +52,12 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
           <div key={a.id} className="flex gap-2 border-b border-border/50 py-2.5 last:border-none">
             <SeverityBar severity={a.severity} />
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
+              <div className="text-[11px] text-text-primary">
+                {a.alert_type.replaceAll('_', ' ')}
+                {a.occurrence_count > 1 && (
+                  <span className="ml-2 text-[9px] text-text-muted">×{a.occurrence_count}</span>
+                )}
+              </div>
               <div className="text-[9px] text-text-secondary">{a.description}</div>
               <MitigationNote text={a.mitigation} />
               <div className="mt-1 flex items-center gap-2 text-[9px] text-text-muted">
@@ -69,7 +74,7 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
                 <Badge variant="success">DONE</Badge>
               ) : a.acknowledged ? (
                 <Badge variant="info">ACKED</Badge>
-              ) : isStale(a.created_at, staleHours) ? (
+              ) : isStale(a.last_seen ?? a.created_at, staleHours) ? (
                 <Badge variant="muted">STALE</Badge>
               ) : (
                 <Badge variant="danger">OPEN</Badge>
