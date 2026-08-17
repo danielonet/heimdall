@@ -5,6 +5,7 @@ from sentinel.db.models import Alert, Device, TrafficSample, TrustedMac
 from sentinel.db.session import get_session
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
+_MAC_2 = '11:22:33:44:55:66'
 
 
 def _seed_device(**overrides) -> None:
@@ -12,6 +13,19 @@ def _seed_device(**overrides) -> None:
         async with get_session() as session:
             session.add(Device(mac_address=_MAC, hostname='test-device', vendor_name='Acme', **overrides))
     asyncio.run(_seed())
+
+
+async def _seed_device_with_hostname(mac: str, hostname: str, **overrides) -> None:
+    async with get_session() as session:
+        session.add(Device(mac_address=mac, hostname=hostname, **overrides))
+
+
+async def _seed_linked_device(mac: str, *, linked_to_mac: str, hostname: str = 'old-device') -> None:
+    async with get_session() as session:
+        session.add(Device(
+            mac_address=mac, hostname=hostname,
+            linked_to_mac=linked_to_mac, linked_at=datetime.now(timezone.utc), link_reason='test',
+        ))
 
 
 def _seed_traffic_sample() -> None:
@@ -128,6 +142,18 @@ class TestListDevices:
         resp = client.get('/api/devices')
         assert resp.get_json()['devices'][0]['unacknowledged_alert_count'] == 1
 
+    def test_linked_away_devices_are_excluded(self, client):
+        """A device linked as a stale duplicate (see DeviceRepository.link())
+        must not appear in the general device list/counts — this single
+        query is the source every frontend device count/list derives from."""
+        _seed_device()
+        asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC))
+
+        resp = client.get('/api/devices')
+        macs = [d['mac_address'] for d in resp.get_json()['devices']]
+        assert _MAC in macs
+        assert _MAC_2 not in macs
+
 
 class TestGetDevice:
     def test_not_found(self, client):
@@ -144,6 +170,67 @@ class TestGetDevice:
         assert body['mac_address'] == _MAC
         assert len(body['traffic_history']) == 1
         assert len(body['alerts']) == 1
+
+    def test_a_linked_away_device_is_still_directly_reachable(self, client):
+        """Unlike the list endpoint, GET /<mac> stays unfiltered — this is
+        the only path to a linked-away device's UNLINK button."""
+        asyncio.run(_seed_device_with_hostname(_MAC, 'canonical-device'))
+        asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC))
+
+        resp = client.get(f'/api/devices/{_MAC_2}')
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['linked_to_mac'] == _MAC
+        assert body['linked_to_hostname'] == 'canonical-device'
+
+    def test_a_canonical_device_lists_devices_linked_into_it(self, client):
+        asyncio.run(_seed_device_with_hostname(_MAC, 'canonical-device'))
+        asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC, hostname='old-1'))
+
+        resp = client.get(f'/api/devices/{_MAC}')
+
+        body = resp.get_json()
+        assert body['linked_to_hostname'] is None
+        linked_macs = [d['mac_address'] for d in body['linked_into']]
+        assert linked_macs == [_MAC_2]
+
+    def test_a_device_with_no_links_has_empty_linked_fields(self, client):
+        _seed_device()
+        resp = client.get(f'/api/devices/{_MAC}')
+        body = resp.get_json()
+        assert body['linked_to_hostname'] is None
+        assert body['linked_into'] == []
+
+
+class TestUnlinkDevice:
+    def test_unlinks_a_linked_device(self, client):
+        asyncio.run(_seed_device_with_hostname(_MAC, 'canonical-device'))
+        asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC))
+
+        resp = client.post(f'/api/devices/{_MAC_2}/unlink')
+
+        assert resp.status_code == 200
+        assert resp.get_json()['linked_to_mac'] is None
+
+        list_resp = client.get('/api/devices')
+        assert _MAC_2 in [d['mac_address'] for d in list_resp.get_json()['devices']]
+
+    def test_unknown_mac_returns_404(self, client):
+        resp = client.post(f'/api/devices/{_MAC}/unlink')
+        assert resp.status_code == 404
+
+    def test_not_currently_linked_returns_404(self, client):
+        _seed_device()
+        resp = client.post(f'/api/devices/{_MAC}/unlink')
+        assert resp.status_code == 404
+
+    def test_no_auth_required(self, client):
+        """Same posture as PATCH /<mac> — only un-hides a device."""
+        asyncio.run(_seed_device_with_hostname(_MAC, 'canonical-device'))
+        asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC))
+        resp = client.post(f'/api/devices/{_MAC_2}/unlink')
+        assert resp.status_code == 200
 
 
 class TestPatchDevice:

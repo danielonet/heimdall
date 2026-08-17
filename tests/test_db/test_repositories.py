@@ -24,6 +24,7 @@ pytestmark = pytest.mark.asyncio
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
 _MAC_2 = '11:22:33:44:55:66'
+_MAC_3 = '77:88:99:aa:bb:cc'
 _TEST_DEVICE_TYPE = '__test_device_type__'
 
 
@@ -36,8 +37,8 @@ async def _init_db():
     init_db(app)
     yield
     async with get_session() as session:
-        await session.execute(delete(Device).where(Device.mac_address.in_([_MAC, _MAC_2])))
-        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_([_MAC, _MAC_2])))
+        await session.execute(delete(Device).where(Device.mac_address.in_([_MAC, _MAC_2, _MAC_3])))
+        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_([_MAC, _MAC_2, _MAC_3])))
         await session.execute(delete(AppSettings))
         await session.execute(delete(DeviceTypeProfile).where(DeviceTypeProfile.device_type == _TEST_DEVICE_TYPE))
     await get_engine().dispose()
@@ -165,6 +166,102 @@ class TestIsEmpty:
     async def test_trusted_mac_repository_false_once_any_mac_is_trusted(self):
         await TrustedMacRepository().trust(_MAC)
         assert await TrustedMacRepository().is_empty() is False
+
+
+async def _seed_device(mac: str, **overrides) -> None:
+    async with get_session() as session:
+        session.add(Device(mac_address=mac, hostname=f'device-{mac}', **overrides))
+
+
+class TestLink:
+    async def test_sets_all_three_columns(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+
+        linked = await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='test reason')
+
+        assert linked.linked_to_mac == _MAC_2
+        assert linked.linked_at is not None
+        assert linked.link_reason == 'test reason'
+
+    async def test_unknown_old_mac_returns_none(self):
+        await _seed_device(_MAC_2)
+        assert await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='x') is None
+
+    async def test_idempotent_on_repeat_confirmation(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+
+        first = await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='first')
+        second = await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='second')
+
+        assert first.linked_to_mac == second.linked_to_mac == _MAC_2
+
+    async def test_repoints_when_new_mac_is_itself_already_linked(self):
+        """A -> B already exists; linking C -> B must resolve onto B's own
+        target, not create a dangling C -> B -> (something) chain."""
+        await _seed_device(_MAC)      # A
+        await _seed_device(_MAC_2)    # B
+        await _seed_device(_MAC_3)    # C
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='A->B')
+
+        linked = await DeviceRepository().link(old_mac=_MAC_3, new_mac=_MAC, reason='C->A, but A is linked to B')
+
+        assert linked.linked_to_mac == _MAC_2
+
+    async def test_repoints_existing_chain_on_supersession(self):
+        """A already links to B; B itself gets superseded by C — A must be
+        repointed onto C too, so linked_to_mac never requires a multi-hop
+        walk for any reader."""
+        await _seed_device(_MAC)      # A
+        await _seed_device(_MAC_2)    # B
+        await _seed_device(_MAC_3)    # C
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='A->B')
+
+        await DeviceRepository().link(old_mac=_MAC_2, new_mac=_MAC_3, reason='B->C')
+
+        async with get_session() as session:
+            a = await session.get(Device, _MAC)
+        assert a.linked_to_mac == _MAC_3
+
+
+class TestUnlink:
+    async def test_clears_all_three_columns(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='x')
+
+        assert await DeviceRepository().unlink(_MAC) is True
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device.linked_to_mac is None
+        assert device.linked_at is None
+        assert device.link_reason is None
+
+    async def test_unknown_mac_returns_false(self):
+        assert await DeviceRepository().unlink(_MAC) is False
+
+    async def test_not_currently_linked_returns_false(self):
+        await _seed_device(_MAC)
+        assert await DeviceRepository().unlink(_MAC) is False
+
+
+class TestGetLinkedInto:
+    async def test_returns_rows_linked_to_this_mac(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+        await _seed_device(_MAC_3)
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_3, reason='x')
+        await DeviceRepository().link(old_mac=_MAC_2, new_mac=_MAC_3, reason='y')
+
+        linked_into = await DeviceRepository().get_linked_into(_MAC_3)
+
+        assert {d.mac_address for d in linked_into} == {_MAC, _MAC_2}
+
+    async def test_empty_when_nothing_is_linked(self):
+        await _seed_device(_MAC)
+        assert await DeviceRepository().get_linked_into(_MAC) == []
 
 
 class TestSettingsRepository:

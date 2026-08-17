@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
@@ -19,7 +19,7 @@ _SETTINGS_ROW_ID = 1
 
 
 class DeviceRepository:
-    """Read access to the devices table."""
+    """Read/write access to the devices table."""
 
     async def exists(self, mac_address: str) -> bool:
         """Return True if this MAC address is already in the device registry.
@@ -72,6 +72,83 @@ class DeviceRepository:
         async with get_session() as session:
             device = await session.get(Device, mac_address)
             return device.ap_alias if device else None
+
+    async def link(self, *, old_mac: str, new_mac: str, reason: str) -> Device | None:
+        """Marks old_mac as a stale duplicate of the CURRENT canonical
+        device — see sentinel/detection/device_identity.py:DeviceIdentityLinker
+        and sentinel/security/liveness.py:ArpLivenessProbe for how a link is
+        decided (hostname + reconnect-timing match, ARP-confirmed
+        unreachable) before this is ever called.
+
+        "Current canonical" may not literally be new_mac: if new_mac is
+        itself already linked away (shouldn't happen given the linker's own
+        filters, but defensive), this links onto whatever new_mac ultimately
+        resolves to instead — linked_to_mac must never form a multi-hop
+        chain, since every reader (list_devices, metrics.py) does a single
+        flat WHERE linked_to_mac IS NULL / = :mac check, never a walk.
+
+        Also repoints every row already linked to old_mac (a prior link,
+        e.g. A already -> old_mac) onto the same resolved target in the same
+        transaction — the other half of the no-chains invariant: old_mac
+        itself might currently be someone else's canonical target.
+
+        Idempotent: re-confirming an already-correct link is a no-op write
+        (still returns the row). Returns None if old_mac has no row at all.
+        """
+        async with get_session() as session:
+            old = await session.get(Device, old_mac)
+            if old is None:
+                return None
+
+            target = new_mac
+            new = await session.get(Device, new_mac)
+            if new is not None and new.linked_to_mac:
+                target = new.linked_to_mac
+
+            now = datetime.now(timezone.utc)
+            await session.execute(
+                update(Device)
+                .where(Device.linked_to_mac == old_mac)
+                .values(linked_to_mac=target, linked_at=now, link_reason=f'repointed after {old_mac} -> {target}')
+            )
+
+            if old.linked_to_mac != target:
+                old.linked_to_mac = target
+                old.linked_at = now
+                old.link_reason = reason
+
+            await session.flush()
+            await session.refresh(old)
+            return old
+
+    async def unlink(self, mac_address: str) -> bool:
+        """Clears linked_to_mac/linked_at/link_reason on this exact row —
+        the manual-undo path (see POST /api/devices/<mac>/unlink). Returns
+        False if the row doesn't exist or isn't currently linked.
+
+        Deliberately does not repoint any rows that were linked to
+        mac_address onto anything else — unlinking a device only restores
+        its own identity, it doesn't retroactively unlink devices that were
+        (possibly correctly) linked to it.
+        """
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            if device is None or device.linked_to_mac is None:
+                return False
+            device.linked_to_mac = None
+            device.linked_at = None
+            device.link_reason = None
+            return True
+
+    async def get_linked_into(self, mac_address: str) -> list[Device]:
+        """Every row currently linked_to_mac == mac_address, newest-linked
+        first — powers a canonical device's 'N devices linked into this
+        one' transparency list (see GET /api/devices/<mac>)."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Device).where(Device.linked_to_mac == mac_address).order_by(Device.linked_at.desc())
+            )
+            return list(result.scalars().all())
 
 
 class DeviceTypeProfileRepository:

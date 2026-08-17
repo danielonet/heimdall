@@ -35,6 +35,10 @@ async def metrics():
                 func.sum(case((Device.is_quarantined.is_(True), 1), else_=0)).label('quarantined'),
                 func.sum(case((Device.is_trusted.is_(True), 1), else_=0)).label('trusted'),
             )
+            # Excludes devices linked away as a stale duplicate of another
+            # device (see DeviceRepository.link()) — same filter
+            # list_devices() applies, so these counts match what the UI shows.
+            .where(Device.linked_to_mac.is_(None))
         )).one()
 
         now = datetime.now(timezone.utc)

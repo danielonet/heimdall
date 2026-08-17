@@ -12,6 +12,7 @@ from sentinel.db.models import Alert, Device
 from sentinel.db.session import get_session
 
 _MAC = 'aa:bb:cc:dd:ee:ff'
+_MAC_2 = '11:22:33:44:55:66'
 
 
 def _seed_device(**overrides) -> None:
@@ -53,6 +54,29 @@ class TestMetricsEndpoint:
         assert 'heimdall_devices_trusted 1' in text
         assert 'heimdall_devices_blocked 0' in text
         assert 'heimdall_devices_quarantined 0' in text
+
+    def test_linked_away_devices_are_excluded_from_every_count(self, client):
+        """See DeviceRepository.link() / sentinel/api/routes/devices.py:
+        list_devices — the same filter must apply here, or Prometheus counts
+        would double-count a stale duplicate the UI already hides."""
+        _seed_device(is_online=True, is_blocked=True, is_quarantined=True, is_trusted=True)
+
+        async def _seed_linked():
+            async with get_session() as session:
+                session.add(Device(
+                    mac_address=_MAC_2, hostname='old-device', is_online=True,
+                    is_blocked=True, is_quarantined=True, is_trusted=True,
+                    linked_to_mac=_MAC, linked_at=datetime.now(timezone.utc), link_reason='test',
+                ))
+        asyncio.run(_seed_linked())
+
+        resp = client.get('/api/metrics')
+        text = resp.get_data(as_text=True)
+        assert 'heimdall_devices_total 1' in text
+        assert 'heimdall_devices_online 1' in text
+        assert 'heimdall_devices_blocked 1' in text
+        assert 'heimdall_devices_quarantined 1' in text
+        assert 'heimdall_devices_trusted 1' in text
 
     def test_blocked_and_quarantined_counts(self, client):
         _seed_device(is_blocked=True, is_quarantined=True)

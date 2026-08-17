@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from sentinel.api.serializers import alert_to_dict, device_to_dict, traffic_sample_to_dict
 from sentinel.db.models import Alert, Device, TrafficSample
-from sentinel.db.repositories import TrustedMacRepository
+from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.scheduler.scheduler import get_scheduler
 
@@ -18,10 +18,21 @@ bp = Blueprint('devices', __name__)
 
 @bp.route('', methods=['GET'])
 async def list_devices():
-    """All connected devices with latest snapshot, traffic, and threat score."""
+    """All connected devices with latest snapshot, traffic, and threat score.
+
+    Excludes devices linked away as a stale duplicate of another device (see
+    DeviceRepository.link()/sentinel/detection/device_identity.py) — this is
+    the single source every frontend device count/list derives from
+    (dashboard online count, devices list, network map all fetch this one
+    endpoint), so filtering here is enough to fix all of them at once.
+    Linked-away devices are still reachable directly via GET /<mac> (that's
+    how their UNLINK button is discoverable) — only this list view hides them.
+    """
     async with get_session() as session:
         devices = (await session.execute(
-            select(Device).order_by(Device.is_online.desc(), Device.last_seen.desc())
+            select(Device)
+            .where(Device.linked_to_mac.is_(None))
+            .order_by(Device.is_online.desc(), Device.last_seen.desc())
         )).scalars().all()
 
         latest_samples = (await session.execute(
@@ -50,7 +61,13 @@ async def list_devices():
 
 @bp.route('/<mac>', methods=['GET'])
 async def get_device(mac: str):
-    """Full device detail: recent traffic history, alerts, Nmap profile."""
+    """Full device detail: recent traffic history, alerts, Nmap profile.
+
+    Deliberately NOT filtered by linked_to_mac (unlike list_devices) — direct
+    navigation to a linked-away device's own page must keep working, since
+    that's the only path to its UNLINK button (see DEVICE_IDENTITY_LINKED
+    alerts on the Alerts page, and the survivor's own linked_into list below).
+    """
     async with get_session() as session:
         device = await session.get(Device, mac)
         if device is None:
@@ -70,9 +87,33 @@ async def get_device(mac: str):
             .limit(50)
         )).scalars().all()
 
+        linked_to_hostname = None
+        if device.linked_to_mac:
+            canonical = await session.get(Device, device.linked_to_mac)
+            linked_to_hostname = canonical.hostname if canonical else None
+
     payload = device_to_dict(device)
     payload['traffic_history'] = [traffic_sample_to_dict(s) for s in traffic_history]
     payload['alerts'] = [alert_to_dict(a) for a in alerts]
+    payload['linked_to_hostname'] = linked_to_hostname
+    payload['linked_into'] = [
+        {'mac_address': d.mac_address, 'hostname': d.hostname, 'linked_at': d.linked_at.isoformat() if d.linked_at else None}
+        for d in await DeviceRepository().get_linked_into(mac)
+    ]
+    return jsonify(payload)
+
+
+@bp.route('/<mac>/unlink', methods=['POST'])
+async def unlink_device(mac: str):
+    """Manual undo for an auto-link (see DeviceRepository.link() /
+    sentinel/detection/device_identity.py) — restores mac as its own
+    identity. Unauthenticated, matching PATCH /<mac>'s posture: this only
+    un-hides a device from list_devices, no privileged action."""
+    if not await DeviceRepository().unlink(mac):
+        return jsonify(error='Device not found or not currently linked'), 404
+    async with get_session() as session:
+        device = await session.get(Device, mac)
+        payload = device_to_dict(device)
     return jsonify(payload)
 
 

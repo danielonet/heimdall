@@ -33,6 +33,10 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'ever_connected': device.ever_connected,
         'first_seen': device.first_seen.isoformat() if device.first_seen else None,
         'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+        # Device-identity linking — see sentinel/db/repositories.py:DeviceRepository.
+        'linked_to_mac': device.linked_to_mac,
+        'linked_at': device.linked_at.isoformat() if device.linked_at else None,
+        'link_reason': device.link_reason,
     }
 
 

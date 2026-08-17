@@ -63,6 +63,18 @@ class Device(Base):
     ever_connected: Mapped[bool] = mapped_column(Boolean, server_default='false')
     first_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Device-identity linking — see sentinel/detection/device_identity.py:
+    # DeviceIdentityLinker and sentinel/db/repositories.py:DeviceRepository.
+    # link(). Set when this row is a stale duplicate of another device (a
+    # phone's randomized/rotating WiFi MAC creating a new row on reconnect)
+    # — points at the CURRENT live canonical MAC, never a multi-hop chain.
+    # All three columns are set/cleared together; NULL = this row is its own
+    # identity. A linked row is hidden from "connected" counts/lists (see
+    # list_devices()/metrics.py) but its history is never deleted — see
+    # unlink() for the manual-undo path.
+    linked_to_mac: Mapped[str | None] = mapped_column(String(17))
+    linked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    link_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class DeviceTypeProfile(Base):

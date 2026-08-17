@@ -140,6 +140,16 @@ class Settings(BaseSettings):
     # an interval, not a nightly cron, same reasoning as
     # BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS. See SentinelScheduler._alert_auto_resolve_job.
     ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS: int = 1800
+    # How often to scan for device-identity link candidates (a phone's
+    # randomized WiFi MAC reconnecting under a new address) — an ARP-
+    # confirmed auto-link, not a nightly cron, same reasoning as
+    # CORRELATION_SCAN_INTERVAL_SECONDS. See sentinel/detection/
+    # device_identity.py and SentinelScheduler._identity_link_job.
+    DEVICE_IDENTITY_LINK_SCAN_INTERVAL_SECONDS: int = 300
+    # How often to ARP-probe currently-online devices and mark unreachable
+    # ones offline promptly, instead of waiting for the router's own
+    # (often slow) view to catch up. See SentinelScheduler._stale_device_reap_job.
+    STALE_DEVICE_REAP_INTERVAL_SECONDS: int = 120
     # Daily by default — edit for weekly (e.g. '0 7 * * 1' for Monday).
     # Env-only, like every other *_CRON setting (not SettingsRepository-backed).
     SECURITY_DIGEST_CRON: str = '0 7 * * *'

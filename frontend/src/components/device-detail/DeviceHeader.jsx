@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiJson } from '../../lib/api'
 import { StatusDot } from '../StatusDot'
@@ -34,8 +35,53 @@ export function DeviceHeader({ device }) {
     },
   })
 
+  // A device auto-linked as a stale duplicate (see DeviceRepository.link()
+  // / sentinel/detection/device_identity.py — a phone's randomized WiFi MAC
+  // reconnecting under a new address) can be wrongly linked; UNLINK is the
+  // way back, same "automatic action needs a manual undo" shape as
+  // AckResolveButtons' REOPEN.
+  const unlink = useMutation({
+    mutationFn: () => apiJson(`/devices/${device.mac_address}/unlink`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      qc.invalidateQueries({ queryKey: ['device', device.mac_address] })
+    },
+  })
+
   return (
     <div className="border border-border bg-surface p-4">
+      {device.linked_to_mac && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border border-accent-amber/30 bg-accent-amber/5 px-3 py-2">
+          <span className="text-[10px] text-accent-amber">
+            Linked to{' '}
+            <Link to={`/devices/${device.linked_to_mac}`} className="underline hover:text-text-primary">
+              {device.linked_to_hostname || device.linked_to_mac}
+            </Link>{' '}
+            — hidden from device lists as a stale duplicate.
+          </span>
+          <button
+            type="button"
+            disabled={unlink.isPending}
+            onClick={() => unlink.mutate()}
+            className="whitespace-nowrap border border-accent-amber/30 bg-accent-amber/5 px-2 py-0.5 text-[9px] tracking-wider text-accent-amber transition-colors hover:bg-accent-amber/20 disabled:opacity-50"
+          >
+            UNLINK
+          </button>
+        </div>
+      )}
+      {device.linked_into?.length > 0 && (
+        <div className="mb-3 border border-border bg-surface-elevated px-3 py-2 text-[10px] text-text-secondary">
+          {device.linked_into.length} device{device.linked_into.length > 1 ? 's' : ''} linked into this one:{' '}
+          {device.linked_into.map((d, i) => (
+            <span key={d.mac_address}>
+              {i > 0 && ', '}
+              <Link to={`/devices/${d.mac_address}`} className="text-accent-blue underline hover:text-text-primary">
+                {d.hostname || d.mac_address}
+              </Link>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">

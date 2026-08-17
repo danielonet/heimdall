@@ -75,6 +75,8 @@ def _scheduler() -> SentinelScheduler:
         block_expiry_check_interval_s=900,
         correlation_scan_interval_s=300,
         alert_auto_resolve_check_interval_s=1800,
+        device_identity_link_scan_interval_s=300,
+        stale_device_reap_interval_s=120,
         security_digest_cron='0 7 * * *',
     )
 

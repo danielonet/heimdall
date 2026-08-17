@@ -28,10 +28,11 @@ from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
-from sentinel.db.repositories import AlertRepository, SettingsRepository, TrustedMacRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.deployment_tiers import active_service_keys, services_for_tier
 from sentinel.detection.correlation import CrossAlertCorrelator
+from sentinel.detection.device_identity import DeviceIdentityLinker
 from sentinel.detection.observed_extremes import compute_observed_extremes
 from sentinel.detection.pipeline import DetectionPipeline, create_default_pipeline
 from sentinel.detection.rules_engine import RuleEngine
@@ -46,6 +47,7 @@ from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.clamav_scanner import ClamAvScanner
 from sentinel.security.dhcp_watch import DhcpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
+from sentinel.security.liveness import ArpLivenessProbe, LivenessProbeError
 from sentinel.security.os_classification import os_family
 from sentinel.security.remediation import build_mitigation
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
@@ -99,6 +101,8 @@ class SentinelScheduler:
         block_expiry_check_interval_s: int,
         correlation_scan_interval_s: int,
         alert_auto_resolve_check_interval_s: int,
+        device_identity_link_scan_interval_s: int,
+        stale_device_reap_interval_s: int,
         security_digest_cron: str,
         deployment_tier: str = 'full',
     ) -> None:
@@ -131,6 +135,8 @@ class SentinelScheduler:
         self._block_expiry_check_interval_s = block_expiry_check_interval_s
         self._correlation_scan_interval_s = correlation_scan_interval_s
         self._alert_auto_resolve_check_interval_s = alert_auto_resolve_check_interval_s
+        self._device_identity_link_scan_interval_s = device_identity_link_scan_interval_s
+        self._stale_device_reap_interval_s = stale_device_reap_interval_s
         self._security_digest_cron = security_digest_cron
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -147,6 +153,9 @@ class SentinelScheduler:
         # once-per-process-and-reused reasoning as _pipeline/_anomaly_engine.
         self._wan_bandwidth_detector: WanBandwidthDetector | None = None
         self._correlator: CrossAlertCorrelator | None = None
+        # See sentinel/detection/device_identity.py / sentinel/security/liveness.py.
+        self._identity_linker: DeviceIdentityLinker | None = None
+        self._liveness_probe: ArpLivenessProbe | None = None
         # Security services — also built once per process, same reasoning.
         self._threat_intel: ThreatIntelService | None = None
         self._scanner: NetworkScanner | None = None
@@ -241,6 +250,8 @@ class SentinelScheduler:
         self._pipeline = create_default_pipeline(self._anomaly_engine)
         self._wan_bandwidth_detector = WanBandwidthDetector()
         self._correlator = CrossAlertCorrelator()
+        self._identity_linker = DeviceIdentityLinker()
+        self._liveness_probe = ArpLivenessProbe(self._sniff_iface)
         self._threat_intel = ThreatIntelService(self._otx_api_key)
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
@@ -350,6 +361,18 @@ class SentinelScheduler:
             'interval',
             seconds=self._alert_auto_resolve_check_interval_s,
             id='alert_auto_resolve',
+        )
+        self._scheduler.add_job(
+            self._identity_link_job,
+            'interval',
+            seconds=self._device_identity_link_scan_interval_s,
+            id='device_identity_link',
+        )
+        self._scheduler.add_job(
+            self._stale_device_reap_job,
+            'interval',
+            seconds=self._stale_device_reap_interval_s,
+            id='stale_device_reap',
         )
         self._scheduler.add_job(
             self._security_digest_job,
@@ -661,6 +684,123 @@ class SentinelScheduler:
                 logger.info('Alert auto-resolve: closed %d alert(s) past %dh with no recurrence', closed, hours)
         except Exception:
             logger.exception('Alert auto-resolve sweep failed')
+
+    async def _identity_link_job(self) -> None:
+        """Auto-links every device row confirmed unreachable in a hostname
+        group onto the single member of that group confirmed reachable —
+        the heuristic (sharing a hostname, presenting a randomized MAC —
+        see sentinel/detection/device_identity.py) only proposes which
+        groups to probe; only the ARP confirmation decides who gets linked.
+        Deliberately does NOT use Device.is_online/last_seen to pre-filter
+        candidates — this router's Hosts/AssociatedDevices view is
+        confirmed persistently stale for MACs that are actually long gone
+        (see device_identity.py's module docstring), so trusting either
+        would silently exclude exactly the rows this feature exists to fix.
+
+        Only acts when EXACTLY ONE member of a group answers: zero
+        reachable means the phone is currently fully offline (too soon to
+        guess which MAC it'll come back as); two or more reachable means
+        this hostname might genuinely belong to more than one physical
+        device (e.g. two identical phone models in the household) — safer
+        to do nothing than guess wrong in either case.
+
+        Raises a low-severity, one-off DEVICE_IDENTITY_LINKED alert per
+        link (same "record + broadcast a system event so it's visible in
+        the Alerts history, not just a transient notification" pattern as
+        _block_expiry_job's AUTO_BLOCK_EXPIRED) so the linked-away device's
+        page — and its UNLINK button, for when this gets it wrong — is
+        discoverable.
+        """
+        try:
+            async with get_session() as session:
+                groups = await self._identity_linker.find_candidate_groups(session)
+
+            for group in groups:
+                reachable: list[str] = []
+                unreachable: list[str] = []
+                for member in group['members']:
+                    mac, ip = member['mac_address'], member['ip_address']
+                    try:
+                        if ip and await self._liveness_probe.is_reachable(ip):
+                            reachable.append(mac)
+                        else:
+                            unreachable.append(mac)
+                    except LivenessProbeError:
+                        logger.warning('Identity-link ARP probe failed for %s — excluding it this scan', mac)
+
+                if len(reachable) != 1:
+                    continue  # ambiguous — nothing or more than one answered, too risky to guess
+                new_mac = reachable[0]
+
+                for old_mac in unreachable:
+                    reason = (
+                        f'Hostname "{group["hostname"]}" is shared by multiple randomized MACs; '
+                        f'{old_mac} is unreachable while {new_mac} is confirmed alive — likely the same '
+                        f'device reconnecting under a rotated WiFi MAC.'
+                    )
+                    linked = await DeviceRepository().link(old_mac=old_mac, new_mac=new_mac, reason=reason)
+                    if linked is None:
+                        continue
+
+                    description = f"{group['hostname']} ({old_mac}) linked to {new_mac} — {reason}"
+                    async with get_session() as session:
+                        alert = Alert(
+                            device_mac=new_mac, alert_type='DEVICE_IDENTITY_LINKED', severity='INFO',
+                            description=description,
+                            raw_data={'old_mac': old_mac, 'new_mac': new_mac, 'reason': reason},
+                        )
+                        session.add(alert)
+                    emit_alert(alert_to_dict(alert))
+        except Exception:
+            logger.exception('Device identity-link scan failed')
+
+    async def _stale_device_reap_job(self) -> None:
+        """ARP-probes every device the DB currently believes is online and
+        marks any that don't answer offline right away, rather than waiting
+        for the router's own (often slow) Hosts/AssociatedDevices view to
+        notice. A second writer of Device.is_online alongside
+        _upsert_devices (sentinel/scheduler/jobs.py) — deliberately not
+        reconciled in code: if the router's next poll still reports a
+        device active, _upsert_devices simply flips is_online back True,
+        exactly as it does today. A probe failure (LivenessProbeError) is
+        treated as "unknown", never as "confirmed dead" — see
+        sentinel/security/liveness.py.
+        """
+        try:
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Device.mac_address, Device.ip_address).where(
+                        Device.is_online.is_(True),
+                        Device.ip_address.isnot(None),
+                        Device.linked_to_mac.is_(None),
+                    )
+                )
+                targets = [(mac, ip) for mac, ip in result.all() if ip]
+
+            semaphore = asyncio.Semaphore(8)
+
+            async def _check(mac: str, ip: str) -> str | None:
+                async with semaphore:
+                    try:
+                        return None if await self._liveness_probe.is_reachable(ip) else mac
+                    except LivenessProbeError:
+                        return None
+
+            unreachable = [mac for mac in await asyncio.gather(*(_check(mac, ip) for mac, ip in targets)) if mac]
+
+            for mac in unreachable:
+                try:
+                    async with get_session() as session:
+                        device = await session.get(Device, mac)
+                        if device is not None and device.is_online:
+                            device.is_online = False
+                except Exception:
+                    logger.exception('Failed to mark %s offline after a failed liveness probe', mac)
+
+            if unreachable:
+                logger.info('Stale-device reap: marked %d device(s) offline early', len(unreachable))
+        except Exception:
+            logger.exception('Stale-device reap sweep failed')
 
     async def _security_digest_job(self) -> None:
         """Periodic 'here's what happened' summary. Unlike live per-alert
@@ -1440,6 +1580,8 @@ def init_scheduler(app: Flask) -> None:
         block_expiry_check_interval_s=app.config['BLOCK_EXPIRY_CHECK_INTERVAL_SECONDS'],
         correlation_scan_interval_s=app.config['CORRELATION_SCAN_INTERVAL_SECONDS'],
         alert_auto_resolve_check_interval_s=app.config['ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS'],
+        device_identity_link_scan_interval_s=app.config['DEVICE_IDENTITY_LINK_SCAN_INTERVAL_SECONDS'],
+        stale_device_reap_interval_s=app.config['STALE_DEVICE_REAP_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
         deployment_tier=app.config['DEPLOYMENT_TIER'],
     )
