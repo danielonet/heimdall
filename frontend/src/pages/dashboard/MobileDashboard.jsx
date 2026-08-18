@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { MetricCard } from '../../components/MetricCard'
 import { StatusDot } from '../../components/StatusDot'
 import { TrafficDisplay } from '../../components/TrafficDisplay'
@@ -29,15 +30,21 @@ export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, t
       <div>
         <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">CONNECTED DEVICES</div>
         {onlineDevices.length === 0 && <div className="text-[10px] text-text-muted">No devices online.</div>}
-        {onlineDevices.slice(0, 6).map((d) => (
+        {/* No internal scrollbar here (unlike DesktopDashboard's CONNECTED
+        HOSTS) — mobile already scrolls the whole page, so a nested scroll
+        area would be awkward; showing every device just means dropping the
+        old slice(0, 6) cap. */}
+        {onlineDevices.map((d) => (
           <div key={d.mac_address} className="flex items-center gap-2 border-b border-border/50 py-2 last:border-none">
             <StatusDot variant={d.is_blocked ? 'red' : 'green'} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[11px] text-text-primary">
-                {d.hostname || <MacAddress mac={d.mac_address} vendor={d.vendor_name} />}
+            <Link to={`/devices/${d.mac_address}`} className="group min-w-0 flex-1">
+              <div className="truncate text-[11px] text-text-primary group-hover:text-accent-blue group-hover:underline">
+                {d.hostname || <MacAddress mac={d.mac_address} />}
               </div>
-              <div className="text-[9px] text-text-muted">{d.ip_address}</div>
-            </div>
+              <div className="truncate text-[9px] text-text-muted">
+                {d.ip_address} {d.vendor_name ? `· ${d.vendor_name}` : ''}
+              </div>
+            </Link>
             <div className="flex flex-shrink-0 flex-col items-end gap-1">
               <TrafficDisplay sample={d.latest_traffic} />
               <Badge variant="info">{d.interface_name === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>

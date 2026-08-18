@@ -14,8 +14,6 @@ import { PortSummary } from '../../components/dashboard/PortSummary'
 import { isDeviceOnline } from '../../lib/deviceFilters'
 import { useWanStats } from '../../hooks/useWanStats'
 
-const HOSTS_SHOWN = 8
-
 // "Independent Rail": a main operational column (hosts/alerts/ports) beside
 // a persistent right rail (bandwidth + service status) that scrolls on its
 // own axis. Service Status has no ceiling on row count — it grows with
@@ -26,7 +24,6 @@ const HOSTS_SHOWN = 8
 export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, ports, alertsTotal, openAlerts }) {
   const onlineDevices = devices.filter(isDeviceOnline)
   const onlineCount = onlineDevices.length
-  const hiddenCount = Math.max(onlineCount - HOSTS_SHOWN, 0)
   // 404 here just means SagemcomXmoAdapter.get_wan_stats' xpath hasn't been
   // verified against a live router yet (see its docstring) — not an error
   // worth surfacing, the household total simply stays hidden until then.
@@ -55,30 +52,28 @@ export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, 
         <div className="flex flex-[7] flex-col gap-px overflow-hidden">
           <div className="flex-shrink-0 border border-border bg-surface p-4">
             <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">CONNECTED HOSTS</div>
-            <div>
+            {/* max-h + overflow-y-auto rather than the old slice(0, N)/"+N
+            more" link — every online device is reachable here, scrolled
+            instead of hidden behind a second page. */}
+            <div className="max-h-80 overflow-y-auto">
               {onlineDevices.length === 0 && <div className="text-[10px] text-text-muted">No devices online.</div>}
-              {onlineDevices.slice(0, HOSTS_SHOWN).map((d) => (
+              {onlineDevices.map((d) => (
                 <div
                   key={d.mac_address}
                   className="flex items-center gap-3 border-b border-border/50 py-1.5 text-[10px] last:border-none"
                 >
                   <StatusDot variant={d.is_blocked ? 'red' : 'green'} />
-                  <div className="min-w-0 flex-1 truncate text-text-primary">
-                    {d.hostname || <MacAddress mac={d.mac_address} vendor={d.vendor_name} />}
-                  </div>
+                  <Link to={`/devices/${d.mac_address}`} className="group block min-w-0 flex-1">
+                    <div className="truncate text-text-primary group-hover:text-accent-blue group-hover:underline">
+                      {d.hostname || <MacAddress mac={d.mac_address} />}
+                    </div>
+                    <div className="truncate text-[9px] text-text-muted">{d.vendor_name || '—'}</div>
+                  </Link>
                   <TrafficDisplay sample={d.latest_traffic} />
                   <Badge variant="info">{d.interface_name === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>
                   {!d.is_blocked && <BlockButton mac={d.mac_address} />}
                 </div>
               ))}
-              {hiddenCount > 0 && (
-                <Link
-                  to="/devices"
-                  className="mt-1.5 block text-[9px] tracking-wide text-accent-blue hover:text-text-primary"
-                >
-                  + {hiddenCount} MORE · VIEW ALL DEVICES →
-                </Link>
-              )}
             </div>
           </div>
 
