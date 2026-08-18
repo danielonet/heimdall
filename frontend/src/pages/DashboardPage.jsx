@@ -21,6 +21,11 @@ export function DashboardPage() {
   const staleFrom = useMemo(() => staleBeforeIso(appSettings?.alert_stale_hours), [appSettings?.alert_stale_hours])
   const alertParams = { acknowledged: 'false', per_page: '20', ...(staleFrom ? { from: staleFrom } : {}) }
   const { data: alertsPage } = useAlerts(alertParams)
+  // Deliberately broader than alertParams above (no acknowledged/staleness
+  // filter) — ServiceStatusPanel's ALERT state must not clear just because
+  // a human acknowledged the finding or it's older than the staleness
+  // setting; only alert.resolved should silence it. See ServiceStatusPanel.jsx.
+  const { data: openAlertsPage } = useAlerts({ per_page: '100' })
   const { data: health } = useHealth()
   const { data: ports } = usePorts()
   // id, not the alert object itself — alertsPage refetches every 15s
@@ -44,6 +49,7 @@ export function DashboardPage() {
     health,
     ports: ports || [],
     alertsTotal: alertsPage?.total ?? 0,
+    openAlerts: openAlertsPage?.alerts || [],
   }
 
   return mode === 'mobile' ? <MobileDashboard {...sharedProps} /> : <DesktopDashboard {...sharedProps} />

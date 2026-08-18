@@ -8,7 +8,7 @@ import { AlertFeed } from '../../components/dashboard/AlertFeed'
 import { ServiceStatusPanel } from '../../components/dashboard/ServiceStatusPanel'
 import { isDeviceOnline } from '../../lib/deviceFilters'
 
-export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, alertsTotal }) {
+export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, alertsTotal, openAlerts }) {
   const servicesOkCount = health
     ? Object.values(health.security_services || {}).filter((v) => v === true).length
     : null
@@ -48,7 +48,7 @@ export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, t
 
       <div>
         <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">SECURITY SERVICES</div>
-        <ServiceStatusPanel health={health} />
+        <ServiceStatusPanel health={health} openAlerts={openAlerts} />
       </div>
 
       <div>

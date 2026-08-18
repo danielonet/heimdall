@@ -23,7 +23,7 @@ const HOSTS_SHOWN = 8
 // default row-stretch behavior pulls Hosts/Bandwidth tall to match it, and
 // the whole page can push Ports below the fold. See docs/
 // dashboard-rail-and-palette-plan.md.
-export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, ports, alertsTotal }) {
+export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, threatScore, health, ports, alertsTotal, openAlerts }) {
   const onlineDevices = devices.filter(isDeviceOnline)
   const onlineCount = onlineDevices.length
   const hiddenCount = Math.max(onlineCount - HOSTS_SHOWN, 0)
@@ -120,7 +120,7 @@ export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, 
           </div>
 
           <div className="flex-1 overflow-hidden">
-            <ServiceStatusPanel health={health} />
+            <ServiceStatusPanel health={health} openAlerts={openAlerts} />
           </div>
         </div>
       </div>

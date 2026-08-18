@@ -127,4 +127,10 @@
   .network-map-anim {
     animation: none !important;
   }
+  /* Matches Tailwind's animate-[pulse-live_2s_infinite] arbitrary-value
+     utility wherever it's used (StatusDot's pulse prop, ServiceStatusPanel's
+     ALERT row text) — pulse-live itself had no reduced-motion guard before. */
+  [class*='pulse-live'] {
+    animation: none !important;
+  }
 }
