@@ -17,3 +17,12 @@ export function useDevice(mac) {
     enabled: !!mac,
   })
 }
+
+export function useArchivedDevices() {
+  return useQuery({
+    queryKey: ['devices', 'archived'],
+    queryFn: () => apiJson('/devices?archived=true'),
+    select: (data) => data.devices,
+    refetchInterval: 15000,
+  })
+}

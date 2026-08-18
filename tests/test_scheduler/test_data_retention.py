@@ -68,6 +68,7 @@ def _scheduler() -> SentinelScheduler:
         zeek_extract_dir='/tmp/heimdall-test-zeek-extracted',
         zeek_dns_poll_interval_s=10,
         zeek_beacon_scan_interval_s=300,
+        spike_ip_enrichment_interval_s=300,
         clamav_host='localhost',
         clamav_port=3310,
         suricata_eve_log_path='/tmp/heimdall-test-suricata-eve.json',
@@ -77,6 +78,7 @@ def _scheduler() -> SentinelScheduler:
         alert_auto_resolve_check_interval_s=1800,
         device_identity_link_scan_interval_s=300,
         stale_device_reap_interval_s=120,
+        device_archive_sweep_interval_s=3600,
         security_digest_cron='0 7 * * *',
     )
 

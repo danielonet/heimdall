@@ -45,7 +45,13 @@ CORRELATION_PATTERNS = [
     {
         'name': 'EXPOSURE_THEN_COMPROMISE',
         'trigger_types': {'VULNERABILITY_DETECTED', 'CREDENTIAL_EXPOSURE_DETECTED', 'HIGH_RISK_PORT_OPENED'},
-        'follow_types': {'MALWARE_DETECTED', 'C2_BEACONING'},
+        # MALICIOUS_TRAFFIC_DESTINATION (sentinel/scheduler/scheduler.py:
+        # _spike_ip_enrichment_job) only correlates here when it resolved an
+        # actual device_mac — a WAN_BANDWIDTH_SPIKE escalation that couldn't
+        # attribute a local device falls through to device_mac=None and
+        # simply won't match trigger.device_mac below (plain ==, not
+        # isnot_distinct_from) — correct silent behavior, not a bug.
+        'follow_types': {'MALWARE_DETECTED', 'C2_BEACONING', 'MALICIOUS_TRAFFIC_DESTINATION'},
         'window_minutes': 1440,  # 24h — a known weakness followed by real compromise signs
         'description': (
             'had a known vulnerability/exposed credential/high-risk port and then '

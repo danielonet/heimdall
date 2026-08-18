@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     # interval statistics over, not a per-line reaction — much longer than
     # the DNS poll interval.
     ZEEK_BEACON_SCAN_INTERVAL_SECONDS: int = 300
+    # How often to correlate recent traffic-spike alerts (ANOMALOUS_VOLUME/
+    # HIGH_UPLOAD/WAN_BANDWIDTH_SPIKE) against conn.log for a remote IP and
+    # check it against threat intel. Zeek-only — see
+    # sentinel/security/zeek_parser.py:ZeekConnVolumeCorrelator and
+    # SentinelScheduler._spike_ip_enrichment_job.
+    SPIKE_IP_ENRICHMENT_INTERVAL_SECONDS: int = 300
     CLAMAV_HOST: str = 'localhost'
     CLAMAV_PORT: int = 3310
     # See sentinel/security/suricata_parser.py.
@@ -150,6 +156,12 @@ class Settings(BaseSettings):
     # ones offline promptly, instead of waiting for the router's own
     # (often slow) view to catch up. See SentinelScheduler._stale_device_reap_job.
     STALE_DEVICE_REAP_INTERVAL_SECONDS: int = 120
+    # How often to sweep for devices with no activity in AppSettings.
+    # device_archive_after_days and soft-archive them — an interval, not a
+    # nightly cron, same reasoning as ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS.
+    # Distinct from STALE_DEVICE_REAP_INTERVAL_SECONDS above, which is an
+    # unrelated ARP-liveness job. See SentinelScheduler._device_archive_sweep_job.
+    DEVICE_ARCHIVE_SWEEP_INTERVAL_SECONDS: int = 3600
     # Daily by default — edit for weekly (e.g. '0 7 * * 1' for Monday).
     # Env-only, like every other *_CRON setting (not SettingsRepository-backed).
     SECURITY_DIGEST_CRON: str = '0 7 * * *'

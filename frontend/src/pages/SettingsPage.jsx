@@ -9,6 +9,7 @@ import { AlertStalenessSection } from '../components/settings/AlertStalenessSect
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { ClearAlertsSection } from '../components/settings/ClearAlertsSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
+import { DeviceArchiveSection } from '../components/settings/DeviceArchiveSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
@@ -99,6 +100,7 @@ export function SettingsPage() {
         <AutoBlockSection />
         <AlertStalenessSection />
         <AlertAutoResolveSection />
+        <DeviceArchiveSection />
         <ClearAlertsSection />
         <PurgeDatabaseSection />
       </div>

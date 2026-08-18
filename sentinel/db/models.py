@@ -75,6 +75,16 @@ class Device(Base):
     linked_to_mac: Mapped[str | None] = mapped_column(String(17))
     linked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     link_reason: Mapped[str | None] = mapped_column(Text)
+    # Stale device cleanup — see sentinel/db/repositories.py:DeviceRepository.
+    # archive_stale()/unarchive() and SentinelScheduler._device_archive_sweep_job.
+    # Set when this device hasn't been seen in AppSettings.
+    # device_archive_after_days (default 90) — distinct from linked_to_mac:
+    # this is "just hasn't been active in a long time", not "a stale
+    # duplicate of another live device". Hidden from "connected" counts/
+    # lists (see list_devices()) but nothing is deleted — fully reversible.
+    is_archived: Mapped[bool] = mapped_column(Boolean, server_default='false')
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    archive_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class DeviceTypeProfile(Base):
@@ -192,6 +202,10 @@ class AppSettings(Base):
     # Deliberately separate from alert_stale_hours — see the
     # a4e19d6b3c72_app_settings_alert_auto_resolve migration docstring.
     alert_auto_resolve_hours: Mapped[int] = mapped_column(Integer, server_default='72')
+    # Days of no activity before the device-archive sweep job soft-archives
+    # a device. Deliberately separate from data_retention_days — see the
+    # d2b6c94a1f83_app_settings_device_archive_after_days migration docstring.
+    device_archive_after_days: Mapped[int] = mapped_column(Integer, server_default='90')
 
 
 class TrustedMac(Base):

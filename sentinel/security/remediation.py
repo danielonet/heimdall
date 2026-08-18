@@ -158,6 +158,17 @@ def _ids_signature_match(raw_data: dict) -> str:
     )
 
 
+def _malicious_traffic_destination(raw_data: dict) -> str:
+    ip = raw_data.get('remote_ip', 'a remote host')
+    trigger_type = (raw_data.get('trigger_alert_type') or 'a traffic-volume alert').replace('_', ' ').lower()
+    return (
+        f'This device\'s traffic (flagged first by a {trigger_type}) was headed to {ip}, which threat '
+        f'intelligence independently confirms is malicious — not a guess. If this device was auto-blocked, '
+        f'leave it isolated and run a full malware scan before reconnecting it. Check what app or process on '
+        f'the device initiated the connection.'
+    )
+
+
 def _honeypot_access(raw_data: dict) -> str:
     service = (raw_data.get('logdata') or {}).get('SERVICE', 'a decoy service')
     return (
@@ -181,6 +192,7 @@ _BUILDERS: dict[str, Callable[[dict], str]] = {
     'MALWARE_DETECTED': _malware_detected,
     'IDS_SIGNATURE_MATCH': _ids_signature_match,
     'HONEYPOT_ACCESS': _honeypot_access,
+    'MALICIOUS_TRAFFIC_DESTINATION': _malicious_traffic_destination,
 }
 
 

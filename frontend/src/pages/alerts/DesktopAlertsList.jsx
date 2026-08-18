@@ -6,6 +6,7 @@ import { TimeAgo } from '../../components/TimeAgo'
 import { AlertHistogram } from '../../components/alerts/AlertHistogram'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
 import { MitigationNote } from '../../components/alerts/MitigationNote'
+import { RemoteIpNote } from '../../components/alerts/RemoteIpNote'
 import { isStale } from '../../lib/alertStaleness'
 
 const SEVERITY_OPTIONS = [['all', 'ALL'], ['CRITICAL', 'CRITICAL'], ['WARNING', 'WARNING'], ['INFO', 'INFO']]
@@ -87,6 +88,7 @@ export function DesktopAlertsList({
                 {a.description}
               </div>
               <MitigationNote text={a.mitigation} />
+              <RemoteIpNote rawData={a.raw_data} />
             </div>
             <div className="w-36 flex-shrink-0 text-[10px]">
               {a.device_mac ? (

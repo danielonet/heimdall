@@ -3,6 +3,7 @@ import { TimeAgo } from '../TimeAgo'
 import { Badge } from '../Badge'
 import { AckResolveButtons } from '../alerts/AckResolveButtons'
 import { MitigationNote } from '../alerts/MitigationNote'
+import { RemoteIpNote } from '../alerts/RemoteIpNote'
 
 export function AlertHistoryTable({ alerts }) {
   if (!alerts?.length) {
@@ -18,6 +19,7 @@ export function AlertHistoryTable({ alerts }) {
             <div className="text-[10px] text-text-primary">{a.alert_type.replaceAll('_', ' ')}</div>
             <div className="text-[9px] text-text-secondary">{a.description}</div>
             <MitigationNote text={a.mitigation} />
+            <RemoteIpNote rawData={a.raw_data} />
           </div>
           <div className="flex flex-shrink-0 flex-col items-end gap-1">
             <span className="text-[9px] text-text-muted">

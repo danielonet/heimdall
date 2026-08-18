@@ -55,12 +55,26 @@ from sentinel.security.suricata_parser import SuricataAlertIngester, SuricataEve
 from sentinel.security.threat_intel import ThreatIntelService
 from sentinel.security.zeek_parser import (
     ZeekConnBeaconDetector,
+    ZeekConnVolumeCorrelator,
     ZeekDnsIngester,
     ZeekDnsLogReader,
     ZeekFileExtractionWatcher,
 )
 
 logger = logging.getLogger(__name__)
+
+# See SentinelScheduler._spike_ip_enrichment_job.
+_SPIKE_ALERT_TYPES = ('ANOMALOUS_VOLUME', 'HIGH_UPLOAD', 'WAN_BANDWIDTH_SPIKE')
+_SPIKE_ENRICHMENT_LOOKBACK_MINUTES = 30  # how far back to look for un-enriched alerts
+# conn.log correlation window around a spike alert's created_at. 15min back
+# covers the default sustained-poll thresholds for all three spike
+# detectors (HIGH_UPLOAD.SUSTAINED_POLLS=3, AnomalousVolumeDetector's
+# per-profile volume_sustained_polls, defaulted to 3) with headroom for
+# typical admin overrides; 5min forward accounts for Zeek writing a conn.log
+# row at connection *close*, not start — a connection open during the spike
+# may not appear until after it ends.
+CORRELATION_WINDOW_BEFORE_MINUTES = 15
+CORRELATION_WINDOW_AFTER_MINUTES = 5
 
 DEFAULT_ADAPTER_CALL_TIMEOUT_S = 10.0
 # How long to stay quiet on a given IP after reporting it as conflicted
@@ -94,6 +108,7 @@ class SentinelScheduler:
         zeek_extract_dir: str,
         zeek_dns_poll_interval_s: int,
         zeek_beacon_scan_interval_s: int,
+        spike_ip_enrichment_interval_s: int,
         clamav_host: str,
         clamav_port: int,
         suricata_eve_log_path: str,
@@ -103,6 +118,7 @@ class SentinelScheduler:
         alert_auto_resolve_check_interval_s: int,
         device_identity_link_scan_interval_s: int,
         stale_device_reap_interval_s: int,
+        device_archive_sweep_interval_s: int,
         security_digest_cron: str,
         deployment_tier: str = 'full',
     ) -> None:
@@ -128,6 +144,7 @@ class SentinelScheduler:
         self._zeek_extract_dir = zeek_extract_dir
         self._zeek_dns_poll_interval_s = zeek_dns_poll_interval_s
         self._zeek_beacon_scan_interval_s = zeek_beacon_scan_interval_s
+        self._spike_ip_enrichment_interval_s = spike_ip_enrichment_interval_s
         self._clamav_host = clamav_host
         self._clamav_port = clamav_port
         self._suricata_eve_log_path = suricata_eve_log_path
@@ -137,6 +154,7 @@ class SentinelScheduler:
         self._alert_auto_resolve_check_interval_s = alert_auto_resolve_check_interval_s
         self._device_identity_link_scan_interval_s = device_identity_link_scan_interval_s
         self._stale_device_reap_interval_s = stale_device_reap_interval_s
+        self._device_archive_sweep_interval_s = device_archive_sweep_interval_s
         self._security_digest_cron = security_digest_cron
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -167,6 +185,7 @@ class SentinelScheduler:
         self._zeek_dns_reader: ZeekDnsLogReader | None = None
         self._zeek_dns_ingester: ZeekDnsIngester | None = None
         self._zeek_beacon_detector: ZeekConnBeaconDetector | None = None
+        self._conn_volume_correlator: ZeekConnVolumeCorrelator | None = None
         self._zeek_file_watcher: ZeekFileExtractionWatcher | None = None
         self._clamav: ClamAvScanner | None = None
         self._suricata_reader: SuricataEveLogReader | None = None
@@ -183,6 +202,7 @@ class SentinelScheduler:
         self._last_canary_check_at: datetime | None = None
         self._last_zeek_dns_check_at: datetime | None = None
         self._last_zeek_beacon_scan_at: datetime | None = None
+        self._last_spike_ip_enrichment_at: datetime | None = None
         self._last_zeek_file_scan_at: datetime | None = None
         self._clamav_reachable: bool | None = None
         self._last_suricata_check_at: datetime | None = None
@@ -269,6 +289,7 @@ class SentinelScheduler:
             self._zeek_dns_reader = ZeekDnsLogReader(f'{self._zeek_log_dir}/dns.log')
             self._zeek_dns_ingester = ZeekDnsIngester()
             self._zeek_beacon_detector = ZeekConnBeaconDetector(self._zeek_log_dir)
+            self._conn_volume_correlator = ZeekConnVolumeCorrelator(self._zeek_log_dir)
             self._zeek_file_watcher = ZeekFileExtractionWatcher(self._zeek_extract_dir, self._zeek_log_dir)
         if self._tier_services['clamav']:
             self._clamav = ClamAvScanner(self._clamav_host, self._clamav_port)
@@ -337,6 +358,12 @@ class SentinelScheduler:
                 seconds=self._zeek_dns_poll_interval_s,
                 id='zeek_file_scan',
             )
+            self._scheduler.add_job(
+                self._spike_ip_enrichment_job,
+                'interval',
+                seconds=self._spike_ip_enrichment_interval_s,
+                id='spike_ip_enrichment',
+            )
         if self._tier_services['suricata']:
             self._scheduler.add_job(
                 self._suricata_poll_job,
@@ -373,6 +400,12 @@ class SentinelScheduler:
             'interval',
             seconds=self._stale_device_reap_interval_s,
             id='stale_device_reap',
+        )
+        self._scheduler.add_job(
+            self._device_archive_sweep_job,
+            'interval',
+            seconds=self._device_archive_sweep_interval_s,
+            id='device_archive_sweep',
         )
         self._scheduler.add_job(
             self._security_digest_job,
@@ -802,6 +835,32 @@ class SentinelScheduler:
         except Exception:
             logger.exception('Stale-device reap sweep failed')
 
+    async def _device_archive_sweep_job(self) -> None:
+        """Soft-archives devices with no activity in AppSettings.
+        device_archive_after_days (default 90) — see DeviceRepository.
+        archive_stale(). Read fresh from SettingsRepository every run, same
+        reasoning as every other admin-tunable sweep in this file. Not the
+        same job as _stale_device_reap_job above — that one ARP-probes
+        currently-"online" devices to correct is_online faster than the
+        router's own slow view; this one is a much longer-horizon sweep for
+        devices that simply haven't been active in a long time.
+
+        No alert raised per archive (unlike DEVICE_IDENTITY_LINKED) — this
+        is routine, low-stakes, reversible housekeeping, same posture as
+        _data_retention_job's INFO-log-only precedent, not a decision that
+        needs prompt human review. Discovery and undo instead happen via
+        the Settings tab's device archive section.
+        """
+        try:
+            days = await SettingsRepository().get_device_archive_after_days()
+            archived = await DeviceRepository().archive_stale(timedelta(days=days))
+            if archived:
+                logger.info(
+                    'Device archive sweep: archived %d device(s) with no activity in %d+ days', archived, days,
+                )
+        except Exception:
+            logger.exception('Device archive sweep failed')
+
     async def _security_digest_job(self) -> None:
         """Periodic 'here's what happened' summary. Unlike live per-alert
         notifications (which only fire for alerts matched by an admin-
@@ -944,6 +1003,101 @@ class SentinelScheduler:
                 dedup_key=pair['dst'],
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
+
+    async def _spike_ip_enrichment_job(self) -> None:
+        """Enriches recent traffic-spike alerts (ANOMALOUS_VOLUME/HIGH_UPLOAD/
+        WAN_BANDWIDTH_SPIKE) with the remote IP their traffic was most likely
+        headed to/from, correlated via Zeek's conn.log (see
+        ZeekConnVolumeCorrelator — the router's own TrafficSample data carries
+        no IP at all), and checks that IP against ThreatIntelService.
+
+        Zeek-only: self._conn_volume_correlator is None on tiers without
+        Zeek, but this job is only registered under the 'zeek' tier gate
+        anyway, so the guard below is defensive belt-and-suspenders like
+        every other Zeek job here, not the primary gate.
+
+        Each alert is enriched at most once — raw_data.ip_enrichment_done
+        marks it, checked in Python rather than a JSONB SQL predicate, since
+        the candidate set from the bounded created_at query below is always
+        small and NULL/keyless JSONB comparisons in SQL are a footgun. A
+        malicious verdict escalates through _raise_threat_alert as a new
+        MALICIOUS_TRAFFIC_DESTINATION CRITICAL finding (auto-block eligible),
+        dedup_key=remote_ip — the original spike alert is only annotated via
+        AlertRepository.merge_raw_data, never escalated in place.
+        """
+        if self._conn_volume_correlator is None:
+            return
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=_SPIKE_ENRICHMENT_LOOKBACK_MINUTES)
+            async with get_session() as session:
+                candidates = (await session.execute(
+                    select(Alert).where(
+                        Alert.alert_type.in_(_SPIKE_ALERT_TYPES),
+                        Alert.created_at >= cutoff,
+                    )
+                )).scalars().all()
+
+            for alert in candidates:
+                if (alert.raw_data or {}).get('ip_enrichment_done'):
+                    continue
+                try:
+                    await self._enrich_spike_alert(alert)
+                except Exception:
+                    logger.exception('IP enrichment failed for alert %d', alert.id)
+            self._last_spike_ip_enrichment_at = datetime.now(timezone.utc)
+        except Exception:
+            logger.exception('Spike IP enrichment sweep failed')
+
+    async def _enrich_spike_alert(self, alert: Alert) -> None:
+        if alert.device_mac:
+            async with get_session() as session:
+                device = await session.get(Device, alert.device_mac)
+            local_ips = {device.ip_address} if device and device.ip_address else set()
+        else:
+            # WAN_BANDWIDTH_SPIKE has no device_mac — scope the local-IP set
+            # to currently-online devices (not every device ever seen), so a
+            # long-offline device's stale, since-reassigned IP can't
+            # misattribute traffic. See DeviceRepository.list_online.
+            local_ips = {ip for _, ip in await DeviceRepository().list_online()}
+
+        marker: dict = {'ip_enrichment_done': True}
+        if not local_ips:
+            await AlertRepository().merge_raw_data(alert.id, marker)
+            return
+
+        since = alert.created_at - timedelta(minutes=CORRELATION_WINDOW_BEFORE_MINUTES)
+        until = alert.created_at + timedelta(minutes=CORRELATION_WINDOW_AFTER_MINUTES)
+        talkers = self._conn_volume_correlator.top_talkers(
+            local_ips=local_ips, since=since, until=until, top_n=3,
+        )
+        if not talkers:
+            await AlertRepository().merge_raw_data(alert.id, marker)
+            return
+
+        top = talkers[0]
+        verdict = await self._threat_intel.lookup_ip(top.remote_ip)
+        marker.update({
+            'remote_ip': top.remote_ip,
+            'remote_ip_bytes': top.total_bytes,
+            'remote_ip_connections': top.connection_count,
+            'remote_ip_local_device': top.local_ip,
+            'remote_ip_malicious': verdict['is_malicious'],
+        })
+        await AlertRepository().merge_raw_data(alert.id, marker)
+
+        if verdict['is_malicious']:
+            local_mac = await self._mac_for_ip(top.local_ip) or alert.device_mac
+            await self._raise_threat_alert(
+                local_mac, 'MALICIOUS_TRAFFIC_DESTINATION', 'CRITICAL',
+                f'Traffic linked to a {alert.alert_type.replace("_", " ").lower()} alert was headed to '
+                f'{top.remote_ip}, which threat intelligence flags as malicious.',
+                raw_data={
+                    'remote_ip': top.remote_ip, 'bytes': top.total_bytes,
+                    'otx_pulses': verdict['otx_pulses'], 'in_blocklist': verdict['in_blocklist'],
+                    'trigger_alert_id': alert.id, 'trigger_alert_type': alert.alert_type,
+                },
+                dedup_key=top.remote_ip,
+            )
 
     async def _zeek_file_scan_job(self) -> None:
         """Scan every file Zeek's file-extraction analyzer has pulled to disk
@@ -1394,6 +1548,9 @@ class SentinelScheduler:
             'zeek_beacon_last_scan_at': (
                 self._last_zeek_beacon_scan_at.isoformat() if self._last_zeek_beacon_scan_at else None
             ),
+            'spike_ip_enrichment_last_run_at': (
+                self._last_spike_ip_enrichment_at.isoformat() if self._last_spike_ip_enrichment_at else None
+            ),
             'clamav_reachable': self._clamav_reachable,
             'suricata_last_check_at': (
                 self._last_suricata_check_at.isoformat() if self._last_suricata_check_at else None
@@ -1573,6 +1730,7 @@ def init_scheduler(app: Flask) -> None:
         zeek_extract_dir=app.config['ZEEK_EXTRACT_DIR'],
         zeek_dns_poll_interval_s=app.config['ZEEK_DNS_POLL_INTERVAL_SECONDS'],
         zeek_beacon_scan_interval_s=app.config['ZEEK_BEACON_SCAN_INTERVAL_SECONDS'],
+        spike_ip_enrichment_interval_s=app.config['SPIKE_IP_ENRICHMENT_INTERVAL_SECONDS'],
         clamav_host=app.config['CLAMAV_HOST'],
         clamav_port=app.config['CLAMAV_PORT'],
         suricata_eve_log_path=app.config['SURICATA_EVE_LOG_PATH'],
@@ -1582,6 +1740,7 @@ def init_scheduler(app: Flask) -> None:
         alert_auto_resolve_check_interval_s=app.config['ALERT_AUTO_RESOLVE_CHECK_INTERVAL_SECONDS'],
         device_identity_link_scan_interval_s=app.config['DEVICE_IDENTITY_LINK_SCAN_INTERVAL_SECONDS'],
         stale_device_reap_interval_s=app.config['STALE_DEVICE_REAP_INTERVAL_SECONDS'],
+        device_archive_sweep_interval_s=app.config['DEVICE_ARCHIVE_SWEEP_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
         deployment_tier=app.config['DEPLOYMENT_TIER'],
     )

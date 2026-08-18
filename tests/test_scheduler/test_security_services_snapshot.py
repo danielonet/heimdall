@@ -15,6 +15,7 @@ def _scheduler(tier='full', **overrides):
     sched._last_canary_check_at = None
     sched._last_zeek_dns_check_at = None
     sched._last_zeek_beacon_scan_at = None
+    sched._last_spike_ip_enrichment_at = None
     sched._clamav_reachable = None
     sched._last_suricata_check_at = None
     for key, value in overrides.items():

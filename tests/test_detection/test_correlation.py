@@ -141,6 +141,24 @@ class TestFindNewIncidents:
         assert matches[0]['trigger_alert_id'] == trigger_id
         assert matches[0]['follow_alert_id'] == follow_id
 
+    async def test_exposure_then_malicious_traffic_destination(self, correlator):
+        """MALICIOUS_TRAFFIC_DESTINATION (SentinelScheduler._spike_ip_enrichment_job's
+        escalation) is a follow_type on EXPOSURE_THEN_COMPROMISE too — a
+        device with a known prior weakness now confirmed talking to a
+        malicious IP is a stronger compromise signal."""
+        now = datetime.now(timezone.utc)
+        trigger_id = await _add_alert(_MAC, 'HIGH_RISK_PORT_OPENED', now - timedelta(hours=20))
+        follow_id = await _add_alert(_MAC, 'MALICIOUS_TRAFFIC_DESTINATION', now - timedelta(hours=1))
+
+        async with get_session() as session:
+            incidents = await correlator.find_new_incidents(session)
+
+        matches = [i for i in incidents if i['mac'] == _MAC]
+        assert len(matches) == 1
+        assert matches[0]['pattern_name'] == 'EXPOSURE_THEN_COMPROMISE'
+        assert matches[0]['trigger_alert_id'] == trigger_id
+        assert matches[0]['follow_alert_id'] == follow_id
+
     async def test_a_recurring_trigger_is_found_via_last_seen_not_created_at(self, correlator):
         """AlertRepository.upsert() touches (rather than re-inserts) a
         still-recurring trigger alert, so created_at is set once at first

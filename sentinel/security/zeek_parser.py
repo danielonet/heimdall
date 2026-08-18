@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -140,6 +142,101 @@ class ZeekConnBeaconDetector:
                     'interval_std_s': round(intervals.std(), 2),
                 })
         return suspicious
+
+
+@dataclass
+class ConnTalker:
+    """One (local_ip, remote_ip) pair from a ZeekConnVolumeCorrelator window
+    query, with the total bytes and connection count observed between them."""
+    local_ip: str
+    remote_ip: str
+    total_bytes: int
+    connection_count: int
+
+
+class ZeekConnVolumeCorrelator:
+    """Correlates a local IP (or set of them) to the remote IP it exchanged
+    the most bytes with in a time window, via Zeek's conn.log — the only
+    source of per-connection remote-IP data in this system (TrafficSample,
+    sentinel/adapter/models.py, is aggregate-only — the router's XMO API
+    exposes no per-flow data at all). Used to attribute a traffic-volume
+    spike alert, which carries no IP of its own, to an actual destination —
+    see SentinelScheduler._spike_ip_enrichment_job.
+
+    Unlike ZeekConnBeaconDetector (which needs the *whole* file to compute
+    per-pair interval statistics across all of history), this only ever
+    needs a short window per lookup, and conn.log never rotates on this
+    deployment (confirmed live — a single ever-growing file since its
+    creation) — so re-parsing the whole thing on every call would be
+    needless, growing cost. Tail-reads a bounded number of bytes instead.
+    """
+
+    def __init__(self, log_dir: str, tail_bytes: int = 4_000_000) -> None:
+        self._log_path = Path(log_dir) / 'conn.log'
+        self._tail_bytes = tail_bytes
+
+    def top_talkers(
+        self, *, local_ips: set[str], since: datetime, until: datetime, top_n: int = 3,
+    ) -> list[ConnTalker]:
+        """Returns up to top_n ConnTalkers for connections in [since, until]
+        where exactly one side of the connection is in local_ips — ranked by
+        total bytes (orig_bytes + resp_bytes) descending. A connection with
+        both endpoints local (LAN-to-LAN) or neither (shouldn't happen, but
+        defensively skipped) never produces a WAN destination, so it's
+        excluded rather than attributed to either side."""
+        since_ts, until_ts = since.timestamp(), until.timestamp()
+        totals: dict[tuple[str, str], list[int]] = {}  # (local, remote) -> [bytes, count]
+
+        for line in self._tail_lines():
+            try:
+                row = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            ts = row.get('ts')
+            orig, resp = row.get('id.orig_h'), row.get('id.resp_h')
+            if ts is None or orig is None or resp is None:
+                continue
+            if not (since_ts <= ts <= until_ts):
+                continue
+            if orig in local_ips and resp not in local_ips:
+                local, remote = orig, resp
+            elif resp in local_ips and orig not in local_ips:
+                local, remote = resp, orig
+            else:
+                continue
+
+            entry = totals.setdefault((local, remote), [0, 0])
+            entry[0] += int(row.get('orig_bytes', 0) or 0) + int(row.get('resp_bytes', 0) or 0)
+            entry[1] += 1
+
+        talkers = [
+            ConnTalker(local_ip=local, remote_ip=remote, total_bytes=byte_count, connection_count=count)
+            for (local, remote), (byte_count, count) in totals.items()
+        ]
+        talkers.sort(key=lambda t: t.total_bytes, reverse=True)
+        return talkers[:top_n]
+
+    def _tail_lines(self) -> list[str]:
+        """Reads up to self._tail_bytes from the end of conn.log and returns
+        its complete lines. If the read had to seek past the start of the
+        file, the first line of the chunk is dropped — a mid-file byte
+        offset almost never lands on a record boundary, same "may be
+        truncated, throw it away" posture as ZeekDnsLogReader's offset
+        handling. A seek to offset 0 (the whole file fits within
+        tail_bytes) has no such truncation risk, so nothing is dropped."""
+        try:
+            size = self._log_path.stat().st_size
+            offset = max(0, size - self._tail_bytes)
+            with open(self._log_path, 'rb') as f:
+                f.seek(offset)
+                chunk = f.read()
+        except OSError:
+            return []
+
+        lines = chunk.split(b'\n')
+        if offset > 0 and len(lines) > 1:
+            lines = lines[1:]
+        return [ln.decode('utf-8', errors='replace') for ln in lines if ln.strip()]
 
 
 class ZeekFileExtractionWatcher:

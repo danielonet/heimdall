@@ -28,6 +28,14 @@ async def _seed_linked_device(mac: str, *, linked_to_mac: str, hostname: str = '
         ))
 
 
+async def _seed_archived_device(mac: str, hostname: str = 'archived-device') -> None:
+    async with get_session() as session:
+        session.add(Device(
+            mac_address=mac, hostname=hostname,
+            is_archived=True, archived_at=datetime.now(timezone.utc), archive_reason='test',
+        ))
+
+
 def _seed_traffic_sample() -> None:
     async def _seed():
         async with get_session() as session:
@@ -154,6 +162,25 @@ class TestListDevices:
         assert _MAC in macs
         assert _MAC_2 not in macs
 
+    def test_archived_devices_are_excluded_by_default(self, client):
+        _seed_device()
+        asyncio.run(_seed_archived_device(_MAC_2))
+
+        resp = client.get('/api/devices')
+
+        macs = [d['mac_address'] for d in resp.get_json()['devices']]
+        assert _MAC in macs
+        assert _MAC_2 not in macs
+
+    def test_archived_true_returns_only_archived_devices(self, client):
+        _seed_device()
+        asyncio.run(_seed_archived_device(_MAC_2))
+
+        resp = client.get('/api/devices?archived=true')
+
+        macs = [d['mac_address'] for d in resp.get_json()['devices']]
+        assert macs == [_MAC_2]
+
 
 class TestGetDevice:
     def test_not_found(self, client):
@@ -202,6 +229,18 @@ class TestGetDevice:
         assert body['linked_to_hostname'] is None
         assert body['linked_into'] == []
 
+    def test_an_archived_device_is_still_directly_reachable(self, client):
+        """Unlike the list endpoint, GET /<mac> stays unfiltered — this is
+        the only path to an archived device's UNARCHIVE button."""
+        asyncio.run(_seed_archived_device(_MAC))
+
+        resp = client.get(f'/api/devices/{_MAC}')
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['is_archived'] is True
+        assert body['archive_reason'] == 'test'
+
 
 class TestUnlinkDevice:
     def test_unlinks_a_linked_device(self, client):
@@ -230,6 +269,33 @@ class TestUnlinkDevice:
         asyncio.run(_seed_device_with_hostname(_MAC, 'canonical-device'))
         asyncio.run(_seed_linked_device(_MAC_2, linked_to_mac=_MAC))
         resp = client.post(f'/api/devices/{_MAC_2}/unlink')
+        assert resp.status_code == 200
+
+
+class TestUnarchiveDevice:
+    def test_unarchives_a_device(self, client):
+        asyncio.run(_seed_archived_device(_MAC))
+
+        resp = client.post(f'/api/devices/{_MAC}/unarchive')
+
+        assert resp.status_code == 200
+        assert resp.get_json()['is_archived'] is False
+
+        list_resp = client.get('/api/devices')
+        assert _MAC in [d['mac_address'] for d in list_resp.get_json()['devices']]
+
+    def test_unknown_mac_returns_404(self, client):
+        resp = client.post(f'/api/devices/{_MAC}/unarchive')
+        assert resp.status_code == 404
+
+    def test_not_currently_archived_returns_404(self, client):
+        _seed_device()
+        resp = client.post(f'/api/devices/{_MAC}/unarchive')
+        assert resp.status_code == 404
+
+    def test_no_auth_required(self, client):
+        asyncio.run(_seed_archived_device(_MAC))
+        resp = client.post(f'/api/devices/{_MAC}/unarchive')
         assert resp.status_code == 200
 
 

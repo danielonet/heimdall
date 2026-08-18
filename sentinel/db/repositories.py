@@ -60,6 +60,21 @@ class DeviceRepository:
             result = await session.execute(select(Device.mac_address).limit(1))
             return result.first() is None
 
+    async def list_online(self) -> list[tuple[str, str]]:
+        """(mac_address, ip_address) pairs for every device currently online
+        with a known IP. Used by SentinelScheduler._spike_ip_enrichment_job
+        to build the local-IP set for a household-wide WAN_BANDWIDTH_SPIKE
+        alert (which has no device_mac of its own) — deliberately scoped to
+        *currently* online devices rather than every device ever seen, since
+        a long-offline device's stale ip_address may since have been
+        DHCP-reassigned to something else, which would misattribute traffic.
+        """
+        async with get_session() as session:
+            stmt = select(Device.mac_address, Device.ip_address).where(
+                Device.is_online.is_(True), Device.ip_address.isnot(None),
+            )
+            return [(mac, ip) for mac, ip in (await session.execute(stmt)).all()]
+
     async def get_ap_alias(self, mac_address: str) -> str | None:
         """The AP alias (PRIV0/VID1/GUEST2G/GUEST5G/AP_BACKHAUL) this MAC was
         associated with as of its last persisted poll, or None if it has no
@@ -149,6 +164,53 @@ class DeviceRepository:
                 select(Device).where(Device.linked_to_mac == mac_address).order_by(Device.linked_at.desc())
             )
             return list(result.scalars().all())
+
+    async def archive_stale(self, older_than: timedelta) -> int:
+        """Soft-archives every device whose last_seen predates the cutoff.
+        Exemptions, each a deliberate safety gate:
+          - is_trusted: an admin already vouched for this device — a long
+            absence (e.g. a vacation-home camera) shouldn't make a trusted
+            device disappear on its own.
+          - is_blocked / is_quarantined: an active security decision worth
+            staying visible, not filed away as routine housekeeping.
+          - linked_to_mac IS NOT NULL: already hidden as a stale duplicate
+            under link() — a separate mechanism, not this one's concern.
+          - already is_archived: idempotent, a repeat sweep is a no-op for it.
+        A currently-online device can never match last_seen < cutoff —
+        _upsert_devices (sentinel/scheduler/jobs.py) only ever advances
+        last_seen while is_online is true — so no explicit is_online guard
+        is needed here. Returns the count archived. Used by
+        SentinelScheduler._device_archive_sweep_job.
+        """
+        cutoff = datetime.now(timezone.utc) - older_than
+        async with get_session() as session:
+            stmt = select(Device).where(
+                Device.is_archived.is_(False),
+                Device.is_trusted.is_(False),
+                Device.is_blocked.is_(False),
+                Device.is_quarantined.is_(False),
+                Device.linked_to_mac.is_(None),
+                Device.last_seen < cutoff,
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                row.is_archived = True
+                row.archived_at = now
+                row.archive_reason = f'No activity for over {older_than.days} days'
+            return len(rows)
+
+    async def unarchive(self, mac_address: str) -> bool:
+        """Manual undo for archive_stale() — clears is_archived/archived_at/
+        archive_reason. False if unknown or not currently archived."""
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            if device is None or not device.is_archived:
+                return False
+            device.is_archived = False
+            device.archived_at = None
+            device.archive_reason = None
+            return True
 
 
 class DeviceTypeProfileRepository:
@@ -341,6 +403,28 @@ class AlertRepository:
                 row.resolved_at = now
             return len(rows)
 
+    async def merge_raw_data(self, alert_id: int, extra: dict) -> bool:
+        """Shallow-merges extra into an existing alert's raw_data — a one-off
+        post-hoc annotation (e.g. SentinelScheduler._spike_ip_enrichment_job),
+        not part of the upsert()/resolve() lifecycle above: it doesn't touch
+        resolved/last_seen/occurrence_count, and is keyed by primary key
+        rather than the (device_mac, alert_type, dedup_key) match upsert()
+        uses — the caller already has the exact row, so re-deriving the
+        match would risk touching a different, newer occurrence of the same
+        open alert. Returns False if the alert no longer exists.
+
+        raw_data is a plain JSONB column (not MutableDict-tracked), so
+        SQLAlchemy only detects a whole-value reassignment, never an
+        in-place dict mutation — same reasoning as upsert()'s touch path
+        above (row.raw_data = raw_data, never row.raw_data.update(...)).
+        """
+        async with get_session() as session:
+            row = await session.get(Alert, alert_id)
+            if row is None:
+                return False
+            row.raw_data = {**(row.raw_data or {}), **extra}
+            return True
+
 
 class SettingsRepository:
     """Read/write access to the singleton app_settings row — the runtime-
@@ -381,6 +465,7 @@ class SettingsRepository:
                 'last_digest_sent_at': row.last_digest_sent_at if row else None,
                 'alert_stale_hours': row.alert_stale_hours if row else 24,
                 'alert_auto_resolve_hours': row.alert_auto_resolve_hours if row else 72,
+                'device_archive_after_days': row.device_archive_after_days if row else 90,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -489,6 +574,14 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.alert_auto_resolve_hours = hours
+
+    async def get_device_archive_after_days(self) -> int:
+        return (await self.get_all())['device_archive_after_days']
+
+    async def set_device_archive_after_days(self, days: int) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.device_archive_after_days = days
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

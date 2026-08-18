@@ -37,6 +37,10 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'linked_to_mac': device.linked_to_mac,
         'linked_at': device.linked_at.isoformat() if device.linked_at else None,
         'link_reason': device.link_reason,
+        # Stale device cleanup — see sentinel/db/repositories.py:DeviceRepository.
+        'is_archived': device.is_archived,
+        'archived_at': device.archived_at.isoformat() if device.archived_at else None,
+        'archive_reason': device.archive_reason,
     }
 
 

@@ -21,19 +21,27 @@ async def list_devices():
     """All connected devices with latest snapshot, traffic, and threat score.
 
     Excludes devices linked away as a stale duplicate of another device (see
-    DeviceRepository.link()/sentinel/detection/device_identity.py) — this is
-    the single source every frontend device count/list derives from
-    (dashboard online count, devices list, network map all fetch this one
-    endpoint), so filtering here is enough to fix all of them at once.
-    Linked-away devices are still reachable directly via GET /<mac> (that's
-    how their UNLINK button is discoverable) — only this list view hides them.
+    DeviceRepository.link()/sentinel/detection/device_identity.py) and
+    devices soft-archived for long inactivity (see DeviceRepository.
+    archive_stale()) — this is the single source every frontend device
+    count/list derives from (dashboard online count, devices list, network
+    map all fetch this one endpoint), so filtering here is enough to fix
+    all of them at once. Both kinds of hidden device are still reachable
+    directly via GET /<mac> (that's how their UNLINK/UNARCHIVE buttons are
+    discoverable) — only this list view hides them.
+
+    ?archived=true flips the query to show ONLY archived devices instead —
+    powers the Settings tab's device archive review list.
     """
+    show_archived = request.args.get('archived', '').lower() in ('true', '1')
+
     async with get_session() as session:
-        devices = (await session.execute(
-            select(Device)
-            .where(Device.linked_to_mac.is_(None))
-            .order_by(Device.is_online.desc(), Device.last_seen.desc())
-        )).scalars().all()
+        query = select(Device).order_by(Device.is_online.desc(), Device.last_seen.desc())
+        if show_archived:
+            query = query.where(Device.is_archived.is_(True))
+        else:
+            query = query.where(Device.linked_to_mac.is_(None), Device.is_archived.is_(False))
+        devices = (await session.execute(query)).scalars().all()
 
         latest_samples = (await session.execute(
             select(TrafficSample)
@@ -111,6 +119,20 @@ async def unlink_device(mac: str):
     un-hides a device from list_devices, no privileged action."""
     if not await DeviceRepository().unlink(mac):
         return jsonify(error='Device not found or not currently linked'), 404
+    async with get_session() as session:
+        device = await session.get(Device, mac)
+        payload = device_to_dict(device)
+    return jsonify(payload)
+
+
+@bp.route('/<mac>/unarchive', methods=['POST'])
+async def unarchive_device(mac: str):
+    """Manual undo for the stale-device archive sweep (see
+    DeviceRepository.archive_stale()) — restores mac to the normal device
+    list. Unauthenticated, same posture as /unlink: this only un-hides a
+    device from list_devices, no privileged action."""
+    if not await DeviceRepository().unarchive(mac):
+        return jsonify(error='Device not found or not currently archived'), 404
     async with get_session() as session:
         device = await session.get(Device, mac)
         payload = device_to_dict(device)

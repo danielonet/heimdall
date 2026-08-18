@@ -5,6 +5,7 @@ import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
 import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
 import { MitigationNote } from '../../components/alerts/MitigationNote'
+import { RemoteIpNote } from '../../components/alerts/RemoteIpNote'
 import { isStale } from '../../lib/alertStaleness'
 
 const FILTER_GROUPS = [
@@ -60,6 +61,7 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
               </div>
               <div className="text-[9px] text-text-secondary">{a.description}</div>
               <MitigationNote text={a.mitigation} />
+              <RemoteIpNote rawData={a.raw_data} />
               <div className="mt-1 flex items-center gap-2 text-[9px] text-text-muted">
                 {a.device_mac && (
                   <Link to={`/devices/${a.device_mac}`} className="text-accent-blue">

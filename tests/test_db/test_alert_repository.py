@@ -228,3 +228,42 @@ class TestResolveStaleOpen:
 
         closed_count = await AlertRepository().resolve_stale_open(timedelta(hours=72))
         assert closed_count == 0
+
+
+class TestMergeRawData:
+    async def test_merges_without_clobbering_existing_keys(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+            raw_data={'throughput_up_kbps': 500},
+        )
+        ok = await AlertRepository().merge_raw_data(alert.id, {'remote_ip': '203.0.113.10'})
+        assert ok is True
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.raw_data == {'throughput_up_kbps': 500, 'remote_ip': '203.0.113.10'}
+
+    async def test_overwrites_a_key_that_already_existed(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+            raw_data={'ip_enrichment_done': False},
+        )
+        await AlertRepository().merge_raw_data(alert.id, {'ip_enrichment_done': True})
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.raw_data == {'ip_enrichment_done': True}
+
+    async def test_handles_null_raw_data(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        await AlertRepository().merge_raw_data(alert.id, {'remote_ip': '203.0.113.10'})
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.raw_data == {'remote_ip': '203.0.113.10'}
+
+    async def test_returns_false_for_unknown_alert_id(self):
+        ok = await AlertRepository().merge_raw_data(999_999_999, {'remote_ip': '203.0.113.10'})
+        assert ok is False

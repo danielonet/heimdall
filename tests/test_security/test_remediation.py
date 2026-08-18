@@ -55,6 +55,16 @@ class TestBuildMitigation:
         text = build_mitigation('HONEYPOT_ACCESS', {'logdata': {'SERVICE': 'telnet'}})
         assert 'telnet' in text
 
+    def test_malicious_traffic_destination_names_the_remote_ip_and_trigger(self):
+        text = build_mitigation(
+            'MALICIOUS_TRAFFIC_DESTINATION', {'remote_ip': '203.0.113.10', 'trigger_alert_type': 'HIGH_UPLOAD'},
+        )
+        assert '203.0.113.10' in text
+        assert 'high upload' in text.lower()
+
+    def test_malicious_traffic_destination_degrades_with_no_raw_data(self):
+        assert build_mitigation('MALICIOUS_TRAFFIC_DESTINATION', None) is not None
+
     def test_malformed_raw_data_shape_does_not_raise(self):
         """findings/logdata as the wrong type entirely — must degrade to
         None, never propagate an exception into the caller's poll loop."""

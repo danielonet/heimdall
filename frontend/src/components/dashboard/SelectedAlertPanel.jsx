@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { BlockButton } from '../BlockButton'
 import { MitigationNote } from '../alerts/MitigationNote'
+import { RemoteIpNote } from '../alerts/RemoteIpNote'
 
 // Severity-keyed styling — this panel shows whichever alert is "current":
 // the single open CRITICAL alert by default (see DashboardPage), or
@@ -23,6 +24,7 @@ export function SelectedAlertPanel({ alert }) {
       <div className={`mb-2 text-[9px] tracking-[2px] ${style.text}`}>{style.label}</div>
       <div className="mb-1 text-sm text-text-primary">{alert.description}</div>
       <MitigationNote text={alert.mitigation} />
+      <RemoteIpNote rawData={alert.raw_data} />
       <div className="mb-3 mt-2 text-[9px] text-text-muted">
         {alert.device_mac ? (
           <Link to={`/devices/${alert.device_mac}`} className="underline hover:text-text-secondary">

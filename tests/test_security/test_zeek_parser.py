@@ -1,7 +1,9 @@
 import json
+from datetime import datetime, timezone
 
 from sentinel.security.zeek_parser import (
     ZeekConnBeaconDetector,
+    ZeekConnVolumeCorrelator,
     ZeekDnsIngester,
     ZeekDnsLogReader,
     ZeekFileExtractionWatcher,
@@ -124,6 +126,128 @@ class TestZeekConnBeaconDetector:
 
         detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
         assert detector.detect() == []
+
+
+def _conn_row_full(src: str, dst: str, ts: float, orig_bytes: int = 100, resp_bytes: int = 100) -> dict:
+    row = {'id.orig_h': src, 'id.resp_h': dst, 'ts': ts}
+    if orig_bytes is not None:
+        row['orig_bytes'] = orig_bytes
+    if resp_bytes is not None:
+        row['resp_bytes'] = resp_bytes
+    return row
+
+
+def _dt(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+class TestZeekConnVolumeCorrelator:
+    def test_missing_file_returns_empty(self, tmp_path):
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        result = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000))
+        assert result == []
+
+    def test_finds_top_talker_by_total_bytes(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        rows = [
+            _conn_row_full('10.100.102.50', '203.0.113.10', ts=100, orig_bytes=500, resp_bytes=500),
+            _conn_row_full('10.100.102.50', '198.51.100.20', ts=110, orig_bytes=10, resp_bytes=10),
+        ]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000))
+
+        assert len(talkers) == 2
+        assert talkers[0].remote_ip == '203.0.113.10'
+        assert talkers[0].local_ip == '10.100.102.50'
+        assert talkers[0].total_bytes == 1000
+        assert talkers[0].connection_count == 1
+
+    def test_direction_inference_when_local_is_responder(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        row = _conn_row_full('203.0.113.10', '10.100.102.50', ts=100, orig_bytes=300, resp_bytes=200)
+        log_path.write_text(json.dumps(row) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000))
+
+        assert len(talkers) == 1
+        assert talkers[0].local_ip == '10.100.102.50'
+        assert talkers[0].remote_ip == '203.0.113.10'
+        assert talkers[0].total_bytes == 500
+
+    def test_both_local_and_neither_local_are_excluded(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        rows = [
+            _conn_row_full('10.100.102.50', '10.100.102.51', ts=100),  # both local
+            _conn_row_full('203.0.113.10', '198.51.100.20', ts=110),   # neither local
+        ]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(
+            local_ips={'10.100.102.50', '10.100.102.51'}, since=_dt(0), until=_dt(1000),
+        )
+        assert talkers == []
+
+    def test_window_filtering_excludes_rows_outside_range(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        rows = [
+            _conn_row_full('10.100.102.50', '203.0.113.10', ts=50, orig_bytes=999, resp_bytes=999),  # before window
+            _conn_row_full('10.100.102.50', '203.0.113.10', ts=500, orig_bytes=10, resp_bytes=10),   # inside
+            _conn_row_full('10.100.102.50', '203.0.113.10', ts=5000, orig_bytes=999, resp_bytes=999),  # after
+        ]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(100), until=_dt(1000))
+
+        assert len(talkers) == 1
+        assert talkers[0].total_bytes == 20
+        assert talkers[0].connection_count == 1
+
+    def test_top_n_truncation(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        rows = [
+            _conn_row_full('10.100.102.50', f'203.0.113.{i}', ts=100 + i, orig_bytes=i * 10, resp_bytes=0)
+            for i in range(1, 6)
+        ]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000), top_n=2)
+
+        assert len(talkers) == 2
+        assert talkers[0].remote_ip == '203.0.113.5'
+        assert talkers[1].remote_ip == '203.0.113.4'
+
+    def test_missing_byte_fields_default_to_zero(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        row = {'id.orig_h': '10.100.102.50', 'id.resp_h': '203.0.113.10', 'ts': 100}  # no orig_bytes/resp_bytes
+        log_path.write_text(json.dumps(row) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path))
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000))
+
+        assert len(talkers) == 1
+        assert talkers[0].total_bytes == 0
+
+    def test_tail_read_excludes_lines_beyond_tail_bytes(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        # Old row, far enough back it'll fall outside a tiny tail_bytes window.
+        old_row = _conn_row_full('10.100.102.50', '203.0.113.10', ts=100, orig_bytes=999, resp_bytes=999)
+        padding = '\n'.join(json.dumps(_conn_row_full('10.100.102.99', '10.100.102.98', ts=200 + i)) for i in range(200))
+        new_row = _conn_row_full('10.100.102.50', '198.51.100.20', ts=900, orig_bytes=5, resp_bytes=5)
+        log_path.write_text(json.dumps(old_row) + '\n' + padding + '\n' + json.dumps(new_row) + '\n')
+
+        correlator = ZeekConnVolumeCorrelator(str(tmp_path), tail_bytes=200)
+        talkers = correlator.top_talkers(local_ips={'10.100.102.50'}, since=_dt(0), until=_dt(1000))
+
+        # Only the tail-resident new_row should survive — the old_row (with
+        # its much larger byte count) must be excluded by the tail read, not
+        # just outrank on total_bytes.
+        assert all(t.remote_ip != '203.0.113.10' for t in talkers)
 
 
 class TestZeekFileExtractionWatcher:

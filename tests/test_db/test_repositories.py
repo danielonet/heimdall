@@ -7,6 +7,7 @@ whose connection pool must be created on the same event loop pytest-asyncio
 gives this test).
 """
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -173,6 +174,34 @@ async def _seed_device(mac: str, **overrides) -> None:
         session.add(Device(mac_address=mac, hostname=f'device-{mac}', **overrides))
 
 
+class TestListOnline:
+    async def test_returns_online_devices_with_a_known_ip(self):
+        await _seed_device(_MAC, is_online=True, ip_address='10.100.102.50')
+
+        result = await DeviceRepository().list_online()
+
+        assert result == [(_MAC, '10.100.102.50')]
+
+    async def test_excludes_offline_devices(self):
+        await _seed_device(_MAC, is_online=False, ip_address='10.100.102.50')
+
+        assert await DeviceRepository().list_online() == []
+
+    async def test_excludes_online_devices_with_no_ip(self):
+        await _seed_device(_MAC, is_online=True, ip_address=None)
+
+        assert await DeviceRepository().list_online() == []
+
+    async def test_multiple_online_devices(self):
+        await _seed_device(_MAC, is_online=True, ip_address='10.100.102.50')
+        await _seed_device(_MAC_2, is_online=True, ip_address='10.100.102.51')
+        await _seed_device(_MAC_3, is_online=False, ip_address='10.100.102.52')
+
+        result = await DeviceRepository().list_online()
+
+        assert set(result) == {(_MAC, '10.100.102.50'), (_MAC_2, '10.100.102.51')}
+
+
 class TestLink:
     async def test_sets_all_three_columns(self):
         await _seed_device(_MAC)
@@ -264,6 +293,102 @@ class TestGetLinkedInto:
         assert await DeviceRepository().get_linked_into(_MAC) == []
 
 
+class TestArchiveStale:
+    async def test_archives_a_device_past_the_cutoff(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old)
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert archived_count == 1
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device.is_archived is True
+        assert device.archived_at is not None
+        assert '90' in device.archive_reason
+
+    async def test_leaves_a_recently_seen_device_alone(self):
+        recent = datetime.now(timezone.utc) - timedelta(days=1)
+        await _seed_device(_MAC, last_seen=recent)
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert archived_count == 0
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device.is_archived is False
+
+    async def test_exempts_a_trusted_device(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old, is_trusted=True)
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert archived_count == 0
+
+    async def test_exempts_a_blocked_device(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old, is_blocked=True)
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert archived_count == 0
+
+    async def test_exempts_a_quarantined_device(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old, is_quarantined=True)
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert archived_count == 0
+
+    async def test_exempts_an_already_linked_away_device(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC_2, last_seen=old)
+        await _seed_device(_MAC, last_seen=old, linked_to_mac=_MAC_2, linked_at=old, link_reason='x')
+
+        archived_count = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        # _MAC_2 (the survivor) is a genuine stale candidate and gets archived;
+        # _MAC (already linked away) must not be double-counted/touched again.
+        assert archived_count == 1
+        async with get_session() as session:
+            linked_away = await session.get(Device, _MAC)
+        assert linked_away.archived_at is None
+
+    async def test_idempotent_on_repeat_sweep(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old)
+
+        first = await DeviceRepository().archive_stale(timedelta(days=90))
+        second = await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert first == 1
+        assert second == 0
+
+
+class TestUnarchive:
+    async def test_clears_all_three_columns(self):
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await _seed_device(_MAC, last_seen=old)
+        await DeviceRepository().archive_stale(timedelta(days=90))
+
+        assert await DeviceRepository().unarchive(_MAC) is True
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device.is_archived is False
+        assert device.archived_at is None
+        assert device.archive_reason is None
+
+    async def test_unknown_mac_returns_false(self):
+        assert await DeviceRepository().unarchive(_MAC) is False
+
+    async def test_not_currently_archived_returns_false(self):
+        await _seed_device(_MAC)
+        assert await DeviceRepository().unarchive(_MAC) is False
+
+
 class TestSettingsRepository:
     async def test_falls_back_to_the_env_default_with_no_row(self):
         assert await SettingsRepository().get_ml_learning_period_hours() == settings.ML_LEARNING_PERIOD_HOURS
@@ -318,7 +443,7 @@ class TestSettingsRepository:
             'armed_retrain_done', 'sniff_iface', 'router_username', 'ntfy_url', 'smtp_host',
             'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
             'auto_block_on_threat', 'auto_block_expiry_hours', 'last_digest_sent_at',
-            'alert_stale_hours', 'alert_auto_resolve_hours',
+            'alert_stale_hours', 'alert_auto_resolve_hours', 'device_archive_after_days',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):
