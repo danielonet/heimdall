@@ -25,8 +25,14 @@
 | Cross-Alert Correlation | Escalates a matching pair of alerts on the same device into one higher-severity incident |
 | Time-Limited Auto-Block | An auto-block (not a manual one) expires after a configurable window and re-notifies |
 | Quarantine Tier | WAN-only block — cuts internet, leaves the device reachable on the LAN |
-| Signal-Strength Anomaly | Flags a WiFi device's RSSI shifting and holding at a new level (possible MAC-spoofed swap) |
+| Signal-Strength Anomaly | Flags a WiFi device's RSSI shifting and holding at a new level (possible MAC-spoofed swap) — see Test 22 |
 | Suricata IDS | Signature-based IDS tailing its own EVE JSON log — matches live traffic against a maintained rule set (see Test 19) |
+| WAN-Wide Bandwidth Spike | Household-total throughput (all devices combined) outlier vs. a rolling baseline — distinct from the per-device detectors in Test 6 (see Test 20) |
+| AP Trust-Boundary Crossing | Flags a device moving between guest and private Wi-Fi SSIDs, escalating CRITICAL on a guest→private move (see Test 21) |
+| Custom Detection Rules | User-authored condition→action rules (DeviceSnapshot/TrafficSample triggers; ALERT/BLOCK_DEVICE/NOTIFY/TAG_DEVICE/RATE_LIMIT actions) (see Test 23) |
+| Malicious Traffic Destination | Correlates a traffic-spike alert to the remote IP it was headed to via Zeek's conn.log, checks it against threat intel, escalates a real match (see Test 24) |
+| Device Identity Auto-Linking | Recognizes MAC-randomization roaming (same hostname, ARP-confirmed) and merges duplicate device rows — housekeeping, not an attack signal (see Check D) |
+| Device Archive Sweep | Soft-archives devices with no activity for a configurable window — housekeeping, not an attack signal (see Check E) |
 
 ---
 
@@ -155,6 +161,14 @@ sudo dhclient -r eth0 && sudo dhclient -H iphone-test eth0
 `playstation`/`ps5`/`ps4` → sony) — pick a hostname containing one of these
 exact substrings.
 
+**Note — a second, distinct alert_type from the same detector:** the same
+`VendorMismatchDetector` also produces `VENDOR_UNVERIFIED` (INFO severity)
+when a device's MAC OUI can't be resolved to any vendor at all (a blank/
+unknown OUI, not a hostname/vendor mismatch) — not worth a dedicated attack
+simulation, but don't be surprised to see this alert_type appear on a
+locally-administered/randomized MAC (Kali's own vendor NIC is normally
+resolvable, but a spoofed or randomized MAC may not be).
+
 **Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
 
 **Notes:** _______________________________________________
@@ -281,6 +295,10 @@ sudo hping3 -2 --flood -p 53 192.168.1.1
   connection — on a fresh install, or a Kali box that just connected for
   the first time, expect **no** `ANOMALOUS_VOLUME` alert until that window
   passes, even under an obvious flood
+
+**Note:** this test only covers *per-device* volume/ratio anomalies. The
+household-wide analog — total WAN throughput across every device combined —
+is a separate detector with its own alert_type; see Test 20.
 
 **Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
 
@@ -803,6 +821,258 @@ not a Heimdall ingestion problem, and worth ruling out before treating a
 
 ---
 
+## Section C.2 — Additional Detectors (Added Since Initial Verification)
+
+Numbered to continue the sequence rather than renumbering Tests 1-19 — same
+precedent as Test 19 itself, appended after Section D when it was wired up
+later. These five cover every alert_type introduced since this document's
+first pass; cross-checked against the full current `sentinel/` codebase.
+
+### Test 20 — WAN-Wide Bandwidth Spike
+
+**Objective:** Verify Heimdall's household-wide (not per-device) traffic
+detector flags a spike in *total* WAN throughput across every device
+combined — a separate detector/alert_type from Test 6's per-device checks.
+
+**Kali Tool:** iperf3 (cleaner sustained-throughput generator than a flood
+tool for this test) or hping3, run from **two or more** devices at once
+
+**Command Line:**
+```bash
+# Option 1 — iperf3 against a server you control (avoids DoS-flavored
+# traffic against a target you don't own)
+iperf3 -c <your_iperf3_server> -t 60 -P 4
+
+# Option 2 — reuse Test 6's hping3 flood, but from multiple devices
+# simultaneously so the *combined* household total clears the threshold
+sudo hping3 -1 --flood 192.168.1.1
+```
+
+**Note:** `WanBandwidthDetector` keeps a rolling 20-poll (~5min at the
+default 15s interval) baseline, needs at least 10 samples before judging,
+and fires after `mean + 3×stdev` is exceeded for 2 **consecutive** polls
+(~30s sustained). No cooldown timer — it resolves the moment total
+throughput drops back under threshold, so a short burst may both fire and
+auto-resolve before you check the Alerts page.
+
+**Expected Heimdall Response:**
+- `WAN_BANDWIDTH_SPIKE` WARNING alert, `device_mac` is **null** (household-
+  wide, not attributable to one device) — naming total/baseline mean/stdev
+  in `raw_data`
+- No auto-block (never routes through the confirmed-attack pipeline)
+- On the Zeek/full tier, this can also feed Test 24's correlation — see below
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+### Test 21 — AP Trust-Boundary Crossing
+
+**Objective:** Verify Heimdall flags a device roaming between a guest SSID
+and a private SSID — not ordinary band-hopping (e.g. 2.4GHz↔5GHz on the same
+private network, which must NOT fire).
+
+**Kali Tool:** none — this needs a real WiFi client physically reassociating
+to a different SSID (a laptop/phone's own WiFi settings, or `nmcli`/
+`iwconfig` from a WiFi-capable Kali box)
+
+**Command Line (example via nmcli, if the Kali box has a WiFi adapter):**
+```bash
+# 1. Connect to a private SSID, let Heimdall poll at least once (up to one
+#    POLL_INTERVAL_SECONDS, default 15s)
+nmcli dev wifi connect "<private_ssid>" password "<private_psk>"
+sleep 20
+
+# 2. Reassociate to a guest SSID
+nmcli dev wifi connect "<guest_ssid>" password "<guest_psk>"
+sleep 20
+
+# 3. (Optional, for the CRITICAL direction) reassociate back to private
+nmcli dev wifi connect "<private_ssid>" password "<private_psk>"
+```
+
+**Note:** Trust tier is derived purely from the AP alias: anything starting
+with `GUEST` (`GUEST2G`/`GUEST5G`) is the guest tier, everything else
+(`PRIV0`/`VID1`/etc.) is private. Needs two full poll cycles with a genuine
+AP change recorded in between — check the device's `ap_alias` via
+`GET /api/devices` if the alert doesn't fire on the first attempt.
+
+**Expected Heimdall Response:**
+- Private → guest move: `AP_TRUST_CROSSING` **WARNING**
+- Guest → private move: `AP_TRUST_CROSSING` **CRITICAL** (flagged as an
+  unexpected access escalation — nothing in Heimdall legitimately
+  auto-promotes a device from guest to private)
+- No auto-block
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+### Test 22 — WiFi Signal-Strength Anomaly
+
+**Objective:** Verify Heimdall flags a WiFi device's RSSI shifting and
+holding at a new level — a possible signature of a MAC-spoofed device swap
+(same MAC, different physical radio/location).
+
+**Kali Tool:** none — this is read directly from the router's own per-client
+RSSI report each poll; there is no software/packet-level way to fake it
+
+**Command Line:** n/a — physically move a WiFi test device far enough from
+the AP (or back toward it) to shift RSSI by more than 15 dBm, and hold the
+new position for at least two consecutive polls (~30s at the default 15s
+interval)
+
+**Note:** Suppressed for a device's first `ML_LEARNING_PERIOD_HOURS`
+(default **72h**) after its first connection — use a device that's been on
+the network for several days, not a freshly-added one, or this will
+silently do nothing regardless of how far you move it. Wired devices report
+`signal_strength_dbm=0` and are always skipped — this only applies to WiFi.
+
+**Expected Heimdall Response:**
+- `SIGNAL_ANOMALY` WARNING alert once the shift holds for 2 consecutive polls
+- No auto-block
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+### Test 23 — Custom Detection Rule (Rule Engine)
+
+**Objective:** Verify a user-authored rule (not a built-in detector) fires
+its configured action when its condition matches — Heimdall's own
+rule-authoring feature, not a built-in threat signature.
+
+**Kali Tool:** curl (this exercises the API directly, not a network attack)
+
+**Command Line:**
+```bash
+# 1. Log in to get a bearer token
+TOKEN=$(curl -s -X POST http://<heimdall_ip>:5000/api/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username": "<admin_username>", "password": "<admin_password>"}' \
+    | jq -r .access_token)
+
+# 2. Create the simplest possible always-true rule: fires on the very next
+#    poll for every currently-online device, no network condition needed —
+#    good for confirming the rule engine wiring itself, not for testing a
+#    specific detection scenario
+curl -s -X POST http://<heimdall_ip>:5000/api/rules \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{
+      "name": "test-rule-always-fires",
+      "condition_json": {"trigger": "DEVICE_SNAPSHOT", "field": "is_online", "op": "EQ", "value": true, "window_polls": 1},
+      "action_json": {"type": "ALERT", "severity": "WARNING"},
+      "enabled": true
+    }'
+
+# 3. (Optional) dry-run any rule's condition read-only before enabling it —
+#    evaluates against the last 100 rows, executes nothing, persists nothing
+curl -s -X POST http://<heimdall_ip>:5000/api/rules/<rule_id>/test \
+    -H "Authorization: Bearer $TOKEN"
+```
+
+**Note:** `condition_json.trigger` is `DEVICE_SNAPSHOT` (fields: `mac_address`,
+`ip_address`, `hostname`, `vendor_name`, `interface_name`,
+`signal_strength_dbm`, `signal_rate_mbps`, `is_online`, `port_alias`,
+`device_type`, `ap_alias`) or `TRAFFIC_SAMPLE` (fields: `mac_address`,
+`bytes_sent_delta`, `bytes_recv_delta`, `throughput_up_kbps`,
+`throughput_dn_kbps`, `granularity`, `port_alias`, `poll_interval_s`) —
+`op` is one of `GT|LT|GTE|LTE|EQ|NEQ|CONTAINS|IN`. `action_json.type` is one
+of `ALERT|BLOCK_DEVICE|NOTIFY|TAG_DEVICE|RATE_LIMIT`. A `BLOCK_DEVICE` action
+calls the router adapter directly — it does **not** route through the same
+confirmed-attack choke point as every built-in detector, so it won't get the
+`blocked_at`/`blocked_until` auto-expiry stamping Test 14 exercises; a
+rule-triggered block should be treated as indefinite until manually
+unblocked. **Remember to delete or disable this test rule afterward** — an
+always-true `DEVICE_SNAPSHOT`/`is_online` condition will otherwise keep
+firing on every poll indefinitely.
+
+**Expected Heimdall Response:**
+- `RULE_TRIGGERED` alert (severity per `action_json.severity`) for every
+  currently-online device, within one poll cycle
+- The dry-run endpoint returns `matched`/`evaluated` counts and up to 20
+  sample matches, without creating any alert
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
+### Test 24 — Malicious Traffic Destination (Zeek Conn-Log + Threat Intel Correlation)
+
+**Objective:** Verify Heimdall correlates a traffic-spike alert
+(`ANOMALOUS_VOLUME`/`HIGH_UPLOAD`/`WAN_BANDWIDTH_SPIKE`) to the remote IP it
+was actually headed to, via Zeek's conn.log, and escalates a genuine
+threat-intel match to a new CRITICAL, auto-block-eligible finding.
+
+**Requires the `full` deployment tier (Zeek container running)** — the
+enrichment job no-ops entirely on `minimal`/`intermediate`.
+
+**Kali Tool:** whatever produced the underlying spike (Test 6 or Test 20) +
+either real internet egress to a currently-listed threat-feed IP, or a
+direct DB cache seed for a controlled test IP
+
+**Command Line:**
+```bash
+# Step 1 — produce a feeder alert first (reuse Test 6 or Test 20)
+sudo hping3 -1 --flood 192.168.1.1
+
+# Step 2a — REAL feed option: from the SAME device, generate outbound
+# traffic to a currently-listed Tor exit node or Feodo C2 IP (check
+# https://feodotracker.abuse.ch/ or a current Tor exit list at test time —
+# these rotate, do not hardcode an old IP) while the spike is active/recent
+curl -m 5 http://<current-feodo-or-tor-exit-ip>/ || true
+
+# Step 2b — CONTROLLED option (no internet dependency): seed a fake
+# verdict directly into the threat-intel cache for a test IP, so the
+# enrichment job finds a "malicious" match regardless of real feed content.
+# Pick <test-ip> as whatever IP the spike device actually talked to
+# recently (check Zeek's conn.log directly, or wait for the enrichment job's
+# first pass to populate the spike alert's own raw_data.remote_ip field,
+# then re-seed the cache for THAT ip and wait for the next pass) — the
+# cache is keyed by IP, so seeding an unrelated IP the device never
+# actually contacted won't correlate.
+docker compose exec postgres psql -U sentinel -d sentinel -c \
+    "INSERT INTO threat_intel_cache (ip_or_domain, is_malicious, threat_type, source_feed, score, cached_at, expires_at) \
+     VALUES ('<test-ip>', true, 'blocklist', 'blocklist', 1, now(), now() + interval '24 hours') \
+     ON CONFLICT (ip_or_domain) DO UPDATE SET is_malicious = true;"
+```
+
+**Note:** The enrichment job runs every `SPIKE_IP_ENRICHMENT_INTERVAL_SECONDS`
+(default 300s/5min) and only looks at spike alerts from the last 30 minutes,
+correlating a ±15min/+5min window of conn.log around when the spike fired —
+allow up to ~5 extra minutes after seeding the cache for the next job run to
+pick it up. Each spike alert is enriched **at most once**
+(`raw_data.ip_enrichment_done`), so re-running this test against the exact
+same still-open spike alert won't re-fire — trigger a fresh spike (a new
+alert row) for a repeat test. `GET /api/threats/lookup/<ip>` is a read-only
+way to check/prime a real verdict for a specific IP without the INSERT above,
+but it won't force a false verdict — it only reflects genuine feed/OTX data.
+
+**Expected Heimdall Response:**
+- The original spike alert's `raw_data` gets enriched with `remote_ip`,
+  `remote_ip_bytes`, `remote_ip_connections`, `remote_ip_malicious` — visible
+  on the Alerts page as a "REMOTE IP:" note under the original alert
+- On a malicious verdict: a new `MALICIOUS_TRAFFIC_DESTINATION` **CRITICAL**
+  alert, `dedup_key` = the remote IP, referencing the trigger alert in
+  `raw_data` — device auto-blocked if `auto_block_on_threat` is armed
+- This can also feed `COMPROMISE_CHAIN_DETECTED` (Test 13) if the same
+  device already has a `VULNERABILITY_DETECTED`/`CREDENTIAL_EXPOSURE_DETECTED`/
+  `HIGH_RISK_PORT_OPENED` finding within the prior 24h
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+---
+
 ## Section E — Operational / Audit Verification *(not attacks — skip if only scoring detection capability)*
 
 ### Check A — Prometheus `/metrics` Endpoint
@@ -829,6 +1099,74 @@ notification arrives (`SECURITY_DIGEST_CRON`, default 07:00) summarizing
 alert counts since the last digest — including an "all clear" message on a
 day with zero alerts, not silence.
 
+### Check D — Device Identity Auto-Linking (Duplicate MAC Merge)
+
+Housekeeping, not a security signal — recognizes when WiFi MAC-address
+randomization (iOS Private Wi-Fi Address / Android per-network MAC) makes
+one physical device look like several rows, and auto-merges them.
+
+**Setup:** a phone with MAC randomization enabled (default on modern iOS/
+Android), a custom hostname set on it so the DHCP hostname is stable and
+identifiable across reconnects.
+
+**Steps:**
+1. Connect the phone, let it get polled, note its current MAC in the device list.
+2. Force a MAC rotation: on iOS, "Forget This Network" then rejoin the same
+   SSID; on Android, similarly forget/rejoin (or wait for the OS's periodic
+   rotation). The **old** MAC's IP must go genuinely unreachable (the device
+   is actually off that lease) — this only links when exactly one of the
+   candidate group answers an ARP probe.
+3. Wait up to `DEVICE_IDENTITY_LINK_SCAN_INTERVAL_SECONDS` (default 5min).
+
+**Expected Heimdall Response:**
+- A `DEVICE_IDENTITY_LINKED` INFO alert on the new MAC
+- The old MAC's device row disappears from the default device list (hidden,
+  not deleted) but remains visible via its own detail page, with an UNLINK
+  button to reverse the merge if the guess was wrong
+- Candidates only group by matching hostname + both being locally-
+  administered (randomized) MACs, within a 24h lookback — this will not
+  trigger for two genuinely different devices that happen to share a hostname
+  unless both also present randomized MACs
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
+### Check E — Device Archive Sweep (Soft-Delete)
+
+Housekeeping, not a security signal — soft-archives (hides, doesn't delete)
+devices with no activity for a configurable window.
+
+**Setup — lower the threshold for testing** (Settings page, or directly):
+```bash
+TOKEN=$(curl -s -X POST http://<heimdall_ip>:5000/api/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username": "<admin_username>", "password": "<admin_password>"}' \
+    | jq -r .access_token)
+curl -s -X PATCH http://<heimdall_ip>:5000/api/settings \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"device_archive_after_days": 7}'   # minimum allowed value
+```
+
+**Steps:**
+1. Pick (or make) a test device whose `last_seen` is already older than the
+   configured threshold — must be **untrusted, unblocked, unquarantined,
+   and not already linked-away** (Check D), or it's permanently exempt.
+   There's no fast-forward: either genuinely wait, or directly update that
+   device's `last_seen` in the DB for test purposes.
+2. Wait up to `DEVICE_ARCHIVE_SWEEP_INTERVAL_SECONDS` (default hourly).
+
+**Expected Heimdall Response:**
+- The device disappears from the default `GET /api/devices` list
+- It reappears under `GET /api/devices?archived=true`
+- `POST /api/devices/<mac>/unarchive` restores it to the default list
+  immediately (no wait needed for the reverse direction)
+- No alert is raised for an archive event (deliberately silent/routine)
+
+**Result:** ☐ Pass &nbsp;&nbsp; ☐ Fail &nbsp;&nbsp; ☐ Partial
+
+**Notes:** _______________________________________________
+
 ---
 
 ## Summary Results
@@ -854,6 +1192,13 @@ day with zero alerts, not silence.
 | 17 | DNS Reconnaissance Gap | ☐ Confirmed ☐ Unexpected | |
 | 18 | WiFi/Rogue-AP Gap | ☐ Confirmed ☐ Unexpected | |
 | 19 | Suricata IDS Signature Match | ☐ Pass ☐ Fail ☐ Partial | |
+| 20 | WAN-Wide Bandwidth Spike | ☐ Pass ☐ Fail ☐ Partial | |
+| 21 | AP Trust-Boundary Crossing | ☐ Pass ☐ Fail ☐ Partial | |
+| 22 | WiFi Signal-Strength Anomaly | ☐ Pass ☐ Fail ☐ Partial | |
+| 23 | Custom Detection Rule | ☐ Pass ☐ Fail ☐ Partial | |
+| 24 | Malicious Traffic Destination | ☐ Pass ☐ Fail ☐ Partial | |
+
+*(Section E's Checks A-E are operational/housekeeping verifications, not attack tests — not scored here, same as the existing convention for Checks A-C.)*
 
 ---
 
@@ -881,8 +1226,11 @@ day with zero alerts, not silence.
 | dig | CLI | DNS lookups (Test 10) | `dig <domain>` |
 | curl | CLI | HTTP requests / file downloads (Tests 3, 8-15) | `curl` |
 | EICAR test file | Test file | Safe, industry-standard synthetic malware signature (Test 12) | `curl -o eicar.com http://secure.eicar.org/eicar.com` |
-| psql | CLI | Direct `app_settings` edits for test timing (Test 14) | `docker compose exec postgres psql -U sentinel -d sentinel` |
+| psql | CLI | Direct `app_settings`/`threat_intel_cache` edits for test timing/seeding (Tests 14, 24) | `docker compose exec postgres psql -U sentinel -d sentinel` |
 | docker exec | CLI | Confirm Suricata's ruleset actually loaded (Test 19) | `docker exec <suricata-container> ls /var/lib/suricata/rules/` |
+| iperf3 | CLI | Sustained legitimate high-throughput generator (Test 20) | `iperf3 -c <server> -t 60 -P 4` |
+| nmcli / iwconfig | CLI | WiFi SSID reassociation, requires a WiFi-capable adapter (Test 21) | `nmcli dev wifi connect "<ssid>" password "<psk>"` |
+| jq | CLI | Extract `access_token` from login responses for authenticated API calls (Tests 23, 24, Check E) | `curl ... \| jq -r .access_token` |
 
 ---
 
