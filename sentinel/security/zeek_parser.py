@@ -114,20 +114,31 @@ class ZeekConnBeaconDetector:
         self._jitter_tolerance_s = jitter_tolerance_s
 
     def detect(self) -> list[dict]:
-        """Returns a list of {src, dst, count, interval_mean_s, interval_std_s}
-        dicts for (source, destination) pairs whose connection timing is
-        suspiciously regular. Empty list if conn.log doesn't exist yet or
-        has nothing to analyze."""
+        """Returns a list of {src, dst, dst_port, count, interval_mean_s,
+        interval_std_s} dicts for (source, destination, destination-port)
+        triples whose connection timing is suspiciously regular. Empty list
+        if conn.log doesn't exist yet or has nothing to analyze.
+
+        Grouped by destination port as well as host — confirmed live: a
+        single nmap scan of ~1000 ports against one host produces low-jitter
+        timing (nmap paces its own packets) that satisfies min_count/
+        jitter_tolerance just as well as real beaconing does, but spread
+        across ~1000 distinct ports (max ~4 hits on any one port in the
+        confirmed case) — nowhere near min_count on any single port. A real
+        C2 beacon, by contrast, always calls home on the *same* port every
+        time. Grouping by port alone separates the two cleanly; grouping
+        by (src, dst) only (the original shape) could not.
+        """
         try:
             df = pd.read_json(self._log_path, lines=True)
         except (ValueError, FileNotFoundError, OSError):
             return []
 
-        if df.empty or 'id.orig_h' not in df.columns or 'id.resp_h' not in df.columns:
+        if df.empty or not {'id.orig_h', 'id.resp_h', 'id.resp_p'}.issubset(df.columns):
             return []
 
         suspicious = []
-        for (src, dst), group in df.groupby(['id.orig_h', 'id.resp_h']):
+        for (src, dst, dport), group in df.groupby(['id.orig_h', 'id.resp_h', 'id.resp_p']):
             if len(group) < self._min_count:
                 continue
             intervals = group['ts'].sort_values().diff().dropna()
@@ -137,6 +148,7 @@ class ZeekConnBeaconDetector:
                 suspicious.append({
                     'src': src,
                     'dst': dst,
+                    'dst_port': int(dport),
                     'count': len(group),
                     'interval_mean_s': round(intervals.mean(), 2),
                     'interval_std_s': round(intervals.std(), 2),

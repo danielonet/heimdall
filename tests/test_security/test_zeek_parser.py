@@ -87,8 +87,8 @@ class TestZeekDnsLogReader:
         assert json.loads(lines[0])['query'] == 'fresh.com'
 
 
-def _conn_row(src: str, dst: str, ts: float) -> dict:
-    return {'id.orig_h': src, 'id.resp_h': dst, 'ts': ts}
+def _conn_row(src: str, dst: str, ts: float, dst_port: int = 443) -> dict:
+    return {'id.orig_h': src, 'id.resp_h': dst, 'id.resp_p': dst_port, 'ts': ts}
 
 
 class TestZeekConnBeaconDetector:
@@ -107,6 +107,7 @@ class TestZeekConnBeaconDetector:
         assert len(results) == 1
         assert results[0]['src'] == '10.100.102.50'
         assert results[0]['dst'] == '203.0.113.10'
+        assert results[0]['dst_port'] == 443
         assert results[0]['count'] == 12
         assert results[0]['interval_mean_s'] == 60.0
 
@@ -126,6 +127,58 @@ class TestZeekConnBeaconDetector:
 
         detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
         assert detector.detect() == []
+
+    def test_missing_resp_port_column_returns_empty(self, tmp_path):
+        """Defensive: id.resp_p absent entirely (not just per-row) must
+        degrade to no results, not crash — same posture as the id.orig_h/
+        id.resp_h check this guard already had."""
+        log_path = tmp_path / 'conn.log'
+        rows = [{'id.orig_h': '10.100.102.50', 'id.resp_h': '203.0.113.10', 'ts': float(i * 60)} for i in range(12)]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
+        assert detector.detect() == []
+
+    def test_port_scan_across_many_ports_is_not_flagged_as_beaconing(self, tmp_path):
+        """Regression test for the real incident this fix addresses: nmap
+        scanning ~1000 ports on one host produces low-jitter timing (nmap
+        paces its own packets) that would satisfy min_count/jitter_tolerance
+        under the OLD (src, dst)-only grouping — but spread across many
+        distinct ports, with only a couple of hits on any single port, it
+        must NOT be flagged. Confirmed against live conn.log data: max 4
+        hits on any one port out of 2004 total connections across ~1000
+        ports — this test uses a smaller but structurally identical shape
+        (2 hits per port, evenly spaced) so it never comes close to
+        min_count on any individual port."""
+        log_path = tmp_path / 'conn.log'
+        rows = []
+        for port in range(1, 21):  # 20 distinct ports
+            for i in range(2):    # 2 hits per port — nowhere near min_count=10
+                rows.append(_conn_row('10.100.102.36', '10.100.102.8', ts=float(port * 10 + i), dst_port=port))
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
+        assert detector.detect() == []
+
+    def test_real_beaconing_on_one_port_is_still_flagged_alongside_a_port_scan(self, tmp_path):
+        """The port-grouping fix must not create a false NEGATIVE: genuine
+        beaconing (many hits, same port, low jitter) mixed into the same
+        conn.log as an unrelated port-scan burst on a different host is
+        still caught."""
+        log_path = tmp_path / 'conn.log'
+        rows = [_conn_row('10.100.102.50', '203.0.113.10', ts=float(i * 60), dst_port=8080) for i in range(12)]
+        for port in range(1, 21):
+            for i in range(2):
+                rows.append(_conn_row('10.100.102.36', '10.100.102.8', ts=float(port * 10 + i), dst_port=port))
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
+        results = detector.detect()
+
+        assert len(results) == 1
+        assert results[0]['src'] == '10.100.102.50'
+        assert results[0]['dst'] == '203.0.113.10'
+        assert results[0]['dst_port'] == 8080
 
 
 def _conn_row_full(src: str, dst: str, ts: float, orig_bytes: int = 100, resp_bytes: int = 100) -> dict:

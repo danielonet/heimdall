@@ -212,7 +212,7 @@ class TestZeekBeaconScanJob:
         await SettingsRepository().set_auto_block_on_threat(True)
         sched = scheduler
         sched._zeek_beacon_detector = _FakeBeaconDetector([{
-            'src': _IP, 'dst': '203.0.113.10', 'count': 20,
+            'src': _IP, 'dst': '203.0.113.10', 'dst_port': 443, 'count': 20,
             'interval_mean_s': 60.0, 'interval_std_s': 0.5,
         }])
 
@@ -221,7 +221,7 @@ class TestZeekBeaconScanJob:
         alert = await _latest_alert()
         assert alert is not None
         assert alert.alert_type == 'C2_BEACONING'
-        assert '203.0.113.10' in alert.description
+        assert '203.0.113.10:443' in alert.description
 
     async def test_no_suspicious_pairs_raises_nothing(self, scheduler):
         sched = scheduler
@@ -232,12 +232,16 @@ class TestZeekBeaconScanJob:
         assert await _latest_alert() is None
 
     async def test_a_second_scan_of_the_same_pair_coalesces_into_one_touched_row(self, scheduler):
-        """dedup_key=dst — the same (src, dst) beaconing pair found again on
-        a later scan touches the same row instead of flooding inserts."""
+        """dedup_key=dst:dst_port — the same (src, dst, port) beaconing
+        triple found again on a later scan touches the same row instead of
+        flooding inserts."""
         await _seed_device(is_blocked=False)
         await SettingsRepository().set_auto_block_on_threat(False)
         sched = scheduler
-        pair = {'src': _IP, 'dst': '203.0.113.10', 'count': 20, 'interval_mean_s': 60.0, 'interval_std_s': 0.5}
+        pair = {
+            'src': _IP, 'dst': '203.0.113.10', 'dst_port': 443, 'count': 20,
+            'interval_mean_s': 60.0, 'interval_std_s': 0.5,
+        }
         sched._zeek_beacon_detector = _FakeBeaconDetector([pair])
 
         await sched._zeek_beacon_scan_job()
@@ -246,6 +250,25 @@ class TestZeekBeaconScanJob:
         alerts = await _all_alerts()
         assert len(alerts) == 1
         assert alerts[0].occurrence_count == 2
+
+    async def test_different_ports_on_the_same_dst_do_not_coalesce(self, scheduler):
+        """A genuine beacon on port 443 and an unrelated one on port 8080
+        to the same destination host are distinct incidents, not one
+        coalesced row — dedup_key must include the port."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        sched._zeek_beacon_detector = _FakeBeaconDetector([
+            {'src': _IP, 'dst': '203.0.113.10', 'dst_port': 443, 'count': 20,
+             'interval_mean_s': 60.0, 'interval_std_s': 0.5},
+            {'src': _IP, 'dst': '203.0.113.10', 'dst_port': 8080, 'count': 20,
+             'interval_mean_s': 60.0, 'interval_std_s': 0.5},
+        ])
+
+        await sched._zeek_beacon_scan_job()
+
+        alerts = await _all_alerts()
+        assert len(alerts) == 2
 
 
 class TestZeekFileScanJob:

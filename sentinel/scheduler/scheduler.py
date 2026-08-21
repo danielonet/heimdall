@@ -21,7 +21,7 @@ from redis.asyncio import Redis, from_url
 from sqlalchemy import delete, func, select, text
 
 from sentinel.adapter.base import RouterAdapter
-from sentinel.adapter.discovery import discover_gateway_ip
+from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
 from sentinel.adapter.factory import create_router_adapter
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
@@ -133,6 +133,9 @@ class SentinelScheduler:
         self._ml_retrain_cron = ml_retrain_cron
         self._sniff_iface = sniff_iface
         self._router_ip: str = ''  # resolved in _run_loop via _resolve_router_ip
+        # This host's own LAN IP(s), resolved in _run_loop via discover_local_ips()
+        # — see _is_own_host()/_raise_threat_alert's self-block safeguard.
+        self._local_ips: set[str] = set()
         self._otx_api_key = otx_api_key
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
@@ -251,6 +254,14 @@ class SentinelScheduler:
         # needed by DhcpWatcher to know which DHCP server is legitimate.
         # Resolved once at startup, same as sniff_iface above.
         self._router_ip = self._loop.run_until_complete(self._resolve_router_ip())
+
+        # This host's own LAN IP(s) — no DB/async dependency, so a plain
+        # synchronous call (unlike sniff_iface/router_ip above). See
+        # _is_own_host()/_raise_threat_alert's self-block safeguard: a
+        # detector false-positiving on Heimdall's own traffic (confirmed
+        # case: its own nmap scan misread as C2 beaconing) must never be
+        # able to auto-block the machine Heimdall itself runs on.
+        self._local_ips = discover_local_ips()
 
         # Likewise for notification settings (Notifications tab) — a
         # previously-saved ntfy_url/SMTP config persists across restarts
@@ -984,7 +995,11 @@ class SentinelScheduler:
     async def _zeek_beacon_scan_job(self) -> None:
         """Re-scan Zeek's conn.log for suspiciously regular connection
         intervals (a common C2 beaconing signature) and alert per offending
-        (source, destination) pair."""
+        (source, destination, destination-port) triple.
+
+        Grouped down to the port because a real beacon always calls home on
+        the *same* port — dedup_key includes it too, so distinct ports on
+        the same dst are separate incidents, not coalesced into one alert."""
         try:
             suspicious = self._zeek_beacon_detector.detect()
         except Exception:
@@ -996,11 +1011,12 @@ class SentinelScheduler:
             mac = await self._mac_for_ip(pair['src'])
             await self._raise_threat_alert(
                 mac, 'C2_BEACONING', 'CRITICAL',
-                f"{pair['src']} has made {pair['count']} connections to {pair['dst']} "
-                f"at suspiciously regular ~{pair['interval_mean_s']}s intervals "
+                f"{pair['src']} has made {pair['count']} connections to "
+                f"{pair['dst']}:{pair['dst_port']} at suspiciously regular "
+                f"~{pair['interval_mean_s']}s intervals "
                 f"(stddev {pair['interval_std_s']}s) — possible C2 beaconing",
                 raw_data=pair,
-                dedup_key=pair['dst'],
+                dedup_key=f"{pair['dst']}:{pair['dst_port']}",
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
 
@@ -1323,10 +1339,27 @@ class SentinelScheduler:
         guidance via build_mitigation() — None for alert types it doesn't
         recognize, same fallback SettingsRepository-style callers already
         tolerate elsewhere.
+
+        Never blocks the machine Heimdall itself runs on (see
+        _is_own_host()) — a detector false-positiving on Heimdall's own
+        traffic (confirmed case: ZeekConnBeaconDetector misreading
+        Heimdall's own nmap scan as C2 beaconing, since a scan's own packet
+        pacing looks exactly like low-jitter beaconing at a glance) must
+        never be able to cut the host running the security tool off its
+        own network. The alert itself still fires — this only suppresses
+        the block, since the finding is worth a human's attention even
+        when the auto-response would be self-destructive.
         """
         blocked_now = False
         block_failed = False
-        if mac:
+        is_self = bool(mac) and await self._is_own_host(mac)
+        if is_self:
+            logger.warning(
+                'Suppressing auto-block for %s (%s) — this MAC resolves to the Heimdall '
+                'host itself (see discover_local_ips()); never auto-blocking our own machine.',
+                mac, alert_type,
+            )
+        elif mac:
             try:
                 if await SettingsRepository().get_auto_block_on_threat():
                     adapter = await self._ensure_adapter()
@@ -1336,7 +1369,9 @@ class SentinelScheduler:
                 block_failed = True
                 logger.exception('Auto-block failed for %s (%s)', mac, alert_type)
 
-        if blocked_now:
+        if is_self:
+            description = f'{description} — auto-block suppressed: this device is the Heimdall host itself'
+        elif blocked_now:
             description = f'{description} — device auto-blocked'
         elif block_failed:
             description = f'{description} — AUTO-BLOCK FAILED, device is still on the network (see backend logs)'
@@ -1359,6 +1394,23 @@ class SentinelScheduler:
         )
         if is_new:
             emit_alert(alert_to_dict(alert))
+
+    async def _is_own_host(self, mac: str) -> bool:
+        """True if `mac` currently resolves to one of this Heimdall
+        instance's own local IPs (see self._local_ips / discover_local_ips()
+        in _run_loop). A missing/empty self._local_ips (discovery failed,
+        or this is a bare object.__new__(SentinelScheduler) test double)
+        means "can't confirm this is self" — returns False, never True, so
+        a discovery failure can only ever fail to *help* the safeguard, not
+        accidentally suppress a real block. getattr, not a plain attribute
+        read — a test double built via object.__new__(SentinelScheduler)
+        never runs __init__, so self._local_ips may not exist at all."""
+        local_ips = getattr(self, '_local_ips', None)
+        if not local_ips:
+            return False
+        async with get_session() as session:
+            device = await session.get(Device, mac)
+        return bool(device and device.ip_address in local_ips)
 
     async def _retrain_job(self) -> None:
         try:

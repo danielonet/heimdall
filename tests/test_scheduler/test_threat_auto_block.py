@@ -190,6 +190,96 @@ class TestRaiseThreatAlert:
         assert len(alerts) == 2
 
 
+class TestSelfHostSafeguard:
+    """Regression coverage for the incident this safeguard exists to
+    prevent: ZeekConnBeaconDetector misread Heimdall's own nmap scan as C2
+    beaconing and auto-blocked the machine Heimdall itself runs on, cutting
+    it off its own network. _raise_threat_alert must never block a MAC that
+    resolves to one of the scheduler's own self._local_ips (see
+    discover_local_ips() / SentinelScheduler._is_own_host)."""
+
+    async def test_never_blocks_when_the_mac_resolves_to_a_local_ip(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        scheduler._local_ips = {_IP}
+        calls = []
+
+        async def _fake_block_device(mac):
+            calls.append(mac)
+            return True
+
+        monkeypatch.setattr(scheduler._adapter, 'block_device', _fake_block_device)
+
+        await scheduler._raise_threat_alert(_MAC, 'C2_BEACONING', 'CRITICAL', 'beaconing suspected')
+
+        assert calls == []  # block_device() must never even be called
+        device = await _get_device()
+        assert device.is_blocked is False
+        alert = await _latest_alert()
+        assert 'auto-block suppressed' in alert.description
+        assert 'Heimdall host itself' in alert.description
+        assert 'auto-blocked' not in alert.description
+
+    async def test_still_raises_the_alert_itself_even_when_suppressed(self, scheduler):
+        """The finding is still worth a human's attention — only the block
+        is suppressed, not the alert."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        scheduler._local_ips = {_IP}
+
+        await scheduler._raise_threat_alert(_MAC, 'C2_BEACONING', 'CRITICAL', 'beaconing suspected')
+
+        alert = await _latest_alert()
+        assert alert is not None
+        assert alert.alert_type == 'C2_BEACONING'
+
+    async def test_a_different_devices_mac_is_still_blocked_normally(self, scheduler, monkeypatch):
+        """The safeguard must be scoped to the matching IP only — it must
+        not accidentally disable auto-block globally just because
+        self._local_ips is non-empty."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        scheduler._local_ips = {'10.0.0.99'}  # does not match _seed_device's _IP
+
+        await scheduler._raise_threat_alert(_MAC, 'C2_BEACONING', 'CRITICAL', 'beaconing suspected')
+
+        device = await _get_device()
+        assert device.is_blocked is True
+        alert = await _latest_alert()
+        assert 'auto-blocked' in alert.description
+
+    async def test_empty_local_ips_never_suppresses_a_block(self, scheduler):
+        """Default scheduler fixture state (self._local_ips unset/empty,
+        e.g. discover_local_ips() failed at startup) must behave exactly
+        like today — never silently disable auto-block network-wide."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._raise_threat_alert(_MAC, 'C2_BEACONING', 'CRITICAL', 'beaconing suspected')
+
+        device = await _get_device()
+        assert device.is_blocked is True
+
+    async def test_unknown_mac_is_not_treated_as_self(self, scheduler, monkeypatch):
+        """A MAC with no matching device row (no IP to compare) must not be
+        mistaken for the host itself just because local_ips is populated —
+        uses _MAC without seeding a Device row, so is_self resolves to
+        False (no device -> no ip_address to compare)."""
+        await SettingsRepository().set_auto_block_on_threat(True)
+        scheduler._local_ips = {_IP}
+        calls = []
+
+        async def _fake_block_device(mac):
+            calls.append(mac)
+            return True
+
+        monkeypatch.setattr(scheduler._adapter, 'block_device', _fake_block_device)
+
+        await scheduler._raise_threat_alert(_MAC, 'C2_BEACONING', 'CRITICAL', 'beaconing suspected')
+
+        assert calls == [_MAC]  # not suppressed — block_device() was called normally
+
+
 class TestRaiseThreatAlertBlockExpiry:
     """blocked_at/blocked_until — see _raise_threat_alert's docstring for
     why these must be (re-)stamped on every successful auto-block, not just
