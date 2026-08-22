@@ -9,12 +9,15 @@ shape of check — a windowed lookback over *persisted* Alert rows — so it's
 a standalone component, not an extension of RuleEngine.
 
 Also deliberately NOT hooked into _raise_threat_alert: that's only one of
-several alert-creation paths (NEW_DEVICE and five other types come from
+several alert-creation paths — NEW_DEVICE and five other types come from
 DetectionPipeline/poll_cycle directly, RULE_TRIGGERED from RuleEngine,
-HONEYPOT_ACCESS from OpenCanaryIngester — none of which route through
-_raise_threat_alert). A correlator that only watched _raise_threat_alert
-would miss NEW_DEVICE entirely, so it instead queries the alerts table
-directly on its own schedule (see SentinelScheduler._correlation_job).
+neither of which route through _raise_threat_alert at all (HONEYPOT_ACCESS
+does, via SentinelScheduler._persist_canary_alert, despite OpenCanaryIngester
+only building the Alert object rather than persisting it directly). A
+correlator that only watched _raise_threat_alert would still miss
+NEW_DEVICE/RULE_TRIGGERED entirely, so it instead queries the alerts table
+directly on its own schedule (see SentinelScheduler._correlation_job) —
+that reaches every alert type regardless of which of these paths raised it.
 """
 from __future__ import annotations
 
