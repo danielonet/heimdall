@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
-from sentinel.db.models import Alert, AppSettings, Device, DeviceTypeProfile, TrustedMac
+from sentinel.db.models import Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, TrustedMac
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
 
@@ -356,7 +356,7 @@ class AlertRepository:
     async def upsert(
         self, *, device_mac: str | None, alert_type: str, severity: str, description: str | None,
         raw_data: dict | None = None, mitigation: str | None = None, dedup_key: str | None = None,
-    ) -> tuple[Alert, bool]:
+    ) -> tuple[Alert | None, bool]:
         """Finds the OPEN (resolved=False) row matching device_mac +
         alert_type + dedup_key. Found -> UPDATE in place (touch) and return
         (alert, False). Not found -> INSERT (the "fire" transition) and
@@ -366,8 +366,25 @@ class AlertRepository:
         via isnot_distinct_from() — plain `==` never matches SQL NULL, which
         would silently defeat the upsert for e.g. WanBandwidthDetector's
         always-null device_mac.
+
+        Snooze check: if (device_mac, alert_type) has an active row in
+        alert_snoozes (see AlertSnoozeRepository), this is a complete no-op
+        — returns (None, False) without touching or inserting anything, as
+        if the condition had never fired at all. This is the single choke
+        point every alert-creation path already routes through (see this
+        class's own docstring), so gating here covers all of them uniformly
+        with no per-detector/per-source special-casing. Every existing
+        caller only ever uses the returned Alert when is_new is True, so
+        None here is safe — never dereferenced on the snoozed path.
+        Household-level alerts (device_mac=None, e.g. WAN_BANDWIDTH_SPIKE)
+        have nothing to match against and are never snoozable this way.
         """
         async with get_session() as session:
+            if device_mac is not None:
+                snooze = await session.get(AlertSnooze, (device_mac, alert_type))
+                if snooze is not None and snooze.snoozed_until > datetime.now(timezone.utc):
+                    return None, False
+
             stmt = select(Alert).where(
                 Alert.device_mac.isnot_distinct_from(device_mac),
                 Alert.alert_type == alert_type,
@@ -454,6 +471,72 @@ class AlertRepository:
                 return False
             row.raw_data = {**(row.raw_data or {}), **extra}
             return True
+
+
+class AlertSnoozeRepository:
+    """Read/write access to the alert_snoozes table — see AlertSnooze's
+    docstring and AlertRepository.upsert()'s snooze check, the single
+    choke point that actually enforces an active snooze."""
+
+    async def snooze(self, device_mac: str, alert_type: str, until: datetime) -> None:
+        """Create or replace the active snooze for (device_mac, alert_type),
+        and immediately acknowledge every currently-open, unacknowledged
+        alert matching that pair (there can be more than one — e.g. nmap's
+        dedup_key=f'port:{port}' means two different high-risk ports open
+        on the same device are two separate open rows under the same
+        alert_type). Without this, snoozing would only stop *new*
+        occurrences from appearing (via AlertRepository.upsert()'s check)
+        while whatever's already open kept sitting in every unacknowledged
+        view until it happened to resolve on its own — the whole point of
+        snoozing is to get it out of the way right now, not just eventually.
+
+        Re-snoozing an already-snoozed pair replaces snoozed_until with the
+        new value rather than accumulating rows — same on_conflict_do_update
+        shape as TrustedMacRepository.trust_many's on_conflict_do_nothing,
+        just updating instead of skipping since a second snooze call is
+        meant to move the expiry, not be a no-op."""
+        stmt = pg_insert(AlertSnooze).values(
+            device_mac=device_mac, alert_type=alert_type, snoozed_until=until,
+        ).on_conflict_do_update(
+            index_elements=['device_mac', 'alert_type'], set_={'snoozed_until': until},
+        )
+        async with get_session() as session:
+            await session.execute(stmt)
+            await session.execute(
+                update(Alert)
+                .where(
+                    Alert.device_mac == device_mac,
+                    Alert.alert_type == alert_type,
+                    Alert.resolved.is_(False),
+                    Alert.acknowledged.is_(False),
+                )
+                .values(acknowledged=True, acknowledged_at=datetime.now(timezone.utc))
+            )
+
+    async def unsnooze(self, device_mac: str, alert_type: str) -> bool:
+        """Cancel an active snooze early. Returns whether one existed."""
+        async with get_session() as session:
+            existing = await session.get(AlertSnooze, (device_mac, alert_type))
+            if existing is None:
+                return False
+            await session.delete(existing)
+            return True
+
+    async def list_active(self, device_mac: str) -> list[AlertSnooze]:
+        """Every currently-active (not yet expired) snooze for one device —
+        powers the device page's "snoozed" badges/cancel buttons. Expired
+        rows are left in place rather than swept (harmless clutter, not a
+        correctness issue — is_snoozed()/upsert()'s own check already
+        ignores them), so this filters snoozed_until > now() rather than
+        just listing every row."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(AlertSnooze).where(
+                    AlertSnooze.device_mac == device_mac,
+                    AlertSnooze.snoozed_until > datetime.now(timezone.utc),
+                )
+            )
+            return list(result.scalars().all())
 
 
 class SettingsRepository:

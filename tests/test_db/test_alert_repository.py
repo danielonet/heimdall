@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from flask import Flask
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from sentinel.db.models import Alert
-from sentinel.db.repositories import AlertRepository
+from sentinel.db.models import Alert, AlertSnooze
+from sentinel.db.repositories import AlertRepository, AlertSnoozeRepository
 from sentinel.db.session import get_engine, get_session, init_db
 
 pytestmark = pytest.mark.asyncio
@@ -29,6 +29,7 @@ async def _init_db():
     yield
     async with get_session() as session:
         await session.execute(delete(Alert).where(Alert.alert_type == _ALERT_TYPE))
+        await session.execute(delete(AlertSnooze).where(AlertSnooze.alert_type == _ALERT_TYPE))
     await get_engine().dispose()
 
 
@@ -267,3 +268,137 @@ class TestMergeRawData:
     async def test_returns_false_for_unknown_alert_id(self):
         ok = await AlertRepository().merge_raw_data(999_999_999, {'remote_ip': '203.0.113.10'})
         assert ok is False
+
+
+class TestUpsertSnoozeGate:
+    """AlertRepository.upsert()'s snooze check — see AlertSnoozeRepository."""
+
+    async def test_snoozed_pair_is_a_complete_no_op(self):
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert alert is None
+        assert is_new is False
+
+        async with get_session() as session:
+            result = await session.execute(select(Alert).where(Alert.alert_type == _ALERT_TYPE))
+            assert result.scalars().first() is None  # nothing was inserted
+
+    async def test_expired_snooze_does_not_gate(self):
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) - timedelta(hours=1))
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert is_new is True
+        assert alert is not None
+
+    async def test_snooze_on_a_different_device_does_not_gate(self):
+        await AlertSnoozeRepository().snooze(
+            '11:22:33:44:55:66', _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert is_new is True
+        assert alert is not None
+
+    async def test_snooze_on_a_different_alert_type_does_not_gate(self):
+        await AlertSnoozeRepository().snooze(
+            _MAC, '__OTHER_TYPE__', datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert is_new is True
+        assert alert is not None
+
+        async with get_session() as session:
+            await session.execute(delete(AlertSnooze).where(AlertSnooze.device_mac == _MAC))
+
+    async def test_household_level_null_device_mac_alert_cannot_be_snoozed(self):
+        """Snoozing only ever matches a non-null device_mac — a
+        household-level alert (device_mac=None, e.g. WAN_BANDWIDTH_SPIKE)
+        has nothing to match against and always fires normally."""
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=None, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert is_new is True
+        assert alert is not None
+
+
+class TestAlertSnoozeRepository:
+    async def test_snooze_then_is_active_in_list(self):
+        until = datetime.now(timezone.utc) + timedelta(hours=1)
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, until)
+        active = await AlertSnoozeRepository().list_active(_MAC)
+        assert len(active) == 1
+        assert active[0].alert_type == _ALERT_TYPE
+
+    async def test_expired_snooze_is_not_in_active_list(self):
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) - timedelta(hours=1))
+        active = await AlertSnoozeRepository().list_active(_MAC)
+        assert active == []
+
+    async def test_re_snoozing_replaces_rather_than_duplicates(self):
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+        new_until = datetime.now(timezone.utc) + timedelta(hours=5)
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, new_until)
+
+        active = await AlertSnoozeRepository().list_active(_MAC)
+        assert len(active) == 1
+        assert abs((active[0].snoozed_until - new_until).total_seconds()) < 1
+
+    async def test_unsnooze_removes_the_row(self):
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+        removed = await AlertSnoozeRepository().unsnooze(_MAC, _ALERT_TYPE)
+        assert removed is True
+        assert await AlertSnoozeRepository().list_active(_MAC) == []
+
+    async def test_unsnooze_returns_false_when_nothing_was_snoozed(self):
+        removed = await AlertSnoozeRepository().unsnooze(_MAC, _ALERT_TYPE)
+        assert removed is False
+
+    async def test_snoozing_acknowledges_currently_open_matching_alerts(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        assert alert.acknowledged is False
+
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.acknowledged is True
+            assert refreshed.acknowledged_at is not None
+
+    async def test_snoozing_acknowledges_every_open_dedup_key_variant(self):
+        """nmap's dedup_key=f'port:{port}' means two different findings can
+        share (device_mac, alert_type) as two separate open rows — snoozing
+        the type must acknowledge both, not just one."""
+        port_22, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x', dedup_key='port:22',
+        )
+        port_80, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='y', dedup_key='port:80',
+        )
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+
+        async with get_session() as session:
+            refreshed_22 = await session.get(Alert, port_22.id)
+            refreshed_80 = await session.get(Alert, port_80.id)
+        assert refreshed_22.acknowledged is True
+        assert refreshed_80.acknowledged is True
+
+    async def test_snoozing_does_not_touch_already_resolved_alerts(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',
+        )
+        await AlertRepository().resolve(device_mac=_MAC, alert_type=_ALERT_TYPE)
+
+        await AlertSnoozeRepository().snooze(_MAC, _ALERT_TYPE, datetime.now(timezone.utc) + timedelta(hours=1))
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.acknowledged is False  # snooze only touches OPEN alerts

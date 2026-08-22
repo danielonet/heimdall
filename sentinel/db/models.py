@@ -227,6 +227,28 @@ class TrustedMac(Base):
     trusted_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class AlertSnooze(Base):
+    """Suppresses a specific (device, alert_type) pair from producing new
+    alerts until snoozed_until — see AlertRepository.upsert()'s snooze
+    check, the single choke point every alert-creation path (detection
+    pipeline, RuleEngine, SentinelScheduler's confirmed-attack sources)
+    already routes through, so snoozing here covers all of them uniformly
+    with no per-source special-casing needed.
+
+    No FK to devices, same reasoning as TrustedMac: must survive a
+    devices-table purge/reset rather than cascade-deleting with it. PK is
+    (device_mac, alert_type) rather than a surrogate id — at most one
+    active snooze per pair; re-snoozing replaces it rather than
+    accumulating rows."""
+
+    __tablename__ = 'alert_snoozes'
+
+    device_mac: Mapped[str] = mapped_column(String(17), primary_key=True)
+    alert_type: Mapped[str] = mapped_column(String(50), primary_key=True)
+    snoozed_until: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class TrafficSample(Base):
     """Per-device traffic delta for a single poll interval (TimescaleDB hypertable).
 

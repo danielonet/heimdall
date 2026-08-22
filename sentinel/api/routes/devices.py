@@ -2,18 +2,22 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, select
 
-from sentinel.api.serializers import alert_to_dict, device_to_dict, traffic_sample_to_dict
+from sentinel.api.serializers import alert_snooze_to_dict, alert_to_dict, device_to_dict, traffic_sample_to_dict
 from sentinel.db.models import Alert, Device, TrafficSample
-from sentinel.db.repositories import DeviceRepository, TrustedMacRepository
+from sentinel.db.repositories import AlertSnoozeRepository, DeviceRepository, TrustedMacRepository
 from sentinel.db.session import get_session
 from sentinel.scheduler.scheduler import get_scheduler
 
 bp = Blueprint('devices', __name__)
+
+MIN_SNOOZE_HOURS = 1
+MAX_SNOOZE_HOURS = 24 * 30  # 30 days — same order of magnitude as settings.py's other hour bounds
 
 
 @bp.route('', methods=['GET'])
@@ -261,3 +265,45 @@ async def _set_quarantined(mac: str, quarantined: bool):
             device.is_quarantined = quarantined
 
     return jsonify(mac_address=mac, is_quarantined=quarantined)
+
+
+@bp.route('/<mac>/snoozes', methods=['GET'])
+@jwt_required()
+async def list_device_snoozes(mac: str):
+    """Every currently-active alert-type snooze for this device — powers
+    the device page's snoozed-state badges/cancel buttons."""
+    snoozes = await AlertSnoozeRepository().list_active(mac)
+    return jsonify(snoozes=[alert_snooze_to_dict(s) for s in snoozes])
+
+
+@bp.route('/<mac>/alerts/<alert_type>/snooze', methods=['POST'])
+@jwt_required()
+async def snooze_device_alert(mac: str, alert_type: str):
+    """Suppress new alerts of this type on this device for N hours — body:
+    {"hours": N}. Also immediately acknowledges every currently-open,
+    unacknowledged alert of this (device, alert_type) pair (see
+    AlertSnoozeRepository.snooze()) so it's out of the way right now, not
+    just once it happens to resolve on its own. Enforced by
+    AlertRepository.upsert()'s snooze check — see that method's docstring
+    for why this is a single choke point covering every alert source
+    (detection pipeline, RuleEngine, confirmed-attack watchers) uniformly.
+    """
+    body = request.get_json(silent=True) or {}
+    hours = body.get('hours')
+    if not isinstance(hours, int) or isinstance(hours, bool) or not (MIN_SNOOZE_HOURS <= hours <= MAX_SNOOZE_HOURS):
+        return jsonify(error=f'hours must be an integer between {MIN_SNOOZE_HOURS} and {MAX_SNOOZE_HOURS}'), 400
+
+    until = datetime.now(timezone.utc) + timedelta(hours=hours)
+    await AlertSnoozeRepository().snooze(mac, alert_type, until)
+    return jsonify(device_mac=mac, alert_type=alert_type, snoozed_until=until.isoformat())
+
+
+@bp.route('/<mac>/alerts/<alert_type>/snooze', methods=['DELETE'])
+@jwt_required()
+async def unsnooze_device_alert(mac: str, alert_type: str):
+    """Cancel an active snooze early — the alert type resumes firing
+    normally on the very next matching poll/finding."""
+    existed = await AlertSnoozeRepository().unsnooze(mac, alert_type)
+    if not existed:
+        return jsonify(error='No active snooze for this device/alert_type'), 404
+    return jsonify(device_mac=mac, alert_type=alert_type, unsnoozed=True)

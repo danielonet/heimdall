@@ -50,7 +50,7 @@ export function DeviceDetailPage() {
 
       <div className="border border-border bg-surface p-4">
         <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">ALERT HISTORY</div>
-        <AlertHistoryTable alerts={device.alerts} />
+        <AlertHistoryTable mac={mac} alerts={device.alerts} />
       </div>
     </div>
   )

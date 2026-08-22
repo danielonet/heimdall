@@ -4,8 +4,13 @@ import { Badge } from '../Badge'
 import { AckResolveButtons } from '../alerts/AckResolveButtons'
 import { MitigationNote } from '../alerts/MitigationNote'
 import { RemoteIpNote } from '../alerts/RemoteIpNote'
+import { SnoozeControls } from '../alerts/SnoozeControls'
+import { useSnoozes } from '../../hooks/useSnoozes'
 
-export function AlertHistoryTable({ alerts }) {
+export function AlertHistoryTable({ mac, alerts }) {
+  const { data: snoozes } = useSnoozes(mac)
+  const snoozeByType = new Map((snoozes || []).map((s) => [s.alert_type, s]))
+
   if (!alerts?.length) {
     return <div className="text-[10px] text-text-muted">No alerts for this device.</div>
   }
@@ -34,6 +39,7 @@ export function AlertHistoryTable({ alerts }) {
             )}
           </div>
           <AckResolveButtons alert={a} />
+          {!a.resolved && <SnoozeControls mac={mac} alertType={a.alert_type} snooze={snoozeByType.get(a.alert_type)} />}
         </div>
       ))}
     </div>

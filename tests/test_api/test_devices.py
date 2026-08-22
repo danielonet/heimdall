@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+from sqlalchemy import select
+
 from sentinel.db.models import Alert, Device, TrafficSample, TrustedMac
 from sentinel.db.session import get_session
 
@@ -53,11 +55,11 @@ def _seed_traffic_sample() -> None:
     asyncio.run(_seed())
 
 
-def _seed_alert(acknowledged: bool = False) -> None:
+def _seed_alert(acknowledged: bool = False, alert_type: str = 'NEW_DEVICE') -> None:
     async def _seed():
         async with get_session() as session:
             session.add(Alert(
-                device_mac=_MAC, alert_type='NEW_DEVICE', severity='CRITICAL',
+                device_mac=_MAC, alert_type=alert_type, severity='CRITICAL',
                 acknowledged=acknowledged,
             ))
     asyncio.run(_seed())
@@ -403,3 +405,92 @@ class TestQuarantineUnquarantine:
         _seed_device()
         resp = client.post(f'/api/devices/{_MAC}/quarantine', headers=auth_headers)
         assert resp.status_code == 503
+
+
+class TestSnoozeAlerts:
+    _ALERT_TYPE = 'HIGH_UPLOAD'
+
+    def test_snooze_without_auth_rejected(self, client):
+        resp = client.post(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 4})
+        assert resp.status_code == 401
+
+    def test_unsnooze_without_auth_rejected(self, client):
+        resp = client.delete(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze')
+        assert resp.status_code == 401
+
+    def test_list_snoozes_without_auth_rejected(self, client):
+        resp = client.get(f'/api/devices/{_MAC}/snoozes')
+        assert resp.status_code == 401
+
+    def test_snooze_creates_an_active_snooze(self, client, auth_headers):
+        resp = client.post(
+            f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 4}, headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['device_mac'] == _MAC
+        assert body['alert_type'] == self._ALERT_TYPE
+        assert body['snoozed_until'] is not None
+
+        listed = client.get(f'/api/devices/{_MAC}/snoozes', headers=auth_headers).get_json()
+        assert len(listed['snoozes']) == 1
+        assert listed['snoozes'][0]['alert_type'] == self._ALERT_TYPE
+
+    def test_snooze_rejects_missing_hours(self, client, auth_headers):
+        resp = client.post(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_snooze_rejects_zero_hours(self, client, auth_headers):
+        resp = client.post(
+            f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 0}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_snooze_rejects_absurdly_large_hours(self, client, auth_headers):
+        resp = client.post(
+            f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 999_999}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_snooze_rejects_non_integer_hours(self, client, auth_headers):
+        resp = client.post(
+            f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 'lots'}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_snooze_rejects_boolean_hours(self, client, auth_headers):
+        """isinstance(True, int) is True in Python — must be explicitly excluded."""
+        resp = client.post(
+            f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': True}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_snooze_acknowledges_the_currently_open_alert(self, client, auth_headers):
+        _seed_device()
+        _seed_alert(acknowledged=False, alert_type=self._ALERT_TYPE)
+
+        client.post(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 4}, headers=auth_headers)
+
+        async def _check():
+            async with get_session() as session:
+                result = await session.execute(select(Alert).where(Alert.alert_type == self._ALERT_TYPE))
+                return result.scalars().first()
+        alert = asyncio.run(_check())
+        assert alert.acknowledged is True
+
+    def test_unsnooze_removes_an_active_snooze(self, client, auth_headers):
+        client.post(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', json={'hours': 4}, headers=auth_headers)
+        resp = client.delete(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', headers=auth_headers)
+        assert resp.status_code == 200
+
+        listed = client.get(f'/api/devices/{_MAC}/snoozes', headers=auth_headers).get_json()
+        assert listed['snoozes'] == []
+
+    def test_unsnooze_returns_404_when_nothing_was_snoozed(self, client, auth_headers):
+        resp = client.delete(f'/api/devices/{_MAC}/alerts/{self._ALERT_TYPE}/snooze', headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_list_snoozes_empty_by_default(self, client, auth_headers):
+        resp = client.get(f'/api/devices/{_MAC}/snoozes', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['snoozes'] == []
