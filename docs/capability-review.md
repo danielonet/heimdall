@@ -55,11 +55,11 @@ reflected in each item below.
 
 5. **Rogue DHCP server detection.** ✅ *Done — `sentinel/security/dhcp_watch.py`'s `DhcpWatcher`, wired into the scheduler exactly like `ArpWatcher`.* Watches for DHCP OFFER packets whose source IP isn't the known router (resolved the same way `create_router_adapter()` resolves `ROUTER_IP`), raising `ROGUE_DHCP_SERVER`.
 
-6. **WAN/household bandwidth tracking.** ✅ *Done, defensively.* `SagemcomXmoAdapter.get_wan_stats()` reads the unverified `IP_DATA/Stats/*` xpath and degrades to `None` (logging once, not every poll) if it doesn't resolve as expected — same posture as Zeek's file-analysis framework. A new `wan_stats` hypertable, dashboard throughput tile, and a rolling-baseline `WanBandwidthDetector` (`WAN_BANDWIDTH_SPIKE`) are wired in. **Still needs live verification** against the real router — see `docs/router/sagemcom-xmo-api.md`'s "Remaining captures needed".
+6. **WAN/household bandwidth tracking.** ✅ *Done, and live-verified.* `SagemcomXmoAdapter.get_wan_stats()` reads `IP_DATA/Stats/*` and degrades to `None` (logging once, not every poll) if it doesn't resolve as expected — same posture as Zeek's file-analysis framework. A new `wan_stats` hypertable, dashboard throughput tile, and a rolling-baseline `WanBandwidthDetector` (`WAN_BANDWIDTH_SPIKE`) are wired in. **Confirmed correct against the real router**: cross-checked against 98 live rows in the `wan_stats` table showing plausible varying throughput — see `docs/router/sagemcom-xmo-api.md`'s WAN Layer section.
 
 7. **Guest network isolation check.** ⚠️ *Descoped to AP-alias visibility — confirmed a true isolation check isn't buildable.* The XMO API has no traffic-flow/netflow data and no confirmed guest-vs-private subnet split, so "did a guest device reach the private LAN" isn't answerable from this router's API. What shipped instead: the adapter was already fetching each device's AP alias while merging `AssociatedDevices` and discarding it before `DeviceSnapshot` — that plumbing gap is now fixed (`ap_alias` field, DB column, UI badge), making item #19's original claim ("you already know which AP each device is on") actually true.
 
-8. **WiFi channel/interference visibility.** ✅ *Done.* `Device/WiFi/Radios/Radio` is now read in the same batched `get_router_info()` call, surfaced on the Settings page. Field-level names (`Channel`/`TransmitPower`/`OperatingStandards`) are a best-guess against standard TR-181 conventions, not observed live — needs the same live-verification follow-up as #6.
+8. **WiFi channel/interference visibility.** ✅ *Done, and live-verified.* Each radio is fetched individually by `uid` (`SagemcomXmoAdapter._get_wifi_radios()`) and surfaced on the Settings page. Field names (`Channel`/`TransmitPower`/`OperatingStandards`) confirmed correct against the real router. Live verification also caught two real bugs, both now fixed: the previously-used bare `Device/WiFi/Radios/Radio` path silently returned only the first radio (dropping the 5GHz one), and `TransmitPower` is a **percentage** of `TransmitPowerMax`, not dBm as the old field name implied (`-1` = automatic control, mapped to `None`) — see `docs/router/sagemcom-xmo-api.md`'s WiFi Layer section.
 
 9. **Verify/fix the wired-PHY direction gotcha.** ✅ *Fixed, on the WiFi fix's precedent — not independently re-verified.* Applied the same Sent/Received swap to `get_port_stats()`/`_get_port_traffic_samples()` without a live capture first (explicit user call: fix now, verify later). First real check once live: compare a known wired device's actual upload/download against the Ports page.
 
@@ -120,10 +120,11 @@ WiFi radio this deployment doesn't have — the only item left unbuilt. The
 also since shipped. Remaining follow-up isn't new features so much as
 hardening what's already shipped: verifying/tuning the actual Suricata
 ruleset against real home traffic (this integration ingests alerts, it
-doesn't manage the rule set); live-verifying the best-guess integrations
-from earlier rounds (**#6** WAN stats' `IP_DATA/Stats` xpath, **#8** WiFi
-radios' TR-181 field names, and **#14**'s quarantine `Rule` object field
-names) against the real router; and, if Grafana ever gets pointed at
-**#17**'s `/metrics` endpoint, adding a Prometheus scrape config + a
-starter dashboard JSON to `docs/` so that setup is copy-paste rather than
-built from scratch.
+doesn't manage the rule set); **#6** (WAN stats) and **#8** (WiFi radios)
+have both now been live-verified against the real router — see their
+status notes above; **#14**'s quarantine `Rule` object field names are
+the one remaining best-guess integration still needing that same
+live-verification pass; and, if Grafana ever gets pointed at **#17**'s
+`/metrics` endpoint, adding a Prometheus scrape config + a starter
+dashboard JSON to `docs/` so that setup is copy-paste rather than built
+from scratch.

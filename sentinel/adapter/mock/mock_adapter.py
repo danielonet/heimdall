@@ -188,8 +188,8 @@ class MockSagemcomAdapter(RouterAdapter):
             uptime_seconds=1_234_567,
             ssids=['HomeNet-5G', 'HomeNet-2.4G'],
             radios=[
-                WifiRadioInfo(band='5GHz', channel=44, tx_power_dbm=20, standard='ax'),
-                WifiRadioInfo(band='2.4GHz', channel=6, tx_power_dbm=20, standard='n'),
+                WifiRadioInfo(band='5GHz', channel=44, tx_power_percent=100, standard='ax'),
+                WifiRadioInfo(band='2.4GHz', channel=6, tx_power_percent=None, standard='n'),  # None: automatic
             ],
         )
 

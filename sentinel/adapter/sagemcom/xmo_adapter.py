@@ -62,6 +62,11 @@ class SagemcomXmoAdapter(RouterAdapter):
     sentinel modules interact only with the canonical models in adapter.models.
     """
 
+    # Upper bound for _get_wifi_radios' by-uid enumeration — confirmed live
+    # this router has exactly 2 (2.4GHz + 5GHz); a little headroom for a
+    # tri-band unit without risking an unbounded request loop.
+    _MAX_RADIO_UID = 4
+
     def __init__(
         self,
         router_ip: str,
@@ -430,12 +435,21 @@ class SagemcomXmoAdapter(RouterAdapter):
         WAN interface's LowerLayers reference a PPP interface, since no
         working direct xpath for it has been found yet (see docs/router/
         sagemcom-xmo-api.md "Remaining captures needed").
+
+        Radios are fetched separately, one `Radio[@uid='N']` request per
+        radio (see _get_wifi_radios) — also confirmed live and fixed: the
+        bare, unfiltered `Device/WiFi/Radios/Radio` path used here
+        previously only ever returned the single first-numbered radio
+        (uid=1, this router's 2.4GHz radio), silently dropping every other
+        one (uid=2, 5GHz) with no error of any kind — unlike
+        `Device/WiFi/SSIDs`, which genuinely does return every SSID from
+        one unfiltered call, so this wasn't the pattern used everywhere
+        else in this file failing the same way.
         """
         resp = await self._client.get_values([
             'Device/DeviceInfo',
             "Device/IP/Interfaces/Interface[Alias='IP_DATA']",
             'Device/WiFi/SSIDs',
-            'Device/WiFi/Radios/Radio',
         ])
 
         info = self._client._extract_result(resp, 0) or {}
@@ -450,9 +464,7 @@ class SagemcomXmoAdapter(RouterAdapter):
         if isinstance(ssids_raw, dict):
             ssids_raw = [ssids_raw]
 
-        radios_raw = self._client._extract_result(resp, 3) or []
-        if isinstance(radios_raw, dict):
-            radios_raw = [radios_raw]
+        radios_raw = await self._get_wifi_radios()
 
         wan_ipv4_addresses = wan_interface.get('IPv4Addresses') or []
         wan_ip = wan_ipv4_addresses[0].get('IPAddress', '') if wan_ipv4_addresses else ''
@@ -476,17 +488,40 @@ class SagemcomXmoAdapter(RouterAdapter):
             radios=radios,
         )
 
+    async def _get_wifi_radios(self) -> list[dict]:
+        """Every WiFi radio object, fetched by explicit uid (1, 2, 3, ...)
+        since the bare `Device/WiFi/Radios/Radio` path only ever returns
+        the first one — see get_router_info's docstring. Stops at the
+        first uid that doesn't resolve (XMO_UNKNOWN_PATH_ERR ->
+        _extract_result returns None, confirmed live, no exception raised)
+        rather than assuming a fixed radio count, so this still works on a
+        single-radio or triple-radio (tri-band) unit. _MAX_RADIO_UID caps
+        the search so a persistently-misbehaving router can't turn this
+        into an unbounded loop of requests.
+        """
+        radios: list[dict] = []
+        for uid in range(1, self._MAX_RADIO_UID + 1):
+            resp = await self._client.get_value(f"Device/WiFi/Radios/Radio[@uid='{uid}']")
+            radio = self._client._extract_result(resp, 0)
+            if isinstance(radio, list) and radio:
+                radio = radio[0]
+            if not isinstance(radio, dict):
+                break
+            radios.append(radio)
+        return radios
+
     async def get_wan_stats(self) -> Optional[WanStats]:
         """Household-total WAN traffic delta since the last call.
 
         Reads `Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats` — this
-        xpath is UNVERIFIED against a live router (marked ⬜ in
-        docs/router/sagemcom-xmo-api.md, a guess by analogy to the confirmed
-        `Device/Ethernet/Interfaces/Interface[...]/Stats` shape, not an
-        observed field list). Degrades gracefully: if the response doesn't
-        have BytesSent/BytesReceived, logs a warning once (not every poll —
-        this runs on the main 15s cycle) and returns None; poll_cycle just
-        skips persisting a row that cycle rather than raising.
+        xpath is confirmed correct against a live router (cross-checked the
+        `wan_stats` DB table's real throughput history — see
+        docs/router/sagemcom-xmo-api.md's WAN Layer section). Still degrades
+        gracefully rather than assuming that holds on every firmware: if the
+        response doesn't have BytesSent/BytesReceived, logs a warning once
+        (not every poll — this runs on the main 15s cycle) and returns None;
+        poll_cycle just skips persisting a row that cycle rather than
+        raising.
         """
         resp = await self._client.get_value("Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats")
         stats = self._client._extract_result(resp, 0) or {}
@@ -497,8 +532,7 @@ class SagemcomXmoAdapter(RouterAdapter):
             if not self._wan_stats_warned:
                 logger.warning(
                     "WAN stats xpath (Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats) "
-                    'did not resolve as expected (unverified xpath — see docs/router/'
-                    'sagemcom-xmo-api.md) — household bandwidth tracking is disabled'
+                    'did not resolve as expected — household bandwidth tracking is disabled'
                 )
                 self._wan_stats_warned = True
             return None
@@ -525,20 +559,33 @@ class SagemcomXmoAdapter(RouterAdapter):
         )
 
     def _to_wifi_radio_info(self, radio: dict) -> WifiRadioInfo:
-        """Field names here are a best-guess against standard TR-181 WiFi
-        Radio object conventions (Channel/TransmitPower/OperatingStandards)
-        — the xpath itself is confirmed live (docs/router/sagemcom-xmo-api.md
-        marks it ✅), but no field-level capture was taken, unlike the
-        Stats sub-paths on the same object. Band is inferred from the
-        radio's own Alias (wl0=5GHz, wl1=2.4GHz, confirmed via the sibling
-        Stats rows) since OperatingFrequencyBand isn't confirmed either.
+        """Field names confirmed live against a real Sagemcom F@st 5670
+        (Channel/TransmitPower/OperatingStandards all present as named).
+        TransmitPower is a percentage of TransmitPowerMax, not dBm — see
+        WifiRadioInfo's docstring — and its -1 sentinel (automatic power
+        control) is mapped to None rather than passed through as -1%.
+        Band is inferred from the radio's own Alias (wl0=5GHz, wl1=2.4GHz,
+        confirmed via the sibling Stats rows) since OperatingFrequencyBand
+        isn't confirmed either.
         """
         alias = _str_field(radio, 'Alias')
-        band = '5GHz' if alias == 'wl0' else '2.4GHz' if alias == 'wl1' else _str_field(radio, 'OperatingFrequencyBand')
+        if alias == 'wl0':
+            band = '5GHz'
+        elif alias == 'wl1':
+            band = '2.4GHz'
+        else:
+            # Neither wl0 nor wl1 — confirmed on a real F@st 5670, whose
+            # Alias is 'RADIO2G4'/'RADIO5G' instead. OperatingFrequencyBand
+            # ('2_4GHZ'/'5GHZ') is confirmed present and reliable there;
+            # normalized to the same 'X.XGHz' shape the wl0/wl1 branch and
+            # the mock adapter both already use.
+            raw_band = _str_field(radio, 'OperatingFrequencyBand')
+            band = {'2_4GHZ': '2.4GHz', '5GHZ': '5GHz', '6GHZ': '6GHz'}.get(raw_band, raw_band)
+        tx_power = _int_field(radio, 'TransmitPower')
         return WifiRadioInfo(
             band=band,
             channel=_int_field(radio, 'Channel'),
-            tx_power_dbm=_int_field(radio, 'TransmitPower'),
+            tx_power_percent=None if tx_power == -1 else tx_power,
             standard=_str_field(radio, 'OperatingStandards'),
         )
 

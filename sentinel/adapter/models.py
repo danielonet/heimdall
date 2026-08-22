@@ -68,11 +68,20 @@ class PortStats:
 
 @dataclass
 class WifiRadioInfo:
-    """Channel/power/standard config for a single WiFi radio (2.4GHz/5GHz)."""
+    """Channel/power/standard config for a single WiFi radio (2.4GHz/5GHz).
+
+    tx_power_percent, not tx_power_dbm — confirmed live against a real
+    Sagemcom F@st 5670: XMO's TransmitPower field is a percentage of
+    TransmitPowerMax (values like 0/10/20.../100, per the sibling
+    TransmitPowerSupported list), not a literal dBm reading. -1 is that
+    field's own sentinel for "TransmitPowerControlMode=Disable", i.e.
+    automatic power control rather than a fixed level — mapped to None
+    here rather than passed through as a bogus '-1%'.
+    """
 
     band: str            # '2.4GHz' | '5GHz'
     channel: int = 0
-    tx_power_dbm: int = 0
+    tx_power_percent: int | None = None
     standard: str = ''    # e.g. 'ax', 'ac', 'n'
 
 
@@ -99,10 +108,11 @@ class WanStats:
     dataclass is keyed by mac_address/port_alias; forcing a sentinel key
     like 'WAN' onto it would be a hack against its intent). The
     Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats xpath this is
-    read from is unverified against a live router — see
-    docs/router/sagemcom-xmo-api.md's 'Remaining captures needed' and
-    SagemcomXmoAdapter.get_wan_stats(); the adapter returns None instead of
-    this dataclass if the xpath doesn't resolve.
+    read from is confirmed correct against a live router — see
+    docs/router/sagemcom-xmo-api.md's WAN Layer section and
+    SagemcomXmoAdapter.get_wan_stats(); the adapter still returns None
+    instead of this dataclass if the xpath doesn't resolve, as a defensive
+    fallback rather than an expectation.
     """
 
     timestamp: datetime

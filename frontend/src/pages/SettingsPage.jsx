@@ -80,7 +80,13 @@ export function SettingsPage() {
               <Field label="WIFI RADIOS">
                 {(router.radios || []).length > 0
                   ? router.radios
-                      .map((r) => `${r.band} ch${r.channel}${r.tx_power_dbm ? ` ${r.tx_power_dbm}dBm` : ''}${r.standard ? ` (${r.standard})` : ''}`)
+                      .map((r) => {
+                        // tx_power_percent, not dBm — this is a percentage
+                        // of the radio's max transmit power; null means
+                        // automatic power control (no fixed level set).
+                        const power = r.tx_power_percent == null ? 'auto power' : `${r.tx_power_percent}% power`
+                        return `${r.band} ch${r.channel} (${power})${r.standard ? ` · ${r.standard}` : ''}`
+                      })
                       .join(', ')
                   : '—'}
               </Field>

@@ -711,24 +711,17 @@ class TestToDeviceSnapshotDefaults:
 
 
 def _router_info_response(
-    *, wan_lower_layers: str = 'Device/PPP/Interfaces/Interface[PPP_DATA]', radios: list | None = None,
+    *, wan_lower_layers: str = 'Device/PPP/Interfaces/Interface[PPP_DATA]',
 ) -> dict:
     """Shape confirmed against a live F@st 5670: DeviceInfo has no
     WANMACAddress (just MACAddress); the WAN interface wraps as {"Interface":
     {...}} (bracket qualifier stripped) with the IP nested under
     IPv4Addresses[0].IPAddress; SSIDs return as a bare list, no wrapper.
-    Radios defaults to empty — its field-level shape is unverified (see
-    _to_wifi_radio_info's docstring), tests that care pass their own."""
+    Radios are fetched by a separate call per uid, not part of this batched
+    response at all — see _radio_uid_response and _get_wifi_radios."""
     return {
         'reply': {
             'actions': [
-                {
-                    'id': 3,
-                    'callbacks': [{
-                        'xpath': 'Device/WiFi/Radios/Radio',
-                        'parameters': {'value': radios if radios is not None else []},
-                    }],
-                },
                 {
                     'id': 0,
                     'callbacks': [{
@@ -769,10 +762,41 @@ def _router_info_response(
     }
 
 
+def _radio_uid_response(radio: dict | None) -> dict:
+    """Mock shape for a single `Device/WiFi/Radios/Radio[@uid='N']` getValue
+    call, as consumed by SagemcomXmoAdapter._get_wifi_radios (always action
+    id 0 — get_value always posts a single action with id 0). `radio=None`
+    reproduces the confirmed-live XMO_UNKNOWN_PATH_ERR response for an
+    out-of-range uid: empty callbacks, so _extract_result returns None and
+    _get_wifi_radios stops enumerating rather than raising."""
+    if radio is None:
+        return {
+            'reply': {
+                'actions': [{
+                    'id': 0,
+                    'error': {'code': 16777243, 'description': 'XMO_UNKNOWN_PATH_ERR'},
+                    'callbacks': [],
+                }],
+            },
+        }
+    return {
+        'reply': {
+            'actions': [{
+                'id': 0,
+                'callbacks': [{
+                    'xpath': "Device/WiFi/Radios/Radio[@uid='1']",
+                    'parameters': {'value': {'Radio': radio}},
+                }],
+            }],
+        },
+    }
+
+
 @pytest.mark.asyncio
 class TestGetRouterInfo:
     async def test_parses_model_firmware_serial_uptime(self, adapter):
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.model == 'Fast5670_GPON'
         assert info.firmware == 'SGFg12000116'
@@ -783,17 +807,20 @@ class TestGetRouterInfo:
         """Regression: the old code looked for a WANMACAddress field that
         doesn't exist on this firmware and always got ''."""
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.wan_mac == 'C4:EB:42:F1:26:85'
 
     async def test_wan_ip_extracted_from_nested_ipv4_addresses(self, adapter):
         """Regression: wan_ip was never fetched at all before."""
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.wan_ip == '89.139.25.209'
 
     async def test_wan_status_from_interface_status(self, adapter):
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.wan_status == 'UP'
 
@@ -801,6 +828,7 @@ class TestGetRouterInfo:
         """Regression: ssids was never fetched at all before. Deduped because
         the same SSID name is broadcast as a separate object per radio band."""
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.ssids == ['MyHomeWiFi']
 
@@ -808,6 +836,7 @@ class TestGetRouterInfo:
         adapter._client.get_values = AsyncMock(return_value=_router_info_response(
             wan_lower_layers='Device/PPP/Interfaces/Interface[PPP_DATA]',
         ))
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.wan_mode == 'PPPoE'
 
@@ -815,35 +844,67 @@ class TestGetRouterInfo:
         adapter._client.get_values = AsyncMock(return_value=_router_info_response(
             wan_lower_layers='Device/Ethernet/VLANTerminations/VLANTermination[VLAN_DATA]',
         ))
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.wan_mode == ''
 
     async def test_no_radios_returns_empty_list(self, adapter):
         adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(return_value=_radio_uid_response(None))
         info = await adapter.get_router_info()
         assert info.radios == []
 
     async def test_radios_parsed_with_band_inferred_from_alias(self, adapter):
-        adapter._client.get_values = AsyncMock(return_value=_router_info_response(radios=[
-            {'Alias': 'wl0', 'Channel': 44, 'TransmitPower': 20, 'OperatingStandards': 'ax'},
-            {'Alias': 'wl1', 'Channel': 6, 'TransmitPower': 20, 'OperatingStandards': 'n'},
-        ]))
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _radio_uid_response({'Alias': 'wl0', 'Channel': 44, 'TransmitPower': 20, 'OperatingStandards': 'ax'}),
+            _radio_uid_response({'Alias': 'wl1', 'Channel': 6, 'TransmitPower': 20, 'OperatingStandards': 'n'}),
+            _radio_uid_response(None),
+        ])
         info = await adapter.get_router_info()
         assert len(info.radios) == 2
         assert info.radios[0].band == '5GHz'
         assert info.radios[0].channel == 44
-        assert info.radios[0].tx_power_dbm == 20
+        assert info.radios[0].tx_power_percent == 20
         assert info.radios[0].standard == 'ax'
         assert info.radios[1].band == '2.4GHz'
         assert info.radios[1].channel == 6
 
     async def test_unrecognized_alias_falls_back_to_operating_frequency_band(self, adapter):
-        adapter._client.get_values = AsyncMock(return_value=_router_info_response(radios=[
-            {'Alias': 'wl2', 'OperatingFrequencyBand': '6GHz', 'Channel': 37},
-        ]))
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _radio_uid_response({'Alias': 'wl2', 'OperatingFrequencyBand': '6GHz', 'Channel': 37}),
+            _radio_uid_response(None),
+        ])
         info = await adapter.get_router_info()
         assert info.radios[0].band == '6GHz'
         assert info.radios[0].channel == 37
+
+    async def test_real_router_alias_normalizes_underscored_band(self, adapter):
+        """RADIO2G4/RADIO5G — confirmed live on a real F@st 5670 — aren't
+        wl0/wl1, so band falls back to OperatingFrequencyBand, whose raw
+        values ('2_4GHZ'/'5GHZ') get normalized to the 'X.XGHz' shape the
+        rest of the app expects, matching the wl0/wl1 branch's output."""
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _radio_uid_response({'Alias': 'RADIO2G4', 'OperatingFrequencyBand': '2_4GHZ', 'Channel': 6}),
+            _radio_uid_response({'Alias': 'RADIO5G', 'OperatingFrequencyBand': '5GHZ', 'Channel': 44}),
+            _radio_uid_response(None),
+        ])
+        info = await adapter.get_router_info()
+        assert info.radios[0].band == '2.4GHz'
+        assert info.radios[1].band == '5GHz'
+
+    async def test_transmit_power_negative_one_maps_to_none_for_auto_control(self, adapter):
+        """Confirmed live: TransmitPower=-1 means TransmitPowerControlMode
+        is Disable (automatic), not a literal '-1%' power level."""
+        adapter._client.get_values = AsyncMock(return_value=_router_info_response())
+        adapter._client.get_value = AsyncMock(side_effect=[
+            _radio_uid_response({'Alias': 'RADIO2G4', 'Channel': 6, 'TransmitPower': -1}),
+            _radio_uid_response(None),
+        ])
+        info = await adapter.get_router_info()
+        assert info.radios[0].tx_power_percent is None
 
 
 @pytest.mark.asyncio
