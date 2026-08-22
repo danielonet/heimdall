@@ -754,6 +754,18 @@ class SentinelScheduler:
         _block_expiry_job's AUTO_BLOCK_EXPIRED) so the linked-away device's
         page — and its UNLINK button, for when this gets it wrong — is
         discoverable.
+
+        Also resolves any still-open NEW_DEVICE alert on the old MAC —
+        NewDeviceDetector fires within one poll of any first-seen MAC,
+        including a phone's own address rotating under WiFi MAC
+        randomization, with no awareness of this job at all. Confirmed
+        live: a CRITICAL NEW_DEVICE alert stayed open indefinitely even
+        after the exact same phone was later successfully linked here.
+        This doesn't stop NEW_DEVICE from firing in the first place (that
+        detector runs 15s after a rotation; this job runs on its own
+        5-minute schedule, so some lag between the two is unavoidable) —
+        it just makes sure a since-explained alert doesn't sit open
+        forever once the explanation exists.
         """
         try:
             async with get_session() as session:
@@ -785,6 +797,8 @@ class SentinelScheduler:
                     linked = await DeviceRepository().link(old_mac=old_mac, new_mac=new_mac, reason=reason)
                     if linked is None:
                         continue
+
+                    await AlertRepository().resolve(device_mac=old_mac, alert_type='NEW_DEVICE')
 
                     description = f"{group['hostname']} ({old_mac}) linked to {new_mac} — {reason}"
                     async with get_session() as session:
@@ -999,7 +1013,22 @@ class SentinelScheduler:
 
         Grouped down to the port because a real beacon always calls home on
         the *same* port — dedup_key includes it too, so distinct ports on
-        the same dst are separate incidents, not coalesced into one alert."""
+        the same dst are separate incidents, not coalesced into one alert.
+
+        Unlike the volume-spike detectors (ANOMALOUS_VOLUME/HIGH_UPLOAD/
+        WAN_BANDWIDTH_SPIKE — see _spike_ip_enrichment_job), a beaconing
+        finding already *has* a destination IP with no correlation needed,
+        so it's checked against ThreatIntelService right here rather than
+        via a separate enrichment pass. Reuses the same raw_data field
+        names (remote_ip/remote_ip_connections/remote_ip_malicious) the
+        frontend's RemoteIpNote already renders for the spike alerts, so
+        this needs no new UI — just populating the same shape. Only
+        annotates the alert; a malicious verdict here doesn't escalate to a
+        separate MALICIOUS_TRAFFIC_DESTINATION finding the way a spike
+        alert's does, since C2_BEACONING is already CRITICAL and already
+        auto-block-eligible on its own — the threat-intel check adds
+        corroborating context, not a promotion in severity.
+        """
         try:
             suspicious = self._zeek_beacon_detector.detect()
         except Exception:
@@ -1009,13 +1038,25 @@ class SentinelScheduler:
 
         for pair in suspicious:
             mac = await self._mac_for_ip(pair['src'])
-            await self._raise_threat_alert(
-                mac, 'C2_BEACONING', 'CRITICAL',
+            verdict = await self._threat_intel.lookup_ip(pair['dst'])
+            description = (
                 f"{pair['src']} has made {pair['count']} connections to "
                 f"{pair['dst']}:{pair['dst_port']} at suspiciously regular "
                 f"~{pair['interval_mean_s']}s intervals "
-                f"(stddev {pair['interval_std_s']}s) — possible C2 beaconing",
-                raw_data=pair,
+                f"(stddev {pair['interval_std_s']}s) — possible C2 beaconing"
+            )
+            if verdict['is_malicious']:
+                description += ' — destination IP is flagged malicious by threat intelligence'
+            await self._raise_threat_alert(
+                mac, 'C2_BEACONING', 'CRITICAL', description,
+                raw_data={
+                    **pair,
+                    'remote_ip': pair['dst'],
+                    'remote_ip_connections': pair['count'],
+                    'remote_ip_malicious': verdict['is_malicious'],
+                    'otx_pulses': verdict['otx_pulses'],
+                    'in_blocklist': verdict['in_blocklist'],
+                },
                 dedup_key=f"{pair['dst']}:{pair['dst_port']}",
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)

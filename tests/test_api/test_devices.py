@@ -310,6 +310,25 @@ class TestPatchDevice:
         assert resp.status_code == 200
         assert resp.get_json()['hostname'] == 'renamed'
 
+    def test_updates_nickname(self, client):
+        """Unlike hostname, nickname is never touched by _upsert_devices —
+        this is the durable rename field. See Device.nickname's docstring."""
+        _seed_device()
+        resp = client.patch(f'/api/devices/{_MAC}', json={'nickname': "Dad's phone"})
+        assert resp.status_code == 200
+        assert resp.get_json()['nickname'] == "Dad's phone"
+
+    def test_nickname_is_trimmed(self, client):
+        _seed_device()
+        resp = client.patch(f'/api/devices/{_MAC}', json={'nickname': '  Living Room TV  '})
+        assert resp.get_json()['nickname'] == 'Living Room TV'
+
+    def test_blank_nickname_clears_it_to_none(self, client):
+        _seed_device()
+        client.patch(f'/api/devices/{_MAC}', json={'nickname': 'temp label'})
+        resp = client.patch(f'/api/devices/{_MAC}', json={'nickname': '   '})
+        assert resp.get_json()['nickname'] is None
+
     def test_updates_tags(self, client):
         _seed_device()
         resp = client.patch(f'/api/devices/{_MAC}', json={'tags': ['trusted', 'iot']})

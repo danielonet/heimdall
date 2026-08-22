@@ -10,6 +10,7 @@ import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
 import { BlockButton } from '../../components/BlockButton'
 import { UnblockButton } from '../../components/UnblockButton'
 import { isDeviceOnline } from '../../lib/deviceFilters'
+import { deviceDisplayName } from '../../lib/deviceDisplay'
 import { groupByAp, isGuestApGroup } from '../../lib/apGroups'
 
 const FILTER_GROUPS = [
@@ -51,15 +52,17 @@ const columnHelperDefs = [
   },
   {
     id: 'device',
-    header: 'HOSTNAME',
-    accessorFn: (d) => d.hostname || d.mac_address,
+    header: 'DEVICE',
+    accessorFn: (d) => deviceDisplayName(d),
     cell: ({ row }) => {
       const d = row.original
       return (
         <div className="flex min-w-0 items-center gap-1.5">
           {!d.ever_connected && <NeverConnectedIcon />}
           <div className="min-w-0">
-            <div className="truncate text-text-primary">{d.hostname || <MacAddress mac={d.mac_address} />}</div>
+            <div className="truncate text-text-primary">
+              {d.nickname || d.hostname || <MacAddress mac={d.mac_address} />}
+            </div>
             <div className="truncate text-[9px] text-text-muted">{d.ip_address || '—'}</div>
           </div>
         </div>
@@ -173,7 +176,7 @@ export function DesktopDevicesList({ devices, totalCount, isLoading, filters, se
         <input
           value={filters.search}
           onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-          placeholder="Search hostname / IP / MAC…"
+          placeholder="Search name / IP / MAC…"
           className="w-56 border border-border bg-bg px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active"
         />
         {FILTER_GROUPS.map((group) => (

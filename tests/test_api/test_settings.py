@@ -346,17 +346,27 @@ class TestPurge:
         assert body['ml_learning_period_hours'] == 24
         assert body['data_retention_days'] == 30
 
-    def test_clears_baseline_established_at_and_returns_to_learning(self, client, auth_headers):
+    def test_restamps_baseline_established_at_to_now_and_returns_to_learning(self, client, auth_headers):
+        """Regression: an earlier version cleared baseline_established_at to
+        None and relied on the next poll noticing an empty devices table to
+        restamp it — racy against the concurrently-running poll loop (see
+        settings.py:purge's docstring), and confirmed in production to
+        permanently skip the learning window when it lost that race. Purge
+        now stamps the real timestamp itself, atomically, so there's nothing
+        left for a later poll to get right or wrong."""
         asyncio.run(SettingsRepository().set_baseline_established_at(
             datetime.now(timezone.utc) - timedelta(hours=200)
         ))
         assert client.get('/api/settings').get_json()['status'] == 'ARMED'
 
+        before = datetime.now(timezone.utc)
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD}, headers=auth_headers)
         assert resp.status_code == 200
 
         body = client.get('/api/settings').get_json()
-        assert body['baseline_established_at'] is None
+        assert body['baseline_established_at'] is not None
+        restamped = datetime.fromisoformat(body['baseline_established_at'])
+        assert restamped >= before
         assert body['status'] == 'LEARNING'
 
 

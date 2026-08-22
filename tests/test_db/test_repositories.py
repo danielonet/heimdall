@@ -528,6 +528,21 @@ class TestDeviceTypeProfileRepository:
     async def test_delete_nonexistent_profile_returns_false(self):
         assert await DeviceTypeProfileRepository().delete_profile(_TEST_DEVICE_TYPE) is False
 
+    async def test_unmatched_type_logs_a_warning_once_not_every_call(self, caplog):
+        """Regression: a device_type with no matching profile row silently
+        fell back to DEFAULT_PROFILE with zero visibility anywhere —
+        confirmed in production, a live device classified 'NAS' missed a
+        seeded 'Network Attached Storage' row (exact-string PK lookup, no
+        aliasing) and got the generic default instead, invisibly. Logs
+        once per distinct type per process, not on every poll."""
+        import logging
+        unmatched_type = '__unmatched_for_warning_test__'
+        with caplog.at_level(logging.WARNING, logger='sentinel.db.repositories'):
+            await DeviceTypeProfileRepository().get_profile(unmatched_type)
+            await DeviceTypeProfileRepository().get_profile(unmatched_type)
+        matching_records = [r for r in caplog.records if unmatched_type in r.getMessage()]
+        assert len(matching_records) == 1
+
     async def test_get_all_profiles_includes_seeded_smartphone_row(self):
         all_profiles = await DeviceTypeProfileRepository().get_all_profiles()
         smartphone = next((p for p in all_profiles if p.device_type == 'Smartphone'), None)

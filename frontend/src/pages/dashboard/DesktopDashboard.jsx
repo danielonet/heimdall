@@ -65,7 +65,7 @@ export function DesktopDashboard({ devices, alerts, bannerAlert, onSelectAlert, 
                   <StatusDot variant={d.is_blocked ? 'red' : 'green'} />
                   <Link to={`/devices/${d.mac_address}`} className="group block min-w-0 flex-1">
                     <div className="truncate text-text-primary group-hover:text-accent-blue group-hover:underline">
-                      {d.hostname || <MacAddress mac={d.mac_address} />}
+                      {d.nickname || d.hostname || <MacAddress mac={d.mac_address} />}
                     </div>
                     <div className="truncate text-[9px] text-text-muted">{d.vendor_name || '—'}</div>
                   </Link>

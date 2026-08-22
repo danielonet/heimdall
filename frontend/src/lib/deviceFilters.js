@@ -12,7 +12,7 @@ export function filterDevices(devices, { search, connectivity, network, trust, p
 
   return devices.filter((d) => {
     if (q) {
-      const haystack = `${d.hostname || ''} ${d.ip_address || ''} ${d.mac_address}`.toLowerCase()
+      const haystack = `${d.nickname || ''} ${d.hostname || ''} ${d.ip_address || ''} ${d.mac_address}`.toLowerCase()
       if (!haystack.includes(q)) return false
     }
 

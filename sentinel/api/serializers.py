@@ -13,6 +13,7 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'mac_address': device.mac_address,
         'ip_address': device.ip_address,
         'hostname': device.hostname,
+        'nickname': device.nickname,
         'vendor_name': device.vendor_name,
         'interface_name': device.interface_name,
         'traffic_granularity': device.traffic_granularity,

@@ -181,18 +181,37 @@ class TestDeviceTypeAwareThreshold:
         """A 2.5:1 ratio never counts as 'high' under the flat default
         threshold (3.0), but device_profiles.py tightens Printer's threshold
         to 2.0 — printers have almost no legitimate reason to sustain any
-        elevated upload ratio. Still needs the same SUSTAINED_POLLS streak
-        as any device (only the ratio threshold varies here, not the
-        streak length — that's AnomalousVolumeDetector's lever, see
-        test_anomalous_volume.py's TestDeviceTypeAwareStreak)."""
+        elevated upload ratio. Printer's seeded volume_sustained_polls is 2
+        (not the default 3) — see test_sustain_count_is_also_device_type_aware
+        below for the regression this profile row's *other* field used to
+        silently not apply to this detector at all."""
         printer_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Printer')
         detector = HighUploadDetector()
         sample = _sample(sent=25_000, recv=10_000)  # 2.5:1
         assert await detector.inspect_traffic(sample, printer_snapshot) is None
-        assert await detector.inspect_traffic(sample, printer_snapshot) is None
         alert = await detector.inspect_traffic(sample, printer_snapshot)
         assert alert is not None
         assert alert.alert_type == 'HIGH_UPLOAD'
+        assert '2 consecutive polls' in alert.description
+
+    async def test_sustain_count_is_also_device_type_aware(self):
+        """Regression: this detector used to read only the ratio threshold
+        from the per-device-type profile row and kept a hardcoded 3-poll
+        sustain for every device type regardless — so raising a type's
+        volume_sustained_polls from the Device Type Profiles UI (the same
+        field AnomalousVolumeDetector's streak already respected) silently
+        did nothing here. Smartphone's seeded profile raises the sustain to
+        6 polls specifically to absorb short legitimate bursts — confirm a
+        5-poll streak (one short of that) does NOT alert, where the old
+        hardcoded 3-poll behavior would have fired on poll 3."""
+        phone_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Smartphone')
+        detector = HighUploadDetector()
+        sample = _sample(sent=100_000, recv=1_000)  # well above Smartphone's 2.5:1 threshold
+        for _ in range(5):
+            assert await detector.inspect_traffic(sample, phone_snapshot) is None
+        alert = await detector.inspect_traffic(sample, phone_snapshot)  # 6th poll
+        assert alert is not None
+        assert '6 consecutive polls' in alert.description
 
     async def test_unrecognized_device_type_behaves_like_default(self):
         weird_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Some Router String We Have Never Seen')

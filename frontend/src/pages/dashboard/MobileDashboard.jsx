@@ -39,7 +39,7 @@ export function MobileDashboard({ devices, alerts, bannerAlert, onSelectAlert, t
             <StatusDot variant={d.is_blocked ? 'red' : 'green'} />
             <Link to={`/devices/${d.mac_address}`} className="group min-w-0 flex-1">
               <div className="truncate text-[11px] text-text-primary group-hover:text-accent-blue group-hover:underline">
-                {d.hostname || <MacAddress mac={d.mac_address} />}
+                {d.nickname || d.hostname || <MacAddress mac={d.mac_address} />}
               </div>
               <div className="truncate text-[9px] text-text-muted">
                 {d.ip_address} {d.vendor_name ? `· ${d.vendor_name}` : ''}

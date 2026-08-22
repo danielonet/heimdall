@@ -25,6 +25,13 @@ class Device(Base):
     mac_address: Mapped[str] = mapped_column(String(17), primary_key=True)
     ip_address: Mapped[str | None] = mapped_column(String(15))
     hostname: Mapped[str | None] = mapped_column(String(255))
+    # A user-set label, independent of the router-reported hostname above —
+    # unlike hostname, _upsert_devices (sentinel/scheduler/jobs.py) never
+    # touches this, so it survives every poll instead of being silently
+    # reverted within ~15s. Kept separate rather than repurposing hostname
+    # itself so DeviceIdentityLinker's hostname-match heuristic keeps
+    # comparing what the router actually reports.
+    nickname: Mapped[str | None] = mapped_column(Text)
     vendor_name: Mapped[str | None] = mapped_column(String(255))
     interface_name: Mapped[str | None] = mapped_column(String(20))
     traffic_granularity: Mapped[str] = mapped_column(String(12), server_default='per_device')

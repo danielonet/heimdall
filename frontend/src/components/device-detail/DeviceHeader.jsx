@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiJson } from '../../lib/api'
+import { deviceDisplayName, isLocallyAdministeredMac } from '../../lib/deviceDisplay'
 import { StatusDot } from '../StatusDot'
 import { MacAddress } from '../MacAddress'
 import { Badge } from '../Badge'
@@ -22,6 +24,24 @@ function autoUnblockLabel(blockedUntil) {
 
 export function DeviceHeader({ device }) {
   const qc = useQueryClient()
+  const [renaming, setRenaming] = useState(false)
+  const [nicknameDraft, setNicknameDraft] = useState(device.nickname || '')
+
+  // nickname is durable — unlike hostname, nothing in the poll loop ever
+  // overwrites it (see sentinel/db/models.py:Device.nickname). Submitting
+  // an empty value clears it back to following the router-reported hostname.
+  const setNickname = useMutation({
+    mutationFn: (nickname) =>
+      apiJson(`/devices/${device.mac_address}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ nickname }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      qc.invalidateQueries({ queryKey: ['device', device.mac_address] })
+      setRenaming(false)
+    },
+  })
 
   const setTrusted = useMutation({
     mutationFn: (is_trusted) =>
@@ -76,7 +96,7 @@ export function DeviceHeader({ device }) {
             <span key={d.mac_address}>
               {i > 0 && ', '}
               <Link to={`/devices/${d.mac_address}`} className="text-accent-blue underline hover:text-text-primary">
-                {d.hostname || d.mac_address}
+                {deviceDisplayName(d)}
               </Link>
             </span>
           ))}
@@ -86,16 +106,71 @@ export function DeviceHeader({ device }) {
         <div>
           <div className="flex items-center gap-2">
             <StatusDot variant={device.is_blocked ? 'red' : 'green'} pulse={!device.is_blocked} />
-            <span className="font-heading text-lg font-semibold text-text-primary">
-              {device.hostname || device.mac_address}
-            </span>
+            {renaming ? (
+              <form
+                className="flex items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  setNickname.mutate(nicknameDraft.trim())
+                }}
+              >
+                <input
+                  autoFocus
+                  value={nicknameDraft}
+                  onChange={(e) => setNicknameDraft(e.target.value)}
+                  placeholder={device.hostname || device.mac_address}
+                  className="border border-border bg-surface-elevated px-2 py-0.5 font-heading text-lg font-semibold text-text-primary outline-none focus:border-accent-blue"
+                />
+                <button
+                  type="submit"
+                  disabled={setNickname.isPending}
+                  className="border border-accent-green/30 bg-accent-green/5 px-1.5 py-0.5 text-[9px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-50"
+                >
+                  SAVE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNicknameDraft(device.nickname || '')
+                    setRenaming(false)
+                  }}
+                  className="border border-border px-1.5 py-0.5 text-[9px] tracking-wider text-text-muted transition-colors hover:bg-surface-elevated"
+                >
+                  CANCEL
+                </button>
+              </form>
+            ) : (
+              <span
+                className="group flex cursor-pointer items-center gap-2"
+                onClick={() => setRenaming(true)}
+                title="Click to rename"
+              >
+                <span className="font-heading text-lg font-semibold text-text-primary">
+                  {deviceDisplayName(device)}
+                </span>
+                <span className="text-[9px] tracking-wider text-text-muted opacity-0 transition-opacity group-hover:opacity-100">
+                  ✎ RENAME
+                </span>
+              </span>
+            )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-text-secondary">
             <span>
               <MacAddress mac={device.mac_address} vendor={device.vendor_name} />
             </span>
+            {device.nickname && device.hostname && (
+              <span title="Router-reported hostname">router: {device.hostname}</span>
+            )}
             <span>{device.ip_address || '—'}</span>
             {device.vendor_name && <span>{device.vendor_name}</span>}
+            {!device.vendor_name && isLocallyAdministeredMac(device.mac_address) && (
+              <span
+                className="text-text-muted"
+                title="This MAC is randomized (WiFi private address / per-network randomization) — there's no real manufacturer OUI to look up"
+              >
+                Private address
+              </span>
+            )}
             {device.device_type && device.device_type !== 'MISCELLANEOUS' && <span>{device.device_type}</span>}
             {device.os_fingerprint && <span>{device.os_fingerprint}</span>}
             {device.is_blocked && device.blocked_until && (

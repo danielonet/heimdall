@@ -105,6 +105,32 @@ class TestIdentityLinkJob:
         assert alert.raw_data['old_mac'] == _MAC_A
         assert alert.raw_data['new_mac'] == _MAC_B
 
+    async def test_a_successful_link_resolves_the_old_macs_open_new_device_alert(self, scheduler):
+        """Regression: NewDeviceDetector fires a CRITICAL NEW_DEVICE alert
+        within one poll of any first-seen MAC, including a phone's own
+        address rotating under WiFi MAC randomization, with zero awareness
+        of identity-linking. Confirmed in production: that alert stayed
+        open indefinitely even after the exact same phone was later
+        successfully linked here. A successful link must resolve it."""
+        from sentinel.db.repositories import AlertRepository
+
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9')
+        await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10')
+        await AlertRepository().upsert(
+            device_mac=_MAC_A, alert_type='NEW_DEVICE', severity='CRITICAL',
+            description='New device joined the network: phone (10.0.0.9)',
+        )
+        scheduler._liveness_probe = _FakeLivenessProbe(reachable={'10.0.0.9': False, '10.0.0.10': True})
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC_A, Alert.alert_type == 'NEW_DEVICE')
+            )
+            new_device_alert = result.scalars().first()
+        assert new_device_alert.resolved is True
+
     async def test_does_nothing_when_all_members_are_reachable(self, scheduler):
         await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9')
         await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10')

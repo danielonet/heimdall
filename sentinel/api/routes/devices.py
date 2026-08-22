@@ -141,7 +141,13 @@ async def unarchive_device(mac: str):
 
 @bp.route('/<mac>', methods=['PATCH'])
 async def patch_device(mac: str):
-    """Update device metadata: hostname alias, tags, trusted flag.
+    """Update device metadata: nickname, hostname alias, tags, trusted flag.
+
+    nickname is the durable way to label a device — unlike hostname (also
+    settable here for completeness, but router-reported and overwritten by
+    _upsert_devices on the very next poll, ~15s later), nothing in the poll
+    loop ever touches nickname, so a rename here actually sticks. See
+    Device.nickname's docstring.
 
     Setting is_trusted also writes through to the persistent trusted_macs
     registry (and clearing it removes the entry) — that registry, unlike this
@@ -155,6 +161,9 @@ async def patch_device(mac: str):
         if device is None:
             return jsonify(error='Device not found'), 404
 
+        if 'nickname' in body:
+            nickname = body['nickname']
+            device.nickname = nickname.strip() or None if isinstance(nickname, str) else None
         if 'hostname' in body:
             device.hostname = body['hostname']
         if 'tags' in body:

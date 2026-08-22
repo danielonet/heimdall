@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, Device, DnsQuery
+from sentinel.db.models import Alert, Device, DnsQuery, ThreatIntelCache
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
@@ -47,6 +47,14 @@ async def _init_db():
         await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
         await session.execute(delete(DnsQuery).where(DnsQuery.device_mac == _MAC))
         await session.execute(delete(Device).where(Device.mac_address == _MAC))
+        # _zeek_beacon_scan_job's threat-intel lookup DB-caches its verdict
+        # for 24h (see ThreatIntelService.lookup_ip) — without this, a
+        # benign-verdict test run earlier in the same IP would make a
+        # later malicious-verdict test on that same IP see the stale
+        # cached (and now wrong) answer instead of the freshly-seeded one.
+        await session.execute(delete(ThreatIntelCache).where(
+            ThreatIntelCache.ip_or_domain.in_(['203.0.113.10', '198.51.100.66'])
+        ))
     await get_engine().dispose()
 
 
@@ -222,6 +230,56 @@ class TestZeekBeaconScanJob:
         assert alert is not None
         assert alert.alert_type == 'C2_BEACONING'
         assert '203.0.113.10:443' in alert.description
+
+    async def test_benign_destination_is_annotated_but_not_flagged(self, scheduler):
+        """C2_BEACONING already knows its destination IP outright — unlike
+        the volume-spike alerts (see TestSpikeIpEnrichmentJob), no
+        correlation is needed to find one, so it's threat-intel-checked
+        directly in the beacon scan job itself."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        sched._zeek_beacon_detector = _FakeBeaconDetector([{
+            'src': _IP, 'dst': '203.0.113.10', 'dst_port': 443, 'count': 20,
+            'interval_mean_s': 60.0, 'interval_std_s': 0.5,
+        }])
+
+        await sched._zeek_beacon_scan_job()
+
+        alert = await _latest_alert()
+        assert alert.raw_data['remote_ip'] == '203.0.113.10'
+        assert alert.raw_data['remote_ip_connections'] == 20
+        assert alert.raw_data['remote_ip_malicious'] is False
+        assert 'flagged malicious' not in alert.description
+
+    async def test_malicious_destination_is_flagged_in_raw_data_and_description(self, scheduler):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(False)
+        sched = scheduler
+        # Distinct IP from test_benign_destination_is_annotated_but_not_
+        # flagged's 203.0.113.10 — lookup_ip() DB-caches its verdict for
+        # 24h, so reusing the same IP as a benign-verdict test would see
+        # that earlier (now-stale) cached answer instead of this test's own.
+        sched._threat_intel._ip_block.add('198.51.100.66')
+        sched._zeek_beacon_detector = _FakeBeaconDetector([{
+            'src': _IP, 'dst': '198.51.100.66', 'dst_port': 443, 'count': 20,
+            'interval_mean_s': 60.0, 'interval_std_s': 0.5,
+        }])
+
+        await sched._zeek_beacon_scan_job()
+
+        alert = await _latest_alert()
+        assert alert.raw_data['remote_ip_malicious'] is True
+        assert alert.raw_data['in_blocklist'] is True
+        assert 'flagged malicious' in alert.description
+        # Still just one alert total — a malicious verdict here annotates
+        # the existing C2_BEACONING finding, it doesn't also spawn a
+        # separate MALICIOUS_TRAFFIC_DESTINATION escalation (unlike the
+        # volume-spike path) since C2_BEACONING is already CRITICAL on its
+        # own.
+        alerts = await _all_alerts()
+        assert len(alerts) == 1
+        assert alerts[0].alert_type == 'C2_BEACONING'
 
     async def test_no_suspicious_pairs_raises_nothing(self, scheduler):
         sched = scheduler

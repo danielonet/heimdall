@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -282,8 +283,23 @@ async def purge():
     Deliberately does NOT touch the admin's configured preferences
     (ml_learning_period_hours, data_retention_days) — those are settings,
     not learned data, and "purge the database" shouldn't silently reset them
-    back to their env defaults. Only baseline_established_at, which tracks
-    the *current* baseline's age, is cleared.
+    back to their env defaults.
+
+    Stamps baseline_established_at to *now*, right here in the same request
+    — not None. An earlier version cleared it to None and relied on the next
+    poll's _auto_trust_new_connections_during_learning to notice the devices
+    table was empty and stamp the real start time itself. That's racy: the
+    background poll loop keeps running on its own 15s schedule regardless of
+    this request, so a poll already in flight when the TRUNCATE commits can
+    observe a *non-empty* table moments later (its own upsert, or another
+    poll's) and take the "pre-existing install, already ARMED" branch
+    instead — permanently skipping the learning window, with no self-healing,
+    since nothing else ever revisits it. Confirmed in production: exactly
+    this happened, and NEW_DEVICE CRITICAL alerts flooded in unsuppressed for
+    18+ hours after a purge. Setting the timestamp directly, atomically, in
+    the same transaction as the wipe removes the race entirely — the
+    learning window starts the instant this request completes, not on
+    whichever later poll happens to notice.
 
     Irreversible, so it re-verifies the admin password on top of the JWT
     already required to reach this route — a leaked/stolen 15-minute access
@@ -304,7 +320,7 @@ async def purge():
             'TRUNCATE devices, traffic_samples, port_stats, wan_status_history, '
             'alerts, trusted_macs RESTART IDENTITY'
         ))
-    await SettingsRepository().set_baseline_established_at(None)
+    await SettingsRepository().set_baseline_established_at(datetime.now(timezone.utc))
 
     ModelStore(current_app.config['ML_MODEL_DIR']).clear_all()
 

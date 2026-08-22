@@ -29,7 +29,7 @@ function DeviceCard({ device: d, onClick }) {
         <div className="flex items-center gap-1.5">
           {!d.ever_connected && <NeverConnectedIcon />}
           <div className="truncate text-[11px] text-text-primary">
-            {d.hostname || <MacAddress mac={d.mac_address} />}
+            {d.nickname || d.hostname || <MacAddress mac={d.mac_address} />}
           </div>
         </div>
         <div className="truncate text-[9px] text-text-muted">
@@ -71,7 +71,7 @@ export function MobileDevicesList({ devices, totalCount, isLoading, filters, set
       <input
         value={filters.search}
         onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-        placeholder="Search hostname / IP / MAC…"
+        placeholder="Search name / IP / MAC…"
         className="w-full border border-border bg-surface px-3 py-2 text-[11px] text-text-primary outline-none focus:border-border-active"
       />
 

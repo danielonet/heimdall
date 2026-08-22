@@ -5,6 +5,7 @@ the current poll cycle (e.g. "has this MAC ever been seen before").
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
@@ -15,7 +16,18 @@ from sentinel.db.models import Alert, AppSettings, Device, DeviceTypeProfile, Tr
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
 
+logger = logging.getLogger(__name__)
+
 _SETTINGS_ROW_ID = 1
+
+# device_type strings DeviceTypeProfileRepository.get_profile() has already
+# warned about not matching any configured profile row — see get_profile()'s
+# docstring. Module-level (not an instance attribute) because this class is
+# instantiated fresh per call (see class docstring) with nothing to hold
+# per-process state on; same "log once, not every poll" posture as
+# SagemcomXmoAdapter._wan_stats_warned, just at module scope since there's
+# no long-lived instance here to hang a flag on.
+_unmatched_device_types_warned: set[str] = set()
 
 
 class DeviceRepository:
@@ -224,11 +236,29 @@ class DeviceTypeProfileRepository:
     """
 
     async def get_profile(self, device_type: str | None) -> dict:
+        """Falls back to DEFAULT_PROFILE, untouched, for a blank or
+        unmatched device_type — this is an exact-string primary-key lookup,
+        so a real mismatch between the router's own classification
+        vocabulary and this table's admin-facing keys (confirmed in
+        production: a device the router reported as 'NAS' silently missed
+        a seeded 'Network Attached Storage' row and got the generic,
+        stricter default instead — the admin had tuned the *right* profile,
+        it just never applied) fails exactly like a genuinely unrecognized
+        type, with nothing surfaced anywhere. Logs once per distinct
+        unmatched type per process lifetime — not every poll — so this
+        class of mismatch is at least discoverable instead of silent."""
         if not device_type:
             return dict(DEFAULT_PROFILE)
         async with get_session() as session:
             row = await session.get(DeviceTypeProfile, device_type)
         if row is None:
+            if device_type not in _unmatched_device_types_warned:
+                _unmatched_device_types_warned.add(device_type)
+                logger.warning(
+                    'device_type %r has no matching device_type_profiles row — falling back to '
+                    'DEFAULT_PROFILE. If you meant to tune this type, check Settings -> Device Type '
+                    'Profiles for an exact-string match (this is not a fuzzy lookup).', device_type,
+                )
             return dict(DEFAULT_PROFILE)
         return {
             **DEFAULT_PROFILE,
