@@ -184,7 +184,7 @@ if [ ! -f "$ALEMBIC_INI" ]; then
 else
     log_info "Running alembic upgrade head..."
     cd "$REPO_ROOT"
-    python3 -m alembic upgrade head
+    "$PYTHON_BIN" -m alembic upgrade head
     log_success "Migrations applied"
 fi
 
