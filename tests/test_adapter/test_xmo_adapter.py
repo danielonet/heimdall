@@ -1036,8 +1036,8 @@ class TestQuarantineDevice:
         adapter._client.get_value = AsyncMock(side_effect=[
             _hosts_response([host]),
             {'reply': {'actions': [{'id': 0, 'callbacks': [{
-                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
-                'parameters': {'value': 'DROP'},
+                'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Enable',
+                'parameters': {'value': True},
             }]}]}},
         ])
         adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
@@ -1047,6 +1047,8 @@ class TestQuarantineDevice:
         called_xpath, called_params = adapter._client.add_child.call_args[0]
         assert called_xpath == 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules'
         assert called_params['Rule']['SourceIP'] == '10.100.102.10'
+        assert called_params['Rule']['SourceMask'] == '255.255.255.255'
+        assert called_params['Rule']['Target'] == 'DROP'
         assert called_params['Rule']['Description'] == f'heimdall-quarantine-{mac}'
 
     async def test_add_child_failure_returns_false(self, adapter):
@@ -1062,15 +1064,15 @@ class TestQuarantineDevice:
         adapter._client.get_value = AsyncMock(side_effect=[
             _hosts_response([host]),
             {'reply': {'actions': [{'id': 0, 'callbacks': [{
-                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
-                'parameters': {'value': 'DROP'},
+                'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Enable',
+                'parameters': {'value': False},
             }]}]}},
         ])
         adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
         with caplog.at_level('WARNING'):
             result = await adapter.quarantine_device(mac)
         assert result is True  # rule was still created — this is a warning, not a failure
-        assert any('not "Custom"' in r.message for r in caplog.records)
+        assert any('not active' in r.message for r in caplog.records)
 
     async def test_does_not_warn_when_custom_chain_active(self, adapter, caplog):
         mac = 'da:d4:19:31:c0:e9'
@@ -1078,30 +1080,32 @@ class TestQuarantineDevice:
         adapter._client.get_value = AsyncMock(side_effect=[
             _hosts_response([host]),
             {'reply': {'actions': [{'id': 0, 'callbacks': [{
-                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
-                'parameters': {'value': 'Custom'},
+                'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Enable',
+                'parameters': {'value': True},
             }]}]}},
         ])
         adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
         with caplog.at_level('WARNING'):
             await adapter.quarantine_device(mac)
-        assert not any('not "Custom"' in r.message for r in caplog.records)
+        assert not any('not active' in r.message for r in caplog.records)
 
-    async def test_never_writes_default_policy(self, adapter):
-        """Safety invariant: quarantine_device must only ever read
-        DefaultPolicy, never call setValue/addChild/addObject on it."""
+    async def test_never_writes_to_the_chain_enable_check(self, adapter):
+        """Safety invariant: quarantine_device must only ever read the
+        Custom chain's Enable flag, never call setValue/addChild/addObject
+        on it — flipping the router's whole active firewall posture is out
+        of scope for a per-device action (see _warn_if_custom_chain_inactive)."""
         mac = 'da:d4:19:31:c0:e9'
         host = _wifi_host(PhysAddress=mac.upper(), IPAddress='10.100.102.10')
         adapter._client.get_value = AsyncMock(side_effect=[
             _hosts_response([host]),
             {'reply': {'actions': [{'id': 0, 'callbacks': [{
-                'xpath': 'Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy',
-                'parameters': {'value': 'DROP'},
+                'xpath': 'Device/Firewall/Chains/Chain[Name="Custom"]/Enable',
+                'parameters': {'value': False},
             }]}]}},
         ])
         adapter._client.add_child = AsyncMock(return_value=_no_err_reply())
         adapter._client.post = AsyncMock(side_effect=AssertionError('must not call post() directly'))
-        await adapter.quarantine_device(mac)  # would raise if DefaultPolicy were ever written via post()
+        await adapter.quarantine_device(mac)  # would raise if Enable were ever written via post()
 
 
 @pytest.mark.asyncio

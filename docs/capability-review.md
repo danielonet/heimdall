@@ -79,7 +79,7 @@ reflected in each item below.
 
 13. **Time-limited auto-block with review.** ✅ *Done — `Device.blocked_at`/`blocked_until` + `AppSettings.auto_block_expiry_hours` (default 24h, `0` = never expires).* `_raise_threat_alert` (re-)stamps the expiry timer on every successful auto-block, including a re-block of an already-blocked device (the fix for a real race: a fresh threat must always reset the clock). A new interval job, `_block_expiry_job`, sweeps overdue auto-blocks, unblocks them via the adapter, raises a low-severity `AUTO_BLOCK_EXPIRED` alert, and sends a review notification. Manual blocks (`POST /devices/<mac>/block`) never set `blocked_until`, so they stay indefinite by design.
 
-14. **Repurpose the original (wrong-for-blocking) firewall-rule mechanism as a "quarantine" tier.** ✅ *Done — `SagemcomXmoAdapter.quarantine_device`/`unquarantine_device`.* Confirmed there was no dead code to resurrect (the mechanism was previously rejected and removed, only the xpath/payload shape survived in the docs) — this is new adapter code using `addChild` on `Device/Firewall/Chains/Chain[Name="Custom"]/Rules`, scoped to the device's IP. Read-only safety check on `Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy` warns (never writes) if the rule won't actually enforce yet — flipping the router's whole active firewall posture is deliberately out of scope for a per-device action. New `Device.is_quarantined` column, `POST /devices/<mac>/quarantine`/`/unquarantine` routes (manual-only — no detector auto-triggers it), and a QUARANTINE/UNQUARANTINE button + badge on the device header, distinct from BLOCKED.
+14. **Repurpose the original (wrong-for-blocking) firewall-rule mechanism as a "quarantine" tier.** ✅ *Done, and live-verified — caught two real bugs.* `SagemcomXmoAdapter.quarantine_device`/`unquarantine_device` use `addChild` on `Device/Firewall/Chains/Chain[Name="Custom"]/Rules`, scoped to the device's IP. The Rule object's field names were a best-effort TR-181-style guess until this pass; confirmed live (by reading the ~40 firmware-default rule templates every chain ships pre-populated with) and fixed two bugs: the target field is `Target` (`'ACCEPT'`/`'DROP'`), not the nonexistent `TargetAction` the code had been sending (silently defaulting to `'ACCEPT'` — the created rule was never actually a DROP rule); and single-host scoping is `SourceMask` (a dotted-decimal netmask), not a `SourcePrefixLength` integer, which isn't a field on this object. Also fixed the read-only "will this actually enforce" safety check: it was reading `Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy` and comparing to `'Custom'`, but that field is a static property of the Custom level (always `'DROP'` on this unit) — confirmed it warned unconditionally regardless of the router's actual state. Now reads the Custom chain's own `Enable` flag directly, which is a genuine live signal — and confirmed `false` right now, meaning quarantine currently creates a rule that doesn't yet enforce until the router's Security Level is switched to "Custom" by hand in its own admin UI (the code deliberately never does that switch itself). New `Device.is_quarantined` column, `POST /devices/<mac>/quarantine`/`/unquarantine` routes (manual-only — no detector auto-triggers it), and a QUARANTINE/UNQUARANTINE button + badge on the device header, distinct from BLOCKED.
 
 15. **Cross-alert correlation.** ✅ *Done — new standalone `sentinel/detection/correlation.py`, not a `RuleEngine` extension.* Confirmed `RuleEngine`'s condition model has no concept of the `alerts` table at all (it evaluates one live poll snapshot at a time) and that `_raise_threat_alert` is only one of four alert-creation paths — a correlator hooked only into `_raise_threat_alert` would miss `NEW_DEVICE` entirely, the exact pattern named in this item. `CrossAlertCorrelator` instead queries the persisted `alerts` table directly on its own interval job (`_correlation_job`), against a small curated pattern list (`NEW_DEVICE` → spoofing/mismatch within 60min; known exposure → compromise signs within 24h). Matches escalate to a single `COMPROMISE_CHAIN_DETECTED` incident routed through the normal `_raise_threat_alert` path (so it's auto-blockable like any other high-confidence finding), with per-follow-alert dedup so the same pair never re-fires.
 
@@ -120,11 +120,12 @@ WiFi radio this deployment doesn't have — the only item left unbuilt. The
 also since shipped. Remaining follow-up isn't new features so much as
 hardening what's already shipped: verifying/tuning the actual Suricata
 ruleset against real home traffic (this integration ingests alerts, it
-doesn't manage the rule set); **#6** (WAN stats) and **#8** (WiFi radios)
-have both now been live-verified against the real router — see their
-status notes above; **#14**'s quarantine `Rule` object field names are
-the one remaining best-guess integration still needing that same
-live-verification pass; and, if Grafana ever gets pointed at **#17**'s
-`/metrics` endpoint, adding a Prometheus scrape config + a starter
-dashboard JSON to `docs/` so that setup is copy-paste rather than built
-from scratch.
+doesn't manage the rule set); **#6** (WAN stats), **#8** (WiFi radios), and
+**#14** (quarantine `Rule` fields) have all now been live-verified against
+the real router — no best-guess integrations left — see their status notes
+above; **#14** specifically still needs a one-time manual step on the
+router's own admin UI (Security Level → "Custom") before quarantine
+actually enforces anything, which is outside this app's scope by design;
+and, if Grafana ever gets pointed at **#17**'s `/metrics` endpoint, adding
+a Prometheus scrape config + a starter dashboard JSON to `docs/` so that
+setup is copy-paste rather than built from scratch.

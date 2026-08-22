@@ -47,10 +47,18 @@ _XMO_NO_ERR = 16777239
 # effect on purely-local LAN traffic, which is exactly the "cut internet,
 # keep LAN reachable" distinction a quarantine tier needs (the opposite of
 # why that chain was rejected for block_device). The xpath and addChild
-# method are confirmed live; the Rule object's own field names below
-# (Enable/SourceIP/SourcePrefixLength/TargetAction) are a best-effort
-# TR-181-style guess, NOT a confirmed live capture — no admin UI form exists
-# for the Custom chain to click through and observe, unlike BlacklistedSchedule.
+# method are confirmed live, and so is the Rule object's full field set —
+# confirmed by reading the ~40 firmware-default rule-template entries that
+# ship pre-populated in every chain (Custom included) as `addChild` targets
+# for the router's own port-forwarding UI. That capture caught two real bugs
+# in the field names this adapter had been sending, both fixed: the target
+# field is `Target` (values `'ACCEPT'`/`'DROP'`), not `TargetAction` — the
+# rule was being created with an unrecognized field and silently defaulting
+# to `Target: 'ACCEPT'`, the worst possible failure mode for a block rule;
+# and single-host scoping is `SourceMask` (a dotted-decimal netmask string,
+# e.g. `'255.255.255.255'` — confirmed against this router's own
+# IPv4Addresses[].SubnetMask format elsewhere in the data model), not a
+# `SourcePrefixLength` integer, which isn't a field on this object at all.
 _QUARANTINE_CHAIN_XPATH = 'Device/Firewall/Chains/Chain[Name="Custom"]/Rules'
 _QUARANTINE_RULE_DESCRIPTION_PREFIX = 'heimdall-quarantine-'
 
@@ -301,8 +309,8 @@ class SagemcomXmoAdapter(RouterAdapter):
                 'Enable': True,
                 'Description': f'{_QUARANTINE_RULE_DESCRIPTION_PREFIX}{mac}',
                 'SourceIP': ip,
-                'SourcePrefixLength': 32,
-                'TargetAction': 'Drop',
+                'SourceMask': '255.255.255.255',
+                'Target': 'DROP',
             },
         })
         action = (resp.get('reply', {}).get('actions') or [{}])[0]
@@ -349,25 +357,37 @@ class SagemcomXmoAdapter(RouterAdapter):
         return True
 
     async def _warn_if_custom_chain_inactive(self, mac: str) -> None:
-        """Read-only check: a Custom-chain rule reports Status: DISABLED
-        unless the router's active firewall security level is itself set to
-        "Custom" (docs/router/sagemcom-xmo-api.md:207) — confirmed DROP, never
-        Custom, on this unit, and the exact live semantics of this field
-        (level-selector vs. the Custom level's own default policy) were not
-        fully disambiguated during research. This never writes DefaultPolicy —
-        flipping the router's whole active firewall posture is out of scope
+        """Read-only check: a Custom-chain rule only actually enforces while
+        the chain that contains it is itself enabled — which only happens
+        while the router's active firewall Security Level is set to
+        "Custom" in its own admin UI (confirmed live: every chain, Custom
+        included, carries its own top-level Enable flag; exactly one is
+        true at a time, matching whichever Level is currently selected).
+
+        This used to instead read Device/Firewall/Levels/Level[Name=
+        "Custom"]/DefaultPolicy and compare it to 'Custom' — confirmed live
+        that field is a static property of the Custom level itself (its own
+        default action, always 'DROP' on this unit) and was never going to
+        equal 'Custom', so that check warned unconditionally regardless of
+        which level was actually active. Fixed to read the chain's own
+        Enable flag directly instead, which is a genuine live indicator —
+        confirmed false on this unit (Custom is not the active level here),
+        i.e. quarantine_device() currently creates a rule that does not yet
+        enforce anything until that's changed by hand in the router's UI.
+
+        This never writes to the chain or flips the router's Security
+        Level — switching the whole active firewall posture is out of scope
         for a per-device action — it only reads it, to warn the admin that
         the rule that was just created may not actually enforce yet.
         """
-        resp = await self._client.get_value('Device/Firewall/Levels/Level[Name="Custom"]/DefaultPolicy')
-        policy = self._client._extract_result(resp, 0)
-        if policy != 'Custom':
+        resp = await self._client.get_value(f'{_QUARANTINE_CHAIN_XPATH.removesuffix("/Rules")}/Enable')
+        enabled = self._client._extract_result(resp, 0)
+        if not enabled:
             logger.warning(
-                'quarantine_device(%s): Custom-chain rule created, but the router\'s active '
-                'firewall security level (DefaultPolicy=%r) is not "Custom" — the rule may report '
-                'Status: DISABLED and not actually enforce until the router\'s own Security Level '
-                'setting is changed manually in its admin UI',
-                mac, policy,
+                'quarantine_device(%s): Custom-chain rule created, but the Custom chain itself is '
+                'not active (Enable=%r) — the rule will not enforce until the router\'s own Security '
+                'Level setting is changed to "Custom" manually in its admin UI',
+                mac, enabled,
             )
 
     async def _find_host(self, mac: str) -> Optional[dict]:
