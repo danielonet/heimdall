@@ -1125,7 +1125,7 @@ class SentinelScheduler:
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
 
-    async def _spike_ip_enrichment_job(self) -> None:
+    async def _spike_ip_enrichment_job(self, *, only_alert_ids: set[int] | None = None) -> None:
         """Enriches recent traffic-spike alerts (ANOMALOUS_VOLUME/HIGH_UPLOAD/
         WAN_BANDWIDTH_SPIKE) with the remote IP their traffic was most likely
         headed to/from, correlated via Zeek's conn.log (see
@@ -1149,18 +1149,35 @@ class SentinelScheduler:
         MALICIOUS_TRAFFIC_DESTINATION CRITICAL finding (auto-block eligible),
         dedup_key=remote_ip — the original spike alert is only annotated via
         AlertRepository.merge_raw_data, never escalated in place.
+
+        only_alert_ids is test-only — confirmed a real, live incident, not a
+        theoretical risk: this job's candidate query is deliberately
+        unscoped (every recent spike-type alert, system-wide, which is
+        exactly correct for its real job), and on a database shared with a
+        live, populated deployment (this dev environment has no isolated
+        test DB) that meant an earlier version of this file's tests, which
+        called this method directly with a mocked self._conn_volume_
+        correlator, could and did sweep up a real, not-yet-enriched
+        HIGH_UPLOAD alert that happened to exist at the time — annotating a
+        real device's real alert with the test's literal placeholder IP
+        (203.0.113.10). Passing only_alert_ids restricts the candidate set
+        to exactly those ids regardless of what else exists in the shared
+        table; omitted (the only way the real registered cron job ever
+        calls this), behavior is 100% unchanged from before this parameter
+        existed.
         """
         if self._conn_volume_correlator is None:
             return
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=_SPIKE_ENRICHMENT_LOOKBACK_MINUTES)
             async with get_session() as session:
-                candidates = (await session.execute(
-                    select(Alert).where(
-                        Alert.alert_type.in_(_SPIKE_ALERT_TYPES),
-                        Alert.created_at >= cutoff,
-                    )
-                )).scalars().all()
+                stmt = select(Alert).where(
+                    Alert.alert_type.in_(_SPIKE_ALERT_TYPES),
+                    Alert.created_at >= cutoff,
+                )
+                if only_alert_ids is not None:
+                    stmt = stmt.where(Alert.id.in_(only_alert_ids))
+                candidates = (await session.execute(stmt)).scalars().all()
 
             for alert in candidates:
                 if (alert.raw_data or {}).get('ip_enrichment_done'):

@@ -106,7 +106,7 @@ class TestSpikeIpEnrichmentJob:
         alert_id = await _seed_spike_alert('HIGH_UPLOAD', _MAC)
         scheduler._conn_volume_correlator = None
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         refreshed = await _get_alert(alert_id)
         assert (refreshed.raw_data or {}).get('ip_enrichment_done') is None
@@ -119,7 +119,7 @@ class TestSpikeIpEnrichmentJob:
             [ConnTalker(local_ip=_IP, remote_ip=_REMOTE_IP, total_bytes=5000, connection_count=3)]
         )
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         refreshed = await _get_alert(alert_id)
         assert refreshed.raw_data['ip_enrichment_done'] is True
@@ -138,7 +138,7 @@ class TestSpikeIpEnrichmentJob:
         )
         scheduler._threat_intel._ip_block.add(_REMOTE_IP)
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         refreshed = await _get_alert(alert_id)
         assert refreshed.raw_data['remote_ip_malicious'] is True
@@ -161,7 +161,7 @@ class TestSpikeIpEnrichmentJob:
         fake = _FakeCorrelator([ConnTalker(local_ip=_IP, remote_ip=_REMOTE_IP, total_bytes=1, connection_count=1)])
         scheduler._conn_volume_correlator = fake
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         assert fake.calls == []
         refreshed = await _get_alert(alert_id)
@@ -172,7 +172,7 @@ class TestSpikeIpEnrichmentJob:
         alert_id = await _seed_spike_alert('HIGH_UPLOAD', _MAC)
         scheduler._conn_volume_correlator = _FakeCorrelator([])
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         refreshed = await _get_alert(alert_id)
         assert refreshed.raw_data['ip_enrichment_done'] is True
@@ -187,7 +187,7 @@ class TestSpikeIpEnrichmentJob:
         )
         scheduler._conn_volume_correlator = fake
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         assert len(fake.calls) == 1
         assert fake.calls[0]['local_ips'] == {_IP}  # offline _IP2 excluded
@@ -202,7 +202,7 @@ class TestSpikeIpEnrichmentJob:
         fake = _FakeCorrelator([ConnTalker(local_ip=_IP, remote_ip=_REMOTE_IP, total_bytes=1, connection_count=1)])
         scheduler._conn_volume_correlator = fake
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         assert fake.calls == []  # never called — no local IPs to correlate
         refreshed = await _get_alert(alert_id)
@@ -216,7 +216,7 @@ class TestSpikeIpEnrichmentJob:
         fake = _FakeCorrelator([ConnTalker(local_ip=_IP, remote_ip=_REMOTE_IP, total_bytes=1, connection_count=1)])
         scheduler._conn_volume_correlator = fake
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         assert fake.calls == []
         refreshed = await _get_alert(alert_id)
@@ -236,7 +236,7 @@ class TestSpikeIpEnrichmentJob:
 
         scheduler._conn_volume_correlator = _BoomCorrelator()
 
-        await scheduler._spike_ip_enrichment_job()  # must not raise
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={bad_id, good_id})  # must not raise
 
         bad_alert = await _get_alert(bad_id)
         good_alert = await _get_alert(good_id)
@@ -265,7 +265,7 @@ class TestInternalDestination:
         # malicious. It must not even be looked at.
         scheduler._threat_intel._ip_block.add(self._INTERNAL_REMOTE_IP)
 
-        await scheduler._spike_ip_enrichment_job()
+        await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
 
         refreshed = await _get_alert(alert_id)
         assert refreshed.raw_data['ip_enrichment_done'] is True
@@ -281,6 +281,6 @@ class TestInternalDestination:
             scheduler._conn_volume_correlator = _FakeCorrelator(
                 [ConnTalker(local_ip=_IP, remote_ip=remote_ip, total_bytes=1, connection_count=1)]
             )
-            await scheduler._spike_ip_enrichment_job()
+            await scheduler._spike_ip_enrichment_job(only_alert_ids={alert_id})
             refreshed = await _get_alert(alert_id)
             assert refreshed.raw_data['remote_ip_internal'] is True, remote_ip
