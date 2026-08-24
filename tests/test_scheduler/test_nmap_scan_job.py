@@ -1,13 +1,28 @@
-"""Focused tests for SentinelScheduler._nmap_scan_job — mirrors
-tests/test_scheduler/test_threat_auto_block.py's object.__new__(SentinelScheduler)
-pattern: this method only ever touches self._scanner, self._adapter, and the
-DB, never self._loop or any of __init__'s unrelated kwargs.
+"""Focused tests for SentinelScheduler._scan_one_device — the per-device
+scan-and-alert logic _nmap_scan_job loops over for every known device.
+Mirrors tests/test_scheduler/test_threat_auto_block.py's
+object.__new__(SentinelScheduler) pattern: this method only ever touches
+self._scanner, self._adapter, and the DB, never self._loop or any of
+__init__'s unrelated kwargs.
 
-Covers the three alert paths this function raises: the pre-existing
-HIGH_RISK_PORT_OPENED / VULNERABILITY_DETECTED (regression coverage, since
-neither had a direct test before this file — this same function was edited
-to add the two paths below) plus the two new ones added this session:
-CREDENTIAL_EXPOSURE_DETECTED and OS_FINGERPRINT_CONFLICT.
+Deliberately test _scan_one_device directly, never _nmap_scan_job itself —
+confirmed a real, live incident, not a theoretical risk: _nmap_scan_job's
+own device-list query is intentionally unscoped (every device with a known
+IP — that's the actual, correct behavior for a nightly "scan the whole
+network" job), which on a database shared with a live, populated
+deployment (this dev environment has no isolated test DB) meant an earlier
+version of this file that called _nmap_scan_job() with a mocked
+self._scanner scanned every real device the shared DB happened to have at
+the time, not just this file's own seeded one — writing fake
+HIGH_RISK_PORT_OPENED/VULNERABILITY_DETECTED/CREDENTIAL_EXPOSURE_DETECTED
+alerts and a bogus nmap_profile/os_fingerprint onto every real device on a
+live network. _scan_one_device only ever touches the one (mac, ip) a test
+passes it, so this can't recur here regardless of what else is in the
+shared devices table.
+
+Covers the four alert paths this method raises: HIGH_RISK_PORT_OPENED,
+VULNERABILITY_DETECTED, CREDENTIAL_EXPOSURE_DETECTED, and
+OS_FINGERPRINT_CONFLICT.
 """
 import os
 
@@ -99,7 +114,7 @@ class TestHighRiskPortRegression:
             ]),
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         alert = await _latest_alert('HIGH_RISK_PORT_OPENED')
         assert alert is not None
@@ -114,7 +129,7 @@ class TestHighRiskPortRegression:
             ]),
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': [{'port': 23, 'state': 'open'}]})
 
         assert await _latest_alert('HIGH_RISK_PORT_OPENED') is None
 
@@ -128,18 +143,15 @@ class TestHighRiskPortRegression:
                 OpenPort(port=23, protocol='tcp', service='telnet', version='', state='open'),
             ]),
         )
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
-        async with get_session() as session:
-            device = await session.get(Device, _MAC)
-            device.nmap_profile = {'ports': [{'port': 23, 'state': 'open'}]}
         scheduler._scanner = _FakeScanner(
             ScanResult(ip=_IP, os='Unknown', ports=[
                 OpenPort(port=23, protocol='tcp', service='telnet', version='', state='open'),
                 OpenPort(port=3389, protocol='tcp', service='rdp', version='', state='open'),
             ]),
         )
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': [{'port': 23, 'state': 'open'}]})
 
         async with get_session() as session:
             result = await session.execute(
@@ -160,7 +172,7 @@ class TestPortAllowlist:
             ]),
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('HIGH_RISK_PORT_OPENED') is None
 
@@ -175,7 +187,7 @@ class TestPortAllowlist:
             ]),
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('HIGH_RISK_PORT_OPENED') is not None
         async with get_session() as session:
@@ -199,7 +211,7 @@ class TestPortAllowlist:
             ]),
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('HIGH_RISK_PORT_OPENED') is not None
         async with get_session() as session:
@@ -216,7 +228,7 @@ class TestVulnScanRegression:
             vuln_findings={'some-vuln-script': 'VULNERABLE'},
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         alert = await _latest_alert('VULNERABILITY_DETECTED')
         assert alert is not None
@@ -230,8 +242,8 @@ class TestVulnScanRegression:
             vuln_findings={'some-vuln-script': 'VULNERABLE'},
         )
 
-        await scheduler._nmap_scan_job()
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         async with get_session() as session:
             result = await session.execute(
@@ -251,7 +263,7 @@ class TestCredentialExposure:
             credential_findings={'default-accounts': 'admin:admin found on http'},
         )
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         alert = await _latest_alert('CREDENTIAL_EXPOSURE_DETECTED')
         assert alert is not None
@@ -262,7 +274,7 @@ class TestCredentialExposure:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Unknown', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('CREDENTIAL_EXPOSURE_DETECTED') is None
 
@@ -273,7 +285,7 @@ class TestOsFingerprintConflict:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Linux 5.x', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         alert = await _latest_alert('OS_FINGERPRINT_CONFLICT')
         assert alert is not None
@@ -285,7 +297,7 @@ class TestOsFingerprintConflict:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Linux 5.x', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('OS_FINGERPRINT_CONFLICT') is None
 
@@ -294,7 +306,7 @@ class TestOsFingerprintConflict:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Linux 5.x', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('OS_FINGERPRINT_CONFLICT') is None
 
@@ -303,7 +315,7 @@ class TestOsFingerprintConflict:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Unknown', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         assert await _latest_alert('OS_FINGERPRINT_CONFLICT') is None
 
@@ -315,7 +327,7 @@ class TestOsFingerprintConflict:
         await SettingsRepository().set_auto_block_on_threat(False)
         scheduler._scanner = _FakeScanner(ScanResult(ip=_IP, os='Linux 5.x', ports=[]))
 
-        await scheduler._nmap_scan_job()
+        await scheduler._scan_one_device(_MAC, _IP, {'ports': []})
 
         async with get_session() as session:
             device = await session.get(Device, _MAC)

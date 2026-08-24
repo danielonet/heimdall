@@ -556,77 +556,96 @@ class SentinelScheduler:
 
         for mac, ip, previous_profile in devices:
             try:
-                scan = await self._scanner.scan_device(ip)
-                previous_open_ports = {
-                    p['port'] for p in (previous_profile or {}).get('ports', [])
-                    if p.get('state') == 'open'
-                }
-                allowed_ports = await PortAllowlistRepository().allowed_ports_for(mac)
-                newly_opened_high_risk = {
-                    p.port: HIGH_RISK_PORTS[p.port] for p in scan.ports
-                    if p.state == 'open' and p.port in HIGH_RISK_PORTS and p.port not in previous_open_ports
-                    and p.port not in allowed_ports
-                }
-
-                profile = {
-                    'os': scan.os,
-                    'ports': [dataclasses.asdict(p) for p in scan.ports],
-                    'scanned_at': datetime.now(timezone.utc).isoformat(),
-                }
-                async with get_session() as session:
-                    device = await session.get(Device, mac)
-                    if device is not None:
-                        previous_passive_os = device.os_fingerprint
-                        device.nmap_profile = profile
-                        if scan.os != 'Unknown':
-                            device.os_fingerprint = scan.os
-                    else:
-                        previous_passive_os = None
-
-                for port, service in newly_opened_high_risk.items():
-                    await self._raise_threat_alert(
-                        mac, 'HIGH_RISK_PORT_OPENED', 'CRITICAL',
-                        f'{ip} newly exposes {service} on port {port} '
-                        f'(closed on the previous scan)',
-                        raw_data={'ip': ip, 'port': port, 'service': service},
-                        dedup_key=f'port:{port}',
-                    )
-
-                if scan.os != 'Unknown' and previous_passive_os:
-                    passive_family = os_family(previous_passive_os)
-                    active_family = os_family(scan.os)
-                    if (
-                        passive_family != 'unknown'
-                        and active_family != 'unknown'
-                        and passive_family != active_family
-                    ):
-                        await self._raise_threat_alert(
-                            mac, 'OS_FINGERPRINT_CONFLICT', 'WARNING',
-                            f'{ip} was passively fingerprinted as "{previous_passive_os}" but '
-                            f'nmap\'s active scan identifies it as "{scan.os}" — possible MAC '
-                            f'spoofing or misclassification',
-                            raw_data={'ip': ip, 'passive_os': previous_passive_os, 'active_os': scan.os},
-                        )
-
-                vuln_findings = await self._scanner.vuln_scan(ip)
-                if vuln_findings:
-                    await self._raise_threat_alert(
-                        mac, 'VULNERABILITY_DETECTED', 'CRITICAL',
-                        f'nmap vulnerability scan flagged {ip}: {", ".join(vuln_findings.keys())}',
-                        raw_data={'ip': ip, 'findings': vuln_findings},
-                    )
-
-                credential_findings = await self._scanner.credential_scan(ip)
-                if credential_findings:
-                    await self._raise_threat_alert(
-                        mac, 'CREDENTIAL_EXPOSURE_DETECTED', 'CRITICAL',
-                        f'nmap credential scan flagged {ip}: {", ".join(credential_findings.keys())}',
-                        raw_data={'ip': ip, 'findings': credential_findings},
-                    )
+                await self._scan_one_device(mac, ip, previous_profile)
             except Exception:
                 logger.exception('nmap scan failed for %s (%s)', mac, ip)
 
         self._last_nmap_scan_at = datetime.now(timezone.utc)
+
+    async def _scan_one_device(self, mac: str, ip: str, previous_profile: dict | None) -> None:
+        """The actual per-device scan-and-alert work _nmap_scan_job loops
+        over — split out so a test can exercise this against one device
+        directly, without going through _nmap_scan_job's own device-list
+        query. That query is intentionally unscoped (every device with a
+        known IP, matching this job's real job — scan the whole network),
+        which is exactly what makes it dangerous to call from a test on a
+        database shared with a live, populated deployment: confirmed live,
+        the previous test shape (calling _nmap_scan_job() directly with a
+        mocked self._scanner) scanned every real device the shared dev DB
+        happened to have at the time, not just the test's own seeded one —
+        writing fake HIGH_RISK_PORT_OPENED/VULNERABILITY_DETECTED/
+        CREDENTIAL_EXPOSURE_DETECTED alerts and a bogus nmap_profile/
+        os_fingerprint onto every one of them. Calling this method directly
+        exercises the identical alerting/profile-writing logic against only
+        the one (mac, ip) a test passes in.
+        """
+        scan = await self._scanner.scan_device(ip)
+        previous_open_ports = {
+            p['port'] for p in (previous_profile or {}).get('ports', [])
+            if p.get('state') == 'open'
+        }
+        allowed_ports = await PortAllowlistRepository().allowed_ports_for(mac)
+        newly_opened_high_risk = {
+            p.port: HIGH_RISK_PORTS[p.port] for p in scan.ports
+            if p.state == 'open' and p.port in HIGH_RISK_PORTS and p.port not in previous_open_ports
+            and p.port not in allowed_ports
+        }
+
+        profile = {
+            'os': scan.os,
+            'ports': [dataclasses.asdict(p) for p in scan.ports],
+            'scanned_at': datetime.now(timezone.utc).isoformat(),
+        }
+        async with get_session() as session:
+            device = await session.get(Device, mac)
+            if device is not None:
+                previous_passive_os = device.os_fingerprint
+                device.nmap_profile = profile
+                if scan.os != 'Unknown':
+                    device.os_fingerprint = scan.os
+            else:
+                previous_passive_os = None
+
+        for port, service in newly_opened_high_risk.items():
+            await self._raise_threat_alert(
+                mac, 'HIGH_RISK_PORT_OPENED', 'CRITICAL',
+                f'{ip} newly exposes {service} on port {port} '
+                f'(closed on the previous scan)',
+                raw_data={'ip': ip, 'port': port, 'service': service},
+                dedup_key=f'port:{port}',
+            )
+
+        if scan.os != 'Unknown' and previous_passive_os:
+            passive_family = os_family(previous_passive_os)
+            active_family = os_family(scan.os)
+            if (
+                passive_family != 'unknown'
+                and active_family != 'unknown'
+                and passive_family != active_family
+            ):
+                await self._raise_threat_alert(
+                    mac, 'OS_FINGERPRINT_CONFLICT', 'WARNING',
+                    f'{ip} was passively fingerprinted as "{previous_passive_os}" but '
+                    f'nmap\'s active scan identifies it as "{scan.os}" — possible MAC '
+                    f'spoofing or misclassification',
+                    raw_data={'ip': ip, 'passive_os': previous_passive_os, 'active_os': scan.os},
+                )
+
+        vuln_findings = await self._scanner.vuln_scan(ip)
+        if vuln_findings:
+            await self._raise_threat_alert(
+                mac, 'VULNERABILITY_DETECTED', 'CRITICAL',
+                f'nmap vulnerability scan flagged {ip}: {", ".join(vuln_findings.keys())}',
+                raw_data={'ip': ip, 'findings': vuln_findings},
+            )
+
+        credential_findings = await self._scanner.credential_scan(ip)
+        if credential_findings:
+            await self._raise_threat_alert(
+                mac, 'CREDENTIAL_EXPOSURE_DETECTED', 'CRITICAL',
+                f'nmap credential scan flagged {ip}: {", ".join(credential_findings.keys())}',
+                raw_data={'ip': ip, 'findings': credential_findings},
+            )
 
     async def _threat_feed_refresh_job(self) -> None:
         try:
