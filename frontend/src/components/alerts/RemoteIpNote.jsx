@@ -11,17 +11,32 @@ function formatBytes(bytes) {
  * WAN_BANDWIDTH_SPIKE alerts — every other alert type never carries
  * ip_enrichment_done at all, so this renders nothing for them, same as before.
  *
- * Three distinct states, previously collapsed into one ("nothing shown"),
- * which is exactly what prompted this: an admin looking at a HIGH_UPLOAD
- * alert with no remote IP shown had no way to tell "hasn't been checked
- * yet" apart from "checked, found nothing to attribute it to" — the second
- * one is a real, common, non-broken outcome (e.g. the traffic was LAN-to-
- * LAN, or Zeek's conn.log had no matching flow in the correlation window)
- * but looked identical to a gap. ip_enrichment_done (set unconditionally
- * once _enrich_spike_alert has run, whether or not it found a talker) is
- * what actually distinguishes the two — not just remote_ip's presence. */
+ * Four distinct states. Three were previously collapsed into one ("nothing
+ * shown"), which is exactly what prompted the ip_enrichment_done branch
+ * below: an admin looking at a HIGH_UPLOAD alert with no remote IP shown
+ * had no way to tell "hasn't been checked yet" apart from "checked, found
+ * nothing to attribute it to" — the second is a real, common, non-broken
+ * outcome (e.g. LAN-to-LAN traffic, or no matching Zeek flow in the
+ * correlation window) but looked identical to a gap.
+ *
+ * The fourth state (green) is the destination-found-but-internal case —
+ * another device on this LAN, not a possible external threat, so it reads
+ * as informational rather than the blue "worth a look" REMOTE IP treatment
+ * or the red MALICIOUS DESTINATION one. remote_ip_internal is never even
+ * computed unless a destination was actually found (see
+ * SentinelScheduler._enrich_spike_alert), so this only ever applies
+ * alongside a real ip. */
 export function RemoteIpNote({ rawData }) {
   const ip = rawData?.remote_ip
+  if (ip && rawData.remote_ip_internal) {
+    return (
+      <div className="mt-1 border-l-2 border-accent-green/40 py-0.5 pl-2 text-[9px] leading-snug text-accent-green">
+        <span className="mr-1 tracking-wider">INTERNAL DESTINATION:</span>
+        {ip} — another device on this network, not checked against threat intel
+        ({formatBytes(rawData.remote_ip_bytes)}, {rawData.remote_ip_connections ?? 0} conn.)
+      </div>
+    )
+  }
   if (ip) {
     const malicious = rawData.remote_ip_malicious
     return (

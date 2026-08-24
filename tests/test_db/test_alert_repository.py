@@ -76,6 +76,31 @@ class TestUpsert:
         assert touched.raw_data == {'n': 2}
         assert touched.severity == 'CRITICAL'
 
+    async def test_touch_merges_raw_data_rather_than_replacing_it_wholesale(self):
+        """Regression: SentinelScheduler._spike_ip_enrichment_job annotates
+        a still-open alert's raw_data (remote_ip, ip_enrichment_done) out-
+        of-band from the detector's own fire/touch cycle, via
+        merge_raw_data — a later touch (the detector's own bare raw_data,
+        with no idea that annotation exists) used to wholesale-replace
+        raw_data and silently erase it. A key the new touch doesn't mention
+        must survive; a key both mention must take the new value (same
+        overwrite semantics test_touch_overwrites_description_raw_data_
+        and_severity above already covers)."""
+        fired, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING',
+            description='x', raw_data={'ratio': 3.5},
+        )
+        # Out-of-band annotation, same as _spike_ip_enrichment_job.
+        await AlertRepository().merge_raw_data(fired.id, {'remote_ip': '1.2.3.4', 'ip_enrichment_done': True})
+
+        # The detector's next poll — still sustained, touches the same row
+        # with its own bare raw_data, no idea the annotation exists.
+        touched, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING',
+            description='x', raw_data={'ratio': 4.1},
+        )
+        assert touched.raw_data == {'ratio': 4.1, 'remote_ip': '1.2.3.4', 'ip_enrichment_done': True}
+
     async def test_touch_bumps_last_seen(self):
         first, _ = await AlertRepository().upsert(
             device_mac=_MAC, alert_type=_ALERT_TYPE, severity='WARNING', description='x',

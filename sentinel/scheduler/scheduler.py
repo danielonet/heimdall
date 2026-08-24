@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import ipaddress
 import logging
 import threading
 import time
@@ -77,6 +78,42 @@ _SPIKE_ENRICHMENT_LOOKBACK_MINUTES = 30  # how far back to look for un-enriched 
 # may not appear until after it ends.
 CORRELATION_WINDOW_BEFORE_MINUTES = 15
 CORRELATION_WINDOW_AFTER_MINUTES = 5
+
+
+def _is_internal_ip(ip: str) -> bool:
+    """True for any RFC1918 private range, loopback, or link-local address
+    — genuinely could be another device on this LAN. See _enrich_spike_
+    alert: ZeekConnVolumeCorrelator.top_talkers' "remote" IP only ever
+    means "not in the local_ips set passed in" (its own docstring) — that
+    can still be another device on this same LAN the correlated device
+    just wasn't itself compared against (e.g. a NAS backing up to a
+    different private-subnet host), not necessarily anything on the public
+    internet.
+
+    Deliberately NOT ipaddress.ip_address(ip).is_private — confirmed live
+    that property is far broader than RFC1918: it also covers IANA
+    documentation/TEST-NET ranges (192.0.2.0/24, 198.51.100.0/24,
+    203.0.113.0/24 — the very ranges this project's own tests use as
+    stand-in "external" IPs, which then misclassified as internal and
+    broke under is_private). Explicit RFC1918 network membership instead,
+    which is exactly the "could this be one of the user's own devices"
+    question, nothing broader.
+
+    Malformed input (shouldn't happen — Zeek's own id.orig_h/id.resp_h
+    fields) is treated as not-internal rather than raising, so a parse
+    failure fails safe into the normal threat-intel-checked path instead
+    of silently skipping it."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_link_local or any(
+        addr in net for net in (
+            ipaddress.ip_network('10.0.0.0/8'),
+            ipaddress.ip_network('172.16.0.0/12'),
+            ipaddress.ip_network('192.168.0.0/16'),
+        )
+    )
 
 DEFAULT_ADAPTER_CALL_TIMEOUT_S = 10.0
 # How long to stay quiet on a given IP after reporting it as conflicted
@@ -1074,7 +1111,11 @@ class SentinelScheduler:
         WAN_BANDWIDTH_SPIKE) with the remote IP their traffic was most likely
         headed to/from, correlated via Zeek's conn.log (see
         ZeekConnVolumeCorrelator — the router's own TrafficSample data carries
-        no IP at all), and checks that IP against ThreatIntelService.
+        no IP at all). An internal (private-range) destination is purely
+        informational — another device on this LAN, nothing for threat intel
+        to have an opinion about — and is never checked or escalated; only a
+        genuinely external destination gets checked against ThreatIntelService.
+        See _enrich_spike_alert / _is_internal_ip.
 
         Zeek-only: self._conn_volume_correlator is None on tiers without
         Zeek, but this job is only registered under the 'zeek' tier gate
@@ -1140,14 +1181,25 @@ class SentinelScheduler:
             return
 
         top = talkers[0]
-        verdict = await self._threat_intel.lookup_ip(top.remote_ip)
         marker.update({
             'remote_ip': top.remote_ip,
             'remote_ip_bytes': top.total_bytes,
             'remote_ip_connections': top.connection_count,
             'remote_ip_local_device': top.local_ip,
-            'remote_ip_malicious': verdict['is_malicious'],
         })
+
+        if _is_internal_ip(top.remote_ip):
+            # Informational only — see this method's docstring. Skips the
+            # threat-intel lookup entirely (meaningless for a private
+            # address) and the MALICIOUS_TRAFFIC_DESTINATION escalation
+            # below (must never treat another of the user's own devices as
+            # a possible compromise).
+            marker['remote_ip_internal'] = True
+            await AlertRepository().merge_raw_data(alert.id, marker)
+            return
+
+        verdict = await self._threat_intel.lookup_ip(top.remote_ip)
+        marker.update({'remote_ip_internal': False, 'remote_ip_malicious': verdict['is_malicious']})
         await AlertRepository().merge_raw_data(alert.id, marker)
 
         if verdict['is_malicious']:

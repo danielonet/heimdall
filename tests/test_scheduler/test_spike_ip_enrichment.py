@@ -126,6 +126,7 @@ class TestSpikeIpEnrichmentJob:
         assert refreshed.raw_data['remote_ip'] == _REMOTE_IP
         assert refreshed.raw_data['remote_ip_bytes'] == 5000
         assert refreshed.raw_data['remote_ip_malicious'] is False
+        assert refreshed.raw_data['remote_ip_internal'] is False
         assert await _all_alerts_for('MALICIOUS_TRAFFIC_DESTINATION') == []
 
     async def test_malicious_top_talker_escalates_to_a_new_critical_alert(self, scheduler):
@@ -141,6 +142,7 @@ class TestSpikeIpEnrichmentJob:
 
         refreshed = await _get_alert(alert_id)
         assert refreshed.raw_data['remote_ip_malicious'] is True
+        assert refreshed.raw_data['remote_ip_internal'] is False
 
         escalated = await _all_alerts_for('MALICIOUS_TRAFFIC_DESTINATION')
         assert len(escalated) == 1
@@ -240,3 +242,45 @@ class TestSpikeIpEnrichmentJob:
         good_alert = await _get_alert(good_id)
         assert (bad_alert.raw_data or {}).get('ip_enrichment_done') is None
         assert good_alert.raw_data['ip_enrichment_done'] is True
+
+
+class TestInternalDestination:
+    """A private-range top talker is informational only — see
+    SentinelScheduler._is_internal_ip / _enrich_spike_alert. Threat intel
+    is never consulted and MALICIOUS_TRAFFIC_DESTINATION never fires, even
+    if that address happens to be in the (nonsensical, for a private IP)
+    block list — proves the skip is unconditional, not just "happened to
+    come back clean"."""
+
+    _INTERNAL_REMOTE_IP = '10.100.102.77'  # another device on the same LAN
+
+    async def test_annotates_as_internal_without_a_threat_intel_check(self, scheduler):
+        await _seed_device(_MAC, _IP, is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        alert_id = await _seed_spike_alert('HIGH_UPLOAD', _MAC)
+        scheduler._conn_volume_correlator = _FakeCorrelator(
+            [ConnTalker(local_ip=_IP, remote_ip=self._INTERNAL_REMOTE_IP, total_bytes=5000, connection_count=3)]
+        )
+        # In the block list — if this were consulted, it would misfire as
+        # malicious. It must not even be looked at.
+        scheduler._threat_intel._ip_block.add(self._INTERNAL_REMOTE_IP)
+
+        await scheduler._spike_ip_enrichment_job()
+
+        refreshed = await _get_alert(alert_id)
+        assert refreshed.raw_data['ip_enrichment_done'] is True
+        assert refreshed.raw_data['remote_ip'] == self._INTERNAL_REMOTE_IP
+        assert refreshed.raw_data['remote_ip_internal'] is True
+        assert 'remote_ip_malicious' not in refreshed.raw_data
+        assert await _all_alerts_for('MALICIOUS_TRAFFIC_DESTINATION') == []
+
+    async def test_loopback_and_link_local_are_also_treated_as_internal(self, scheduler):
+        await _seed_device(_MAC, _IP, is_blocked=False)
+        for remote_ip in ('127.0.0.1', '169.254.1.1'):
+            alert_id = await _seed_spike_alert('HIGH_UPLOAD', _MAC)
+            scheduler._conn_volume_correlator = _FakeCorrelator(
+                [ConnTalker(local_ip=_IP, remote_ip=remote_ip, total_bytes=1, connection_count=1)]
+            )
+            await scheduler._spike_ip_enrichment_job()
+            refreshed = await _get_alert(alert_id)
+            assert refreshed.raw_data['remote_ip_internal'] is True, remote_ip

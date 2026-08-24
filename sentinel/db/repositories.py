@@ -369,6 +369,23 @@ class AlertRepository:
         would silently defeat the upsert for e.g. WanBandwidthDetector's
         always-null device_mac.
 
+        A touch MERGES raw_data onto the existing row rather than replacing
+        it wholesale (row.raw_data = {**old, **new}, new values winning on
+        key conflicts) — confirmed a real bug, not just a theoretical risk:
+        SentinelScheduler._spike_ip_enrichment_job annotates a still-open
+        HIGH_UPLOAD/ANOMALOUS_VOLUME/WAN_BANDWIDTH_SPIKE alert's raw_data
+        with remote_ip/ip_enrichment_done out-of-band (via merge_raw_data,
+        itself already a proper merge), entirely independent of the
+        detector's own fire/touch cycle. A wholesale replace here meant the
+        very next touch of a still-sustained condition (the detector always
+        passes its own bare raw_data — ratio/bytes_sent_delta/etc., no
+        knowledge the enrichment job exists at all) silently erased that
+        annotation, and since ip_enrichment_done went with it, the next
+        enrichment sweep saw an apparently-unenriched alert and did the
+        work over again — a wasted Zeek/threat-intel lookup every ~5
+        minutes for as long as the condition stayed sustained, not just a
+        display glitch.
+
         Snooze check: if (device_mac, alert_type) has an active row in
         alert_snoozes (see AlertSnoozeRepository), this is a complete no-op
         — returns (None, False) without touching or inserting anything, as
@@ -407,7 +424,7 @@ class AlertRepository:
 
             row.severity = severity
             row.description = description
-            row.raw_data = raw_data
+            row.raw_data = {**(row.raw_data or {}), **(raw_data or {})}
             row.mitigation = mitigation
             row.last_seen = datetime.now(timezone.utc)
             row.occurrence_count += 1
