@@ -1,11 +1,20 @@
+import { useMemo } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 export function TrafficBarChart({ devices }) {
-  const data = (devices || [])
-    .filter((d) => d.latest_traffic?.throughput_up_kbps != null)
-    .map((d) => ({ name: d.hostname || d.mac_address, up: d.latest_traffic.throughput_up_kbps }))
-    .sort((a, b) => b.up - a.up)
-    .slice(0, 6)
+  // Memoized so this filter/map/sort/slice chain only re-runs when devices
+  // itself actually changes (a 15s poll), not on every unrelated re-render
+  // of an ancestor — see DesktopShell's Clock fix for why that distinction
+  // mattered here (this chart used to re-run 3600x/hour for no reason).
+  const data = useMemo(
+    () =>
+      (devices || [])
+        .filter((d) => d.latest_traffic?.throughput_up_kbps != null)
+        .map((d) => ({ name: d.hostname || d.mac_address, up: d.latest_traffic.throughput_up_kbps }))
+        .sort((a, b) => b.up - a.up)
+        .slice(0, 6),
+    [devices],
+  )
 
   if (data.length === 0) {
     return <div className="text-[10px] text-text-muted">No traffic data yet.</div>

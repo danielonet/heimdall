@@ -36,16 +36,25 @@ export function DashboardPage() {
   // out of this unacknowledged-only list.
   const [selectedAlertId, setSelectedAlertId] = useState(null)
 
-  const alerts = alertsPage?.alerts || []
+  // `|| []` mints a new array on every render whenever alertsPage is still
+  // undefined (before the first response lands), so memoize the fallback
+  // itself rather than just the reduce below — otherwise a hook depending
+  // on `alerts` can never prove it's stable. Empty-array identity churn
+  // before the first response is harmless either way; this just keeps the
+  // dependency clean for threatScore below.
+  const alerts = useMemo(() => alertsPage?.alerts || [], [alertsPage])
   const criticalAlert = alerts.find((a) => a.severity === 'CRITICAL')
   const selectedAlert = alerts.find((a) => a.id === selectedAlertId)
+  // Memoized so this reduce doesn't re-run on every unrelated re-render of
+  // an ancestor — see DesktopShell's Clock fix.
+  const threatScore = useMemo(() => computeThreatScore(alerts), [alerts])
 
   const sharedProps = {
     devices: devices || [],
     alerts,
     bannerAlert: selectedAlert || criticalAlert,
     onSelectAlert: setSelectedAlertId,
-    threatScore: computeThreatScore(alerts),
+    threatScore,
     health,
     ports: ports || [],
     alertsTotal: alertsPage?.total ?? 0,

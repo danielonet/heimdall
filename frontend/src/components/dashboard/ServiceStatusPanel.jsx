@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { StatusDot } from '../StatusDot'
 import { TimeAgo } from '../TimeAgo'
@@ -196,13 +197,22 @@ function buildRows(health, openAlerts) {
 }
 
 export function ServiceStatusPanel({ health, openAlerts = [] }) {
-  if (!health) return <div className="text-[10px] text-text-muted">Loading…</div>
-
   // Older/degraded /api/health responses (scheduler not initialised) may
   // omit active_services entirely — fall back to showing everything rather
   // than an empty panel, since "unknown" shouldn't read as "nothing active".
-  const activeServices = health.security_services?.active_services
-  const rows = buildRows(health, openAlerts).filter((row) => !activeServices || activeServices.includes(row.key))
+  const activeServices = health?.security_services?.active_services
+  // Memoized so this only recomputes when health/openAlerts actually change
+  // (both poll on their own 15s cadence), not on every unrelated re-render
+  // of an ancestor — see DesktopShell's Clock fix. Before a health value
+  // exists, useMemo still runs (hooks can't be conditional) — health is
+  // undefined the very first render, hence the null guard inside rather
+  // than an early return above this hook.
+  const rows = useMemo(() => {
+    if (!health) return []
+    return buildRows(health, openAlerts).filter((row) => !activeServices || activeServices.includes(row.key))
+  }, [health, openAlerts, activeServices])
+
+  if (!health) return <div className="text-[10px] text-text-muted">Loading…</div>
 
   return (
     <div className="flex h-full flex-col border border-border bg-surface p-4">
