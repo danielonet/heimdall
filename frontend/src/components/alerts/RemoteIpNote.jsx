@@ -19,13 +19,20 @@ function formatBytes(bytes) {
  * outcome (e.g. LAN-to-LAN traffic, or no matching Zeek flow in the
  * correlation window) but looked identical to a gap.
  *
- * The fourth state (green) is the destination-found-but-internal case —
- * another device on this LAN, not a possible external threat, so it reads
- * as informational rather than the blue "worth a look" REMOTE IP treatment
- * or the red MALICIOUS DESTINATION one. remote_ip_internal is never even
- * computed unless a destination was actually found (see
- * SentinelScheduler._enrich_spike_alert), so this only ever applies
- * alongside a real ip. */
+ * A second ambiguity, fixed the same way: an external-but-clean IP (found,
+ * checked against threat intel, no match) used to render as a neutral blue
+ * "REMOTE IP: x.x.x.x" — factually correct, but read as "here's where it
+ * went" rather than "we checked this and it's fine," which is exactly what
+ * a clean verdict means. remote_ip_malicious is always present (true or
+ * false) whenever remote_ip is and it's not internal — SentinelScheduler.
+ * _enrich_spike_alert sets both together — so `malicious === false` here
+ * is a real, positive "checked, no match" result, not just "we don't know
+ * yet." Now shares the same green/"nothing to worry about" treatment as
+ * the internal case, with its own label so the two stay distinguishable,
+ * plus an explicit note that no block action was taken (only a malicious
+ * verdict ever triggers one — see the red branch, which escalates via a
+ * separate MALICIOUS_TRAFFIC_DESTINATION alert rather than blocking from
+ * here directly). */
 export function RemoteIpNote({ rawData }) {
   const ip = rawData?.remote_ip
   if (ip && rawData.remote_ip_internal) {
@@ -37,18 +44,26 @@ export function RemoteIpNote({ rawData }) {
       </div>
     )
   }
-  if (ip) {
-    const malicious = rawData.remote_ip_malicious
+  if (ip && rawData.remote_ip_malicious === false) {
     return (
-      <div
-        className={`mt-1 border-l-2 py-0.5 pl-2 text-[9px] leading-snug ${
-          malicious ? 'border-accent-red/40 text-accent-red' : 'border-accent-blue/40 text-text-secondary'
-        }`}
-      >
-        <span className={`mr-1 tracking-wider ${malicious ? 'text-accent-red' : 'text-accent-blue'}`}>
-          {malicious ? 'MALICIOUS DESTINATION:' : 'REMOTE IP:'}
-        </span>
+      <div className="mt-1 border-l-2 border-accent-green/40 py-0.5 pl-2 text-[9px] leading-snug text-accent-green">
+        <span className="mr-1 tracking-wider">VERIFIED CLEAN:</span>
         {ip} ({formatBytes(rawData.remote_ip_bytes)}, {rawData.remote_ip_connections ?? 0} conn.)
+        <div className="mt-0.5 text-text-muted">
+          Checked against the threat-intel IP database — no match. No block action was taken.
+        </div>
+      </div>
+    )
+  }
+  if (ip) {
+    return (
+      <div className="mt-1 border-l-2 border-accent-red/40 py-0.5 pl-2 text-[9px] leading-snug text-accent-red">
+        <span className="mr-1 tracking-wider">MALICIOUS DESTINATION:</span>
+        {ip} ({formatBytes(rawData.remote_ip_bytes)}, {rawData.remote_ip_connections ?? 0} conn.)
+        <div className="mt-0.5 text-text-muted">
+          Flagged by threat intelligence — a separate MALICIOUS_TRAFFIC_DESTINATION alert was
+          raised for this device (auto-blocked if that setting is armed).
+        </div>
       </div>
     )
   }
