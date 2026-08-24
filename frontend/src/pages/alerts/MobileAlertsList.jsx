@@ -3,7 +3,7 @@ import { SeverityBar } from '../../components/SeverityBar'
 import { Badge } from '../../components/Badge'
 import { MacAddress } from '../../components/MacAddress'
 import { TimeAgo } from '../../components/TimeAgo'
-import { AckResolveButtons } from '../../components/alerts/AckResolveButtons'
+import { AlertActionsMenu } from '../../components/alerts/AlertActionsMenu'
 import { MitigationNote } from '../../components/alerts/MitigationNote'
 import { RemoteIpNote } from '../../components/alerts/RemoteIpNote'
 import { isStale } from '../../lib/alertStaleness'
@@ -81,7 +81,7 @@ export function MobileAlertsList({ alerts, total, perPage, isLoading, filters, s
               ) : (
                 <Badge variant="danger">OPEN</Badge>
               )}
-              <AckResolveButtons alert={a} />
+              <AlertActionsMenu alert={a} />
             </div>
           </div>
         ))}

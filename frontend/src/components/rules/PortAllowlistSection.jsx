@@ -11,7 +11,65 @@ function entryKey(mac, port) {
   return `${mac}:${port}`
 }
 
-function EntryRow({ entry, onRemove, isRemoving }) {
+/** The note column is click-to-edit — the quick "Add exception" action on
+ * an alert (see AlertActionsMenu) creates an entry with no note at all, so
+ * this is how that gets filled in afterward (e.g. "print server"), same
+ * click-to-rename shape DeviceHeader.jsx uses for a device nickname. */
+function NoteCell({ note, onSave, isSaving }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(note || '')
+
+  if (editing) {
+    return (
+      <div className="flex min-w-0 flex-[2] items-center gap-1">
+        <input
+          type="text"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              onSave(draft.trim())
+              setEditing(false)
+            }
+            if (e.key === 'Escape') {
+              setDraft(note || '')
+              setEditing(false)
+            }
+          }}
+          className={`${INPUT_CLASS} min-w-0 flex-1`}
+        />
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={() => {
+            onSave(draft.trim())
+            setEditing(false)
+          }}
+          className="flex-shrink-0 border border-accent-green/30 bg-accent-green/5 px-2 py-1 text-[9px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
+        >
+          {isSaving ? '···' : 'SAVE'}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(note || '')
+        setEditing(true)
+      }}
+      title={note ? 'Click to edit' : 'Click to add a note'}
+      className="min-w-0 flex-[2] truncate text-left text-[9px] text-text-muted hover:text-text-secondary hover:underline"
+    >
+      {note || 'add a note…'}
+    </button>
+  )
+}
+
+function EntryRow({ entry, onRemove, isRemoving, onSaveNote, isSavingNote }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-border/50 py-1.5 text-[10px] last:border-none">
       <div className="min-w-0 flex-1">
@@ -30,9 +88,7 @@ function EntryRow({ entry, onRemove, isRemoving }) {
       <div className="w-20 flex-shrink-0 truncate text-text-secondary" title={entry.service}>
         {entry.service}
       </div>
-      <div className="min-w-0 flex-[2] truncate text-[9px] text-text-muted" title={entry.note || ''}>
-        {entry.note || '—'}
-      </div>
+      <NoteCell note={entry.note} onSave={onSaveNote} isSaving={isSavingNote} />
       <button
         type="button"
         disabled={isRemoving}
@@ -123,6 +179,11 @@ export function PortAllowlistSection() {
     disallowMutation.mutate({ mac, port }, { onSettled: () => setPendingKey(null) })
   }
 
+  function saveNote(mac, port, note) {
+    setPendingKey(entryKey(mac, port))
+    allowMutation.mutate({ mac, port, note }, { onSettled: () => setPendingKey(null) })
+  }
+
   return (
     <div className="mt-4 border border-border bg-surface p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">PORT ALLOWLIST</div>
@@ -142,14 +203,19 @@ export function PortAllowlistSection() {
       )}
 
       {!isLoading &&
-        entries.map((entry) => (
-          <EntryRow
-            key={entryKey(entry.device_mac, entry.port)}
-            entry={entry}
-            onRemove={() => remove(entry.device_mac, entry.port)}
-            isRemoving={disallowMutation.isPending && pendingKey === entryKey(entry.device_mac, entry.port)}
-          />
-        ))}
+        entries.map((entry) => {
+          const key = entryKey(entry.device_mac, entry.port)
+          return (
+            <EntryRow
+              key={key}
+              entry={entry}
+              onRemove={() => remove(entry.device_mac, entry.port)}
+              isRemoving={disallowMutation.isPending && pendingKey === key}
+              onSaveNote={(note) => saveNote(entry.device_mac, entry.port, note)}
+              isSavingNote={allowMutation.isPending && pendingKey === key}
+            />
+          )
+        })}
 
       {!isLoading && (
         <AddEntryForm
