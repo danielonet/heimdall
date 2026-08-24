@@ -12,7 +12,9 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
-from sentinel.db.models import Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, TrustedMac
+from sentinel.db.models import (
+    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, PortAllowlistEntry, TrustedMac,
+)
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
 
@@ -535,6 +537,55 @@ class AlertSnoozeRepository:
                     AlertSnooze.device_mac == device_mac,
                     AlertSnooze.snoozed_until > datetime.now(timezone.utc),
                 )
+            )
+            return list(result.scalars().all())
+
+
+class PortAllowlistRepository:
+    """Read/write access to the port_allowlist table — see
+    PortAllowlistEntry's docstring and SentinelScheduler._nmap_scan_job's
+    allowed_ports filter, the single enforcement point that actually
+    excludes an allowlisted port from HIGH_RISK_PORTS detection."""
+
+    async def allow(self, device_mac: str, port: int, service: str, note: str | None = None) -> PortAllowlistEntry:
+        """Create or replace the allowlist entry for (device_mac, port) —
+        re-adding an already-allowlisted pair updates service/note rather
+        than erroring or duplicating."""
+        stmt = pg_insert(PortAllowlistEntry).values(
+            device_mac=device_mac, port=port, service=service, note=note,
+        ).on_conflict_do_update(
+            index_elements=['device_mac', 'port'], set_={'service': service, 'note': note},
+        )
+        async with get_session() as session:
+            await session.execute(stmt)
+            return await session.get(PortAllowlistEntry, (device_mac, port))
+
+    async def disallow(self, device_mac: str, port: int) -> bool:
+        """Remove an entry — the port resumes normal HIGH_RISK_PORTS
+        detection on the device's next nmap scan. Returns whether one existed."""
+        async with get_session() as session:
+            existing = await session.get(PortAllowlistEntry, (device_mac, port))
+            if existing is None:
+                return False
+            await session.delete(existing)
+            return True
+
+    async def allowed_ports_for(self, device_mac: str) -> set[int]:
+        """Every port currently allowlisted for one device — batched lookup
+        for _nmap_scan_job's per-device port comparison, so checking N
+        candidate high-risk ports costs one query, not N."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(PortAllowlistEntry.port).where(PortAllowlistEntry.device_mac == device_mac)
+            )
+            return set(result.scalars().all())
+
+    async def list_all(self) -> list[PortAllowlistEntry]:
+        """Every allowlist entry across every device — powers the Rules
+        tab's allowlist section."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(PortAllowlistEntry).order_by(PortAllowlistEntry.created_at.desc())
             )
             return list(result.scalars().all())
 

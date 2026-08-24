@@ -249,6 +249,31 @@ class AlertSnooze(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class PortAllowlistEntry(Base):
+    """A (device, port) pair explicitly vouched for as expected/legitimate —
+    excludes it from NetworkScanner's HIGH_RISK_PORTS check going forward
+    (see SentinelScheduler._nmap_scan_job), rather than just muting the
+    alert or the auto-block reaction: an allowlisted port is meant to never
+    be flagged as a finding again, the same way an admin would expect a
+    conventional network-security allowlist to behave.
+
+    No FK to devices, same reasoning as TrustedMac/AlertSnooze: must
+    survive a devices-table purge/reset rather than cascade-deleting with
+    it. PK is (device_mac, port) — at most one entry per pair; re-adding
+    replaces it (e.g. an updated note) rather than accumulating rows.
+    `service` is captured at creation time from HIGH_RISK_PORTS rather than
+    looked up live at display time, so the label stays stable even if that
+    dict's contents are ever edited later."""
+
+    __tablename__ = 'port_allowlist'
+
+    device_mac: Mapped[str] = mapped_column(String(17), primary_key=True)
+    port: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class TrafficSample(Base):
     """Per-device traffic delta for a single poll interval (TimescaleDB hypertable).
 

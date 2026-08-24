@@ -18,8 +18,8 @@ from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
 from sentinel.api.extensions import socketio
-from sentinel.db.models import Alert, Device
-from sentinel.db.repositories import SettingsRepository
+from sentinel.db.models import Alert, Device, PortAllowlistEntry
+from sentinel.db.repositories import PortAllowlistRepository, SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
 from sentinel.security.scanner import OpenPort, ScanResult
@@ -47,6 +47,7 @@ async def _init_db():
     async with get_session() as session:
         await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
         await session.execute(delete(Device).where(Device.mac_address == _MAC))
+        await session.execute(delete(PortAllowlistEntry).where(PortAllowlistEntry.device_mac == _MAC))
     await get_engine().dispose()
 
 
@@ -146,6 +147,64 @@ class TestHighRiskPortRegression:
             )
             alerts = result.scalars().all()
         assert len(alerts) == 2
+
+
+class TestPortAllowlist:
+    async def test_allowlisted_port_does_not_alert(self, scheduler):
+        await _seed_device(nmap_profile={'ports': []})
+        await SettingsRepository().set_auto_block_on_threat(False)
+        await PortAllowlistRepository().allow(_MAC, 445, 'SMB', note='print server')
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[
+                OpenPort(port=445, protocol='tcp', service='microsoft-ds', version='', state='open'),
+            ]),
+        )
+
+        await scheduler._nmap_scan_job()
+
+        assert await _latest_alert('HIGH_RISK_PORT_OPENED') is None
+
+    async def test_allowlisting_one_port_does_not_suppress_a_different_high_risk_port(self, scheduler):
+        await _seed_device(nmap_profile={'ports': []})
+        await SettingsRepository().set_auto_block_on_threat(False)
+        await PortAllowlistRepository().allow(_MAC, 445, 'SMB')
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[
+                OpenPort(port=445, protocol='tcp', service='microsoft-ds', version='', state='open'),
+                OpenPort(port=23, protocol='tcp', service='telnet', version='', state='open'),
+            ]),
+        )
+
+        await scheduler._nmap_scan_job()
+
+        assert await _latest_alert('HIGH_RISK_PORT_OPENED') is not None
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC, Alert.alert_type == 'HIGH_RISK_PORT_OPENED')
+            )
+            alerts = result.scalars().all()
+        assert len(alerts) == 1
+        assert 'Telnet' in alerts[0].description
+
+    async def test_allowlisting_does_not_affect_a_different_device(self, scheduler):
+        other_mac = '11:22:33:44:55:66'
+        await _seed_device(nmap_profile={'ports': []})
+        async with get_session() as session:
+            session.add(Device(mac_address=other_mac, ip_address='10.100.102.51', hostname='other-device'))
+        await SettingsRepository().set_auto_block_on_threat(False)
+        await PortAllowlistRepository().allow(other_mac, 445, 'SMB')
+        scheduler._scanner = _FakeScanner(
+            ScanResult(ip=_IP, os='Unknown', ports=[
+                OpenPort(port=445, protocol='tcp', service='microsoft-ds', version='', state='open'),
+            ]),
+        )
+
+        await scheduler._nmap_scan_job()
+
+        assert await _latest_alert('HIGH_RISK_PORT_OPENED') is not None
+        async with get_session() as session:
+            await session.execute(delete(Device).where(Device.mac_address == other_mac))
+            await session.execute(delete(PortAllowlistEntry).where(PortAllowlistEntry.device_mac == other_mac))
 
 
 class TestVulnScanRegression:

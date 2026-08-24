@@ -318,7 +318,7 @@ async def purge():
     async with get_session() as session:
         await session.execute(text(
             'TRUNCATE devices, traffic_samples, port_stats, wan_status_history, '
-            'alerts, trusted_macs, alert_snoozes RESTART IDENTITY'
+            'alerts, trusted_macs, alert_snoozes, port_allowlist RESTART IDENTITY'
         ))
     await SettingsRepository().set_baseline_established_at(datetime.now(timezone.utc))
 

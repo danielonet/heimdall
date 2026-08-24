@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sentinel.db.models import Alert, AlertSnooze, Device, PortStats, Rule, TrafficSample, WanStats
+from sentinel.db.models import Alert, AlertSnooze, Device, PortAllowlistEntry, PortStats, Rule, TrafficSample, WanStats
 
 
 def device_to_dict(device: Device) -> dict[str, Any]:
@@ -85,6 +85,16 @@ def alert_snooze_to_dict(snooze: AlertSnooze) -> dict[str, Any]:
         'alert_type': snooze.alert_type,
         'snoozed_until': snooze.snoozed_until.isoformat() if snooze.snoozed_until else None,
         'created_at': snooze.created_at.isoformat() if snooze.created_at else None,
+    }
+
+
+def port_allowlist_entry_to_dict(entry: PortAllowlistEntry) -> dict[str, Any]:
+    return {
+        'device_mac': entry.device_mac,
+        'port': entry.port,
+        'service': entry.service,
+        'note': entry.note,
+        'created_at': entry.created_at.isoformat() if entry.created_at else None,
     }
 
 

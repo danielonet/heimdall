@@ -28,7 +28,9 @@ from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
 from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
-from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository, TrustedMacRepository
+from sentinel.db.repositories import (
+    AlertRepository, DeviceRepository, PortAllowlistRepository, SettingsRepository, TrustedMacRepository,
+)
 from sentinel.db.session import get_session
 from sentinel.deployment_tiers import active_service_keys, services_for_tier
 from sentinel.detection.correlation import CrossAlertCorrelator
@@ -490,16 +492,20 @@ class SentinelScheduler:
         Also treats several nmap findings as an attack rather than routine
         profile data: a high-risk port (see HIGH_RISK_PORTS) that was closed
         on the previous scan and is open now — a common sign a device has
-        been compromised and is now running a backdoor/remote-admin service;
-        any finding from nmap's `--script vuln` NSE category; any finding
-        from a curated default/blank-credential NSE script set (kept as a
-        separate alert type from vuln findings — a CVE and an exposed
-        default password are different kinds of problem); and a disagreement
-        between this scan's active OS detection and PassiveFingerprinter's
-        most recent passive guess (both write to Device.os_fingerprint, so
-        without this check they'd silently clobber each other with no
-        cross-reference at all). All four route through _raise_threat_alert,
-        which auto-blocks the device if auto_block_on_threat is armed.
+        been compromised and is now running a backdoor/remote-admin service
+        (skipped entirely for a port explicitly allowlisted for that device,
+        see PortAllowlistRepository — a known-legitimate service, e.g. a
+        print server's SMB share, should never be flagged as this kind of
+        finding again); any finding from nmap's `--script vuln` NSE
+        category; any finding from a curated default/blank-credential NSE
+        script set (kept as a separate alert type from vuln findings — a
+        CVE and an exposed default password are different kinds of
+        problem); and a disagreement between this scan's active OS
+        detection and PassiveFingerprinter's most recent passive guess
+        (both write to Device.os_fingerprint, so without this check they'd
+        silently clobber each other with no cross-reference at all). All
+        four route through _raise_threat_alert, which auto-blocks the
+        device if auto_block_on_threat is armed.
         """
         try:
             async with get_session() as session:
@@ -518,9 +524,11 @@ class SentinelScheduler:
                     p['port'] for p in (previous_profile or {}).get('ports', [])
                     if p.get('state') == 'open'
                 }
+                allowed_ports = await PortAllowlistRepository().allowed_ports_for(mac)
                 newly_opened_high_risk = {
                     p.port: HIGH_RISK_PORTS[p.port] for p in scan.ports
                     if p.state == 'open' and p.port in HIGH_RISK_PORTS and p.port not in previous_open_ports
+                    and p.port not in allowed_ports
                 }
 
                 profile = {

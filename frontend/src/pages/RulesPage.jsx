@@ -3,6 +3,7 @@ import { useRules } from '../hooks/useRules'
 import { RuleRow } from '../components/rules/RuleRow'
 import { RuleEditor } from '../components/rules/RuleEditor'
 import { DeviceTypeProfilesSection } from '../components/rules/DeviceTypeProfilesSection'
+import { PortAllowlistSection } from '../components/rules/PortAllowlistSection'
 
 export function RulesPage() {
   const { data: rules, isLoading } = useRules()
@@ -42,6 +43,8 @@ export function RulesPage() {
       <div className="mt-4">
         <DeviceTypeProfilesSection />
       </div>
+
+      <PortAllowlistSection />
     </div>
   )
 }
