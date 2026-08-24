@@ -37,20 +37,26 @@ export function AlertHistoryTable({ mac, alerts }) {
               <span className="text-[9px] text-text-muted">
                 <TimeAgo iso={a.created_at} />
               </span>
-              {a.resolved ? (
-                <Badge variant="success">RESOLVED</Badge>
-              ) : a.acknowledged ? (
-                <Badge variant="info">ACKED</Badge>
-              ) : (
-                <Badge variant="danger">OPEN</Badge>
-              )}
+              {/* Badge and its action control sit on one line, deliberately
+              — grouping the status chip with what acts on it, rather than
+              leaving the badge to visually float against a taller sibling
+              stack (its own line above it, the actions control beside it). */}
+              <div className="flex items-center gap-2">
+                {a.resolved ? (
+                  <Badge variant="success">RESOLVED</Badge>
+                ) : a.acknowledged ? (
+                  <Badge variant="info">ACKED</Badge>
+                ) : (
+                  <Badge variant="danger">OPEN</Badge>
+                )}
+                <AlertActionsMenu alert={a} isSnoozed={!!snooze} />
+              </div>
               {snooze && (
                 <span className="text-[9px] text-text-muted" title={`Snoozed until ${formatUntil(snooze.snoozed_until)}`}>
                   snoozed · {formatUntil(snooze.snoozed_until)}
                 </span>
               )}
             </div>
-            <AlertActionsMenu alert={a} isSnoozed={!!snooze} />
           </div>
         )
       })}
