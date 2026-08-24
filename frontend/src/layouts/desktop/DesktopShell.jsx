@@ -44,17 +44,27 @@ const NAV_ITEMS = [
   { to: '/settings', label: 'SETTINGS' },
 ]
 
-function useClock() {
+// Its own leaf component, not a hook called from DesktopShell itself —
+// confirmed real: the ticking setState lived in DesktopShell before, which
+// re-rendered the *entire* authenticated app (everything under <Outlet/> —
+// every page, every chart, the live network map, every list) once a
+// second, forever, for as long as a tab stayed open. Isolated here, only
+// this one <span> re-renders each tick; DesktopShell and everything it
+// wraps stays untouched by the clock.
+function Clock() {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(id)
   }, [])
-  return now.toLocaleTimeString('en-GB')
+  return (
+    <div className="min-w-[90px] text-right font-heading text-xl font-semibold tracking-wide text-accent-green">
+      {now.toLocaleTimeString('en-GB')}
+    </div>
+  )
 }
 
 export function DesktopShell() {
-  const clock = useClock()
   const navigate = useNavigate()
   const { data: health } = useHealth()
   const schedulerOk = health?.scheduler?.scheduler_running && !health?.scheduler?.last_poll_error
@@ -118,9 +128,7 @@ export function DesktopShell() {
           >
             LOGOUT
           </button>
-          <div className="min-w-[90px] text-right font-heading text-xl font-semibold tracking-wide text-accent-green">
-            {clock}
-          </div>
+          <Clock />
         </div>
       </header>
 
