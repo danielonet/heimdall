@@ -12,6 +12,14 @@ const RATIO_MIN = 0.1, RATIO_MAX = 1000
 const POLLS_MIN = 1, POLLS_MAX = 100
 const CONTAMINATION_MIN = 0.001, CONTAMINATION_MAX = 0.5
 
+// One shared column template drives the header, every row, and the add
+// form — previously each of those three pieces set its own fixed w-40/w-24
+// widths independently and just had to coincidentally agree, which is
+// exactly the kind of thing that quietly drifts out of alignment. The name
+// column flexes with available width; the three threshold columns and the
+// action column stay fixed.
+const GRID_COLS = 'grid-cols-[minmax(9rem,1fr)_repeat(3,6.5rem)_6.5rem]'
+
 // format() renders the read-only "measured" reference value under each
 // input — same field keys the profile itself uses, so a configured number
 // and its real-world counterpart sit directly on top of one another.
@@ -65,33 +73,34 @@ function sanitizeNumericInput(raw, integer) {
 }
 
 /** One editable threshold input, with the real-world measured extreme for
- * this device_type (if any) shown directly beneath it — same width as the
- * input above it, so "what I've set" and "what actually happened" line up
- * as one visual unit instead of two unrelated lists. */
-function NumCell({ field, value, onChange, measured }) {
+ * this device_type (if any) shown directly beneath it — "what I've set"
+ * and "what actually happened" line up as one visual unit instead of two
+ * unrelated lists. isDirty rings the specific field that changed (not just
+ * the row as a whole), so editing one of three numbers doesn't leave it
+ * ambiguous which one is actually pending a save. */
+function NumCell({ field, value, onChange, measured, isDirty }) {
   return (
-    <div className="w-24 flex-shrink-0">
+    <div className="flex min-w-0 flex-col gap-1">
       <input
         type="text"
         inputMode={field.integer ? 'numeric' : 'decimal'}
         value={value}
         onChange={(e) => onChange(field.key, sanitizeNumericInput(e.target.value, field.integer))}
-        className="w-full border border-border bg-bg px-2 py-1 text-[10px] text-text-primary outline-none focus:border-border-active"
+        className={`w-full border bg-bg px-2 py-1.5 text-[11px] tabular-nums text-text-primary outline-none transition-colors focus:border-border-active ${
+          isDirty ? 'border-accent-green/50' : 'border-border'
+        }`}
       />
-      <div className="mt-0.5 truncate text-[8px] leading-tight text-text-muted">
+      <div className="truncate text-[8px] leading-tight tracking-wide text-text-muted">
         {measured ? (
-          <>
-            max{' '}
-            <Link
-              to={`/devices/${measured.device_mac}`}
-              title={measured.hostname || measured.device_mac}
-              className="text-accent-amber hover:underline"
-            >
-              {field.format(measured.value)}
-            </Link>
-          </>
+          <Link
+            to={`/devices/${measured.device_mac}`}
+            title={measured.hostname || measured.device_mac}
+            className="text-accent-amber/80 tabular-nums hover:text-accent-amber hover:underline"
+          >
+            max {field.format(measured.value)}
+          </Link>
         ) : (
-          '—'
+          <span className="opacity-50">no data yet</span>
         )}
       </div>
     </div>
@@ -102,12 +111,19 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
   const [values, setValues] = useState(() =>
     Object.fromEntries(FIELDS.map(({ key }) => [key, String(profile[key])]))
   )
-  const isDirty = FIELDS.some(({ key }) => String(profile[key]) !== values[key])
+  const dirtyKeys = new Set(FIELDS.filter(({ key }) => String(profile[key]) !== values[key]).map((f) => f.key))
+  const isDirty = dirtyKeys.size > 0
+  const canSave = isDirty && isValid(values) && !isSaving
 
   return (
-    <div className="flex items-start gap-2 border-b border-border/50 py-1.5 text-[10px]">
-      <div className="w-40 flex-shrink-0 truncate pt-1.5 text-text-primary" title={deviceType}>
-        {deviceType}
+    <div className={`grid ${GRID_COLS} items-center gap-3 border-b border-border/40 px-1 py-2.5 text-[10px] transition-colors last:border-none hover:bg-border/10`}>
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <span className="truncate text-[11px] text-text-primary" title={deviceType}>
+          {deviceType}
+        </span>
+        {!hasOverride && (
+          <span className="flex-shrink-0 text-[8px] tracking-wide text-text-muted/70">default</span>
+        )}
       </div>
       {FIELDS.map((field) => (
         <NumCell
@@ -116,14 +132,20 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
           value={values[field.key]}
           onChange={(k, v) => setValues((prev) => ({ ...prev, [k]: v }))}
           measured={measured?.[field.key]}
+          isDirty={dirtyKeys.has(field.key)}
         />
       ))}
-      <div className="flex flex-shrink-0 gap-2 pt-1.5">
+      <div className="flex justify-end gap-1.5 self-start pt-0.5">
         <button
           type="button"
-          disabled={!isDirty || !isValid(values) || isSaving}
+          disabled={!canSave}
           onClick={() => onSave(Object.fromEntries(FIELDS.map(({ key }) => [key, Number(values[key])])))}
-          className="border border-accent-green/30 bg-accent-green/5 px-2 py-1 text-[9px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
+          title="Save"
+          className={`border px-2 py-1.5 text-[9px] tracking-wider transition-colors ${
+            canSave
+              ? 'border-accent-green/40 bg-accent-green/10 text-accent-green hover:bg-accent-green/20'
+              : 'border-border/30 text-text-muted/30'
+          }`}
         >
           {isSaving ? '···' : 'SAVE'}
         </button>
@@ -132,7 +154,11 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
           disabled={!hasOverride || isDeleting}
           onClick={onDelete}
           title={hasOverride ? 'Revert this device type to the built-in default' : 'No override to revert — already using the default'}
-          className="border border-border px-2 py-1 text-[9px] tracking-wider text-text-muted transition-colors hover:text-accent-red disabled:opacity-40"
+          className={`border px-2 py-1.5 text-[9px] tracking-wider transition-colors ${
+            hasOverride
+              ? 'border-border text-text-muted hover:border-accent-red/40 hover:text-accent-red'
+              : 'border-border/30 text-text-muted/30'
+          }`}
         >
           {isDeleting ? '···' : 'RESET'}
         </button>
@@ -141,7 +167,7 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
   )
 }
 
-function AddProfileForm({ onAdd, isSaving, existingTypes }) {
+function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
   const [deviceType, setDeviceType] = useState('')
   const [values, setValues] = useState({
     high_upload_ratio_threshold: '3.0', volume_sustained_polls: '3', contamination: '0.05',
@@ -156,14 +182,16 @@ function AddProfileForm({ onAdd, isSaving, existingTypes }) {
   }
 
   return (
-    <div className="flex items-center gap-2 border-t border-border pt-2 text-[10px]">
+    <div className={`grid ${GRID_COLS} items-center gap-3 border border-dashed border-border-active/50 bg-bg/50 px-1 py-2.5 text-[10px]`}>
       <input
         type="text"
+        autoFocus
         list={DEVICE_TYPE_DATALIST_ID}
-        placeholder="new device type (e.g. Smart TV)"
+        placeholder="e.g. Smart TV"
         value={deviceType}
         onChange={(e) => setDeviceType(e.target.value)}
-        className="w-40 flex-shrink-0 border border-border bg-bg px-2 py-1 text-[10px] text-text-primary outline-none focus:border-border-active"
+        onKeyDown={(e) => e.key === 'Escape' && onDone()}
+        className="min-w-0 border border-border bg-bg px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active"
       />
       {FIELDS.map((field) => (
         <input
@@ -174,17 +202,27 @@ function AddProfileForm({ onAdd, isSaving, existingTypes }) {
           onChange={(e) =>
             setValues((prev) => ({ ...prev, [field.key]: sanitizeNumericInput(e.target.value, field.integer) }))
           }
-          className="w-24 flex-shrink-0 border border-border bg-bg px-2 py-1 text-[10px] text-text-primary outline-none focus:border-border-active"
+          className="min-w-0 border border-border bg-bg px-2 py-1.5 text-[11px] tabular-nums text-text-primary outline-none focus:border-border-active"
         />
       ))}
-      <button
-        type="button"
-        disabled={!canAdd || isSaving}
-        onClick={handleAdd}
-        className="border border-accent-green/30 bg-accent-green/5 px-2 py-1 text-[9px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
-      >
-        {isSaving ? '···' : 'ADD'}
-      </button>
+      <div className="flex justify-end gap-1.5">
+        <button
+          type="button"
+          disabled={!canAdd || isSaving}
+          onClick={handleAdd}
+          className="border border-accent-green/40 bg-accent-green/10 px-2 py-1.5 text-[9px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:border-border/30 disabled:bg-transparent disabled:text-text-muted/30"
+        >
+          {isSaving ? '···' : 'ADD'}
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          title="Cancel"
+          className="border border-border px-2 py-1.5 text-[9px] tracking-wider text-text-muted transition-colors hover:text-text-primary"
+        >
+          ✕
+        </button>
+      </div>
     </div>
   )
 }
@@ -196,6 +234,8 @@ export function DeviceTypeProfilesSection() {
   const upsertMutation = useUpsertDeviceTypeProfile()
   const deleteMutation = useDeleteDeviceTypeProfile()
   const [pendingType, setPendingType] = useState(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
 
   const isLoading = profilesLoading || extremesLoading
   // Stable {} fallback (not a fresh object literal on every render) so the
@@ -232,7 +272,10 @@ export function DeviceTypeProfilesSection() {
 
   function save(deviceType, fields) {
     setPendingType(deviceType)
-    upsertMutation.mutate({ deviceType, ...fields }, { onSettled: () => setPendingType(null) })
+    upsertMutation.mutate({ deviceType, ...fields }, {
+      onSettled: () => setPendingType(null),
+      onSuccess: () => setShowAdd(false),
+    })
   }
 
   function remove(deviceType) {
@@ -242,26 +285,44 @@ export function DeviceTypeProfilesSection() {
 
   return (
     <div className="border border-border bg-surface p-3">
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[8px] tracking-[3px] text-text-muted">DEVICE TYPE PROFILES</div>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <div className="text-[8px] tracking-[3px] text-text-muted">DEVICE TYPE PROFILES</div>
+          <button
+            type="button"
+            onClick={() => setShowHelp((v) => !v)}
+            title="What do these mean?"
+            aria-expanded={showHelp}
+            className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded-full border text-[8px] leading-none transition-colors ${
+              showHelp
+                ? 'border-accent-blue/50 text-accent-blue'
+                : 'border-border text-text-muted hover:border-border-active hover:text-text-secondary'
+            }`}
+          >
+            ?
+          </button>
+        </div>
         <div className="text-[9px] text-text-muted">
           {extremesData?.computed_at ? (
-            <>measured column as of <TimeAgo iso={extremesData.computed_at} /> · refreshes hourly</>
+            <>measured as of <TimeAgo iso={extremesData.computed_at} /> · refreshes hourly</>
           ) : (
             'measured column not computed yet — refreshes hourly'
           )}
         </div>
       </div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        Per-device-type overrides for how easily HIGH_UPLOAD/ANOMALOUS_VOLUME fire. RATIO = upload:download
-        ratio that counts as suspicious; POLLS = consecutive flagged polls needed before alerting; CONTAM.
-        = the anomaly model's expected outlier rate for this type's nightly retrain — raise it for a type
-        prone to short, legitimate, recurring bursts (e.g. a phone during a video call) so that pattern
-        stops being flagged as an outlier indefinitely. The small amber number under each field is the
-        highest value ever actually measured for that device type — <em>use it to judge a threshold, not
-        as a preset to copy blindly</em> (e.g. CONTAM. is a target rate, not the same thing as the worst
-        share of samples that were ever flagged).
-      </p>
+
+      {showHelp && (
+        <p className="mb-3 border-l-2 border-border-active/60 py-0.5 pl-2.5 text-[10px] leading-relaxed text-text-secondary">
+          Per-device-type overrides for how easily HIGH_UPLOAD/ANOMALOUS_VOLUME fire. RATIO = upload:download
+          ratio that counts as suspicious; POLLS = consecutive flagged polls needed before alerting; CONTAM.
+          = the anomaly model's expected outlier rate for this type's nightly retrain — raise it for a type
+          prone to short, legitimate, recurring bursts (e.g. a phone during a video call) so that pattern
+          stops being flagged as an outlier indefinitely. The amber number under each field is the highest
+          value ever actually measured for that device type — <em>use it to judge a threshold, not as a
+          preset to copy blindly</em> (e.g. CONTAM. is a target rate, not the same thing as the worst share
+          of samples that were ever flagged).
+        </p>
+      )}
 
       <datalist id={DEVICE_TYPE_DATALIST_ID}>
         {knownDeviceTypes.map((t) => (
@@ -273,15 +334,16 @@ export function DeviceTypeProfilesSection() {
 
       {!isLoading && (
         <>
-          <div className="flex items-center gap-2 pb-1 text-[9px] tracking-wider text-text-muted">
-            <div className="w-40 flex-shrink-0">DEVICE TYPE</div>
+          <div className={`grid ${GRID_COLS} gap-3 px-1 pb-1.5 text-[9px] tracking-wider text-text-muted`}>
+            <div>DEVICE TYPE</div>
             {FIELDS.map((f) => (
-              <div key={f.key} className="w-24 flex-shrink-0">{f.label}</div>
+              <div key={f.key}>{f.label}</div>
             ))}
+            <div />
           </div>
 
-          {rows.length === 0 && (
-            <div className="py-2 text-[10px] text-text-muted">
+          {rows.length === 0 && !showAdd && (
+            <div className="py-3 text-center text-[10px] text-text-muted">
               No overrides and no measured traffic yet — every device type uses the default.
             </div>
           )}
@@ -300,11 +362,24 @@ export function DeviceTypeProfilesSection() {
             />
           ))}
 
-          <AddProfileForm
-            onAdd={(deviceType, fields) => save(deviceType, fields)}
-            isSaving={upsertMutation.isPending && pendingType !== null && !rows.some((r) => r.deviceType === pendingType)}
-            existingTypes={rows.map((r) => r.deviceType)}
-          />
+          <div className="pt-2.5">
+            {showAdd ? (
+              <AddProfileForm
+                onAdd={(deviceType, fields) => save(deviceType, fields)}
+                onDone={() => setShowAdd(false)}
+                isSaving={upsertMutation.isPending && pendingType !== null && !rows.some((r) => r.deviceType === pendingType)}
+                existingTypes={rows.map((r) => r.deviceType)}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className="w-full border border-dashed border-border py-1.5 text-[9px] tracking-wider text-text-muted transition-colors hover:border-border-active hover:text-text-secondary"
+              >
+                + ADD DEVICE TYPE OVERRIDE
+              </button>
+            )}
+          </div>
         </>
       )}
 
