@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { useDevices } from '../hooks/useDevices'
 import { filterDevices } from '../lib/deviceFilters'
@@ -12,7 +12,13 @@ export function DevicesPage() {
   const { data: devices, isLoading } = useDevices()
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
 
-  const filtered = filterDevices(devices || [], filters)
+  // devices refetches every 15s (useDevices' refetchInterval) and every poll
+  // hands back a new array reference even when nothing a user would notice
+  // changed (traffic counters tick constantly). Without this memo, `filtered`
+  // was a brand-new array on every one of those polls, forever, and got fed
+  // straight into DesktopDevicesList's useReactTable as a new `data` prop
+  // each time — needless churn on a page meant to be left open for hours.
+  const filtered = useMemo(() => filterDevices(devices || [], filters), [devices, filters])
 
   const props = {
     devices: filtered,
