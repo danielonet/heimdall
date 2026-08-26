@@ -49,7 +49,11 @@ function Field({ label, value }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       <dt className="flex-shrink-0 text-text-muted">{label}</dt>
-      <dd className="truncate text-right text-text-primary">{value}</dd>
+      {/* break-words rather than truncate — VERSION strings (Postgres's in
+       * particular, e.g. "PostgreSQL 16.14 (Ubuntu 16.14-...)") regularly
+       * outrun this card's width, and wrapping to a second line beats
+       * silently cutting off the packaging suffix. */}
+      <dd className="break-words text-right text-text-primary">{value}</dd>
     </div>
   )
 }
@@ -73,7 +77,7 @@ function ServiceHoverCard({ anchorRect, info }) {
   return createPortal(
     <div
       style={style}
-      className="z-50 w-60 border border-border-active bg-surface-elevated p-3 text-[10px] leading-snug text-text-secondary shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
+      className="z-50 w-64 border border-border-active bg-surface-elevated p-3 text-[10px] leading-snug text-text-secondary shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
     >
       <div className="mb-2 text-text-primary">{info.description}</div>
       <dl className="space-y-1">
