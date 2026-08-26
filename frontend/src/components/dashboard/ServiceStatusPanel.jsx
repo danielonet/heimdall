@@ -1,7 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { StatusDot } from '../StatusDot'
 import { TimeAgo } from '../TimeAgo'
+import { formatBytes } from '../../lib/format'
+import { useServiceDetails } from '../../hooks/useServiceDetails'
 import {
   CanaryIcon,
   CrosshairIcon,
@@ -42,8 +45,56 @@ const ALERT_TYPES_BY_SERVICE = {
   suricata: new Set(['IDS_SIGNATURE_MATCH']),
 }
 
-function Row({ icon: Icon, label, ok, detail, alert, to }) {
+function Field({ label, value }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="flex-shrink-0 text-text-muted">{label}</dt>
+      <dd className="truncate text-right text-text-primary">{value}</dd>
+    </div>
+  )
+}
+
+// Portaled to document.body and positioned from a captured getBoundingClientRect
+// rather than a CSS-only absolute/group-hover popup — the panel's row list is
+// overflow-y-auto, and a popup escaping to the left of a row would get clipped
+// by that container's (CSS-spec-mandated) implicit overflow-x once overflow-y
+// is anything but visible. position: fixed via a portal sidesteps that
+// entirely, the same reason Modal.jsx already portals to document.body.
+function ServiceHoverCard({ anchorRect, info }) {
+  if (!anchorRect || !info) return null
+
+  const style = {
+    position: 'fixed',
+    top: anchorRect.top + anchorRect.height / 2,
+    left: anchorRect.left - 8,
+    transform: 'translate(-100%, -50%)',
+  }
+
+  return createPortal(
+    <div
+      style={style}
+      className="z-50 w-60 border border-border-active bg-surface-elevated p-3 text-[10px] leading-snug text-text-secondary shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
+    >
+      <div className="mb-2 text-text-primary">{info.description}</div>
+      <dl className="space-y-1">
+        {info.version && <Field label="VERSION" value={info.version} />}
+        {info.database_size_bytes != null && (
+          <Field label="DATABASE SIZE" value={formatBytes(info.database_size_bytes)} />
+        )}
+        {info.used_memory_bytes != null && (
+          <Field label="MEMORY USED" value={formatBytes(info.used_memory_bytes)} />
+        )}
+        <Field label="LAST ALERT" value={info.last_alert_at ? <TimeAgo iso={info.last_alert_at} /> : 'Never'} />
+      </dl>
+    </div>,
+    document.body,
+  )
+}
+
+function Row({ icon: Icon, label, ok, detail, alert, to, info }) {
   const navigate = useNavigate()
+  const rowRef = useRef(null)
+  const [hoverRect, setHoverRect] = useState(null)
   const clickable = alert && to
   const textClass = alert ? 'text-accent-red' : ok ? 'text-text-secondary' : 'text-text-muted'
   const iconClass = alert ? 'text-accent-red' : ok ? 'text-accent-green' : 'text-text-muted'
@@ -51,7 +102,10 @@ function Row({ icon: Icon, label, ok, detail, alert, to }) {
 
   return (
     <div
+      ref={rowRef}
       onClick={clickable ? () => navigate(to) : undefined}
+      onMouseEnter={() => setHoverRect(rowRef.current?.getBoundingClientRect() ?? null)}
+      onMouseLeave={() => setHoverRect(null)}
       className={`flex items-center justify-between border-b border-border/50 py-1.5 text-[10px] last:border-none ${
         clickable ? 'cursor-pointer hover:bg-border/20' : ''
       }`}
@@ -64,6 +118,7 @@ function Row({ icon: Icon, label, ok, detail, alert, to }) {
         <StatusDot variant={alert ? 'red' : ok ? 'green' : 'muted'} pulse={alert || ok} />
         {alert ? 'ALERT' : detail}
       </span>
+      <ServiceHoverCard anchorRect={hoverRect} info={info} />
     </div>
   )
 }
@@ -197,6 +252,10 @@ function buildRows(health, openAlerts) {
 }
 
 export function ServiceStatusPanel({ health, openAlerts = [] }) {
+  // Separate query, separate cadence (see useServiceDetails) — a row's own
+  // ok/detail must never wait on this, so it's looked up per-row below
+  // rather than folded into buildRows/rows' memoization.
+  const { data: details = {} } = useServiceDetails()
   // Older/degraded /api/health responses (scheduler not initialised) may
   // omit active_services entirely — fall back to showing everything rather
   // than an empty panel, since "unknown" shouldn't read as "nothing active".
@@ -227,6 +286,7 @@ export function ServiceStatusPanel({ health, openAlerts = [] }) {
             detail={row.detail}
             alert={row.alert}
             to={row.to}
+            info={details[row.key]}
           />
         ))}
       </div>

@@ -1790,6 +1790,25 @@ class SentinelScheduler:
     def threat_intel_feeds_snapshot(self) -> dict[str, Any]:
         return self._threat_intel.feed_status() if self._threat_intel else {}
 
+    def get_nmap_version(self) -> str | None:
+        """Installed nmap binary version, for the Services panel's hover
+        card — None on tiers with no nmap-capable scanner (self._scanner is
+        only constructed for tiers that include it, see security_services_
+        snapshot's active_services) or if the version probe itself fails."""
+        if self._scanner is None:
+            return None
+        try:
+            return self._scanner.binary_version()
+        except Exception:
+            return None
+
+    async def get_clamav_version(self) -> str | None:
+        """Live clamd version string, for the same hover card — None if
+        ClamAV isn't wired for this tier or clamd isn't reachable right now."""
+        if self._clamav is None:
+            return None
+        return await self._clamav.version()
+
     def get_threat_intel_service(self) -> ThreatIntelService:
         """Return the shared ThreatIntelService instance, for /api/threats routes."""
         if self._threat_intel is None:

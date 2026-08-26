@@ -34,6 +34,71 @@ class TestHealth:
         assert body['threat_intel_feeds'] == {}
 
 
+class TestServiceDetails:
+    def test_returns_an_entry_for_every_service(self, client):
+        resp = client.get('/api/service-details')
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert set(body) == {
+            'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch', 'fingerprint',
+            'nmap', 'opencanary', 'threat_intel', 'zeek_dns', 'zeek_beacon', 'clamav', 'suricata',
+        }
+        for entry in body.values():
+            assert entry['description']
+            assert 'last_alert_at' in entry
+
+    def test_postgres_reports_a_live_version_and_size(self, client):
+        resp = client.get('/api/service-details')
+        postgres = resp.get_json()['postgres']
+        assert postgres['version'].startswith('PostgreSQL ')
+        assert postgres['database_size_bytes'] > 0
+
+    def test_redis_reports_a_live_version_and_memory_usage(self, client):
+        resp = client.get('/api/service-details')
+        redis_entry = resp.get_json()['redis']
+        assert redis_entry['version'].startswith('Redis ')
+        assert redis_entry['used_memory_bytes'] > 0
+
+    def test_nmap_and_clamav_versions_are_none_without_a_running_scheduler(self, client):
+        """SCHEDULER_ENABLED=False in the test app — same "no fabricated
+        signal" contract as /health's security_services defaults."""
+        resp = client.get('/api/service-details')
+        body = resp.get_json()
+        assert body['nmap']['version'] is None
+        assert body['clamav']['version'] is None
+
+    def test_last_alert_at_is_none_with_no_alerts_raised(self, client):
+        resp = client.get('/api/service-details')
+        assert resp.get_json()['arp_watch']['last_alert_at'] is None
+
+    def test_last_alert_at_reflects_the_most_recent_matching_alert_type(self, client):
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+
+        from sentinel.db.models import Alert
+        from sentinel.db.session import get_session
+
+        older = datetime.now(timezone.utc) - timedelta(days=2)
+        newer = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        async def _seed():
+            async with get_session() as session:
+                session.add(Alert(
+                    device_mac='AA:BB:CC:DD:EE:FF', alert_type='ARP_SPOOF', severity='CRITICAL',
+                    description='old', created_at=older, resolved=True,
+                ))
+                session.add(Alert(
+                    device_mac='AA:BB:CC:DD:EE:FF', alert_type='ARP_SPOOF', severity='CRITICAL',
+                    description='new', created_at=newer, resolved=True,
+                ))
+        asyncio.run(_seed())
+
+        resp = client.get('/api/service-details')
+        last_alert_at = resp.get_json()['arp_watch']['last_alert_at']
+        assert last_alert_at is not None
+        assert datetime.fromisoformat(last_alert_at) == newer
+
+
 class TestRouterInfo:
     def test_returns_503_without_running_scheduler(self, client):
         resp = client.get('/api/router')

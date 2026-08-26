@@ -34,6 +34,16 @@ class ClamAvScanner:
             logger.debug('ClamAV ping failed: %s', exc)
             return False
 
+    async def version(self) -> Optional[str]:
+        """clamd's own version string (e.g. 'ClamAV 1.2.0/27000/...'), for
+        the Services panel's hover card. None if clamd isn't reachable."""
+        try:
+            cd = await asyncio.to_thread(pyclamd.ClamdNetworkSocket, self._host, self._port)
+            return await asyncio.to_thread(cd.version)
+        except Exception as exc:
+            logger.debug('ClamAV version check failed: %s', exc)
+            return None
+
     async def scan_bytes(self, data: bytes) -> Optional[dict]:
         """Scan a byte stream. Returns None if clean, or a dict with the virus name if infected.
 

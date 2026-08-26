@@ -62,6 +62,13 @@ class NetworkScanner:
     def __init__(self) -> None:
         self._nm = nmap.PortScanner()
 
+    def binary_version(self) -> str:
+        """Installed nmap binary version (e.g. '7.98') — python-nmap already
+        ran `nmap -V` once at PortScanner() construction and cached the
+        result, so this is a plain attribute read, not a fresh subprocess
+        call. Used by the Services panel's hover card, not by scanning."""
+        return '.'.join(str(part) for part in self._nm.nmap_version())
+
     async def scan_device(self, ip: str) -> ScanResult:
         """OS detection + service version scan. Degrades to service-only if
         OS detection isn't permitted (needs root/CAP_NET_RAW)."""

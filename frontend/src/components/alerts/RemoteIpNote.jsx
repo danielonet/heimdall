@@ -1,9 +1,4 @@
-function formatBytes(bytes) {
-  if (bytes == null) return '—'
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${bytes} B`
-}
+import { formatBytes } from '../../lib/format'
 
 /** Remote-IP correlation from SentinelScheduler._spike_ip_enrichment_job
  * (Alert.raw_data.remote_ip — see sentinel/security/zeek_parser.py's

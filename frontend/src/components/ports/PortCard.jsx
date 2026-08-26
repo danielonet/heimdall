@@ -2,13 +2,7 @@ import { useState } from 'react'
 import { Badge } from '../Badge'
 import { usePortHistory } from '../../hooks/usePortHistory'
 import { PortHistorySparkline } from './PortHistorySparkline'
-
-function formatBytes(bytes) {
-  if (bytes == null) return '—'
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${bytes} B`
-}
+import { formatBytes } from '../../lib/format'
 
 export function PortCard({ port }) {
   const [expanded, setExpanded] = useState(false)
