@@ -113,14 +113,28 @@ class TestProcess:
 
         assert alerts == []
 
-    def test_unknown_ip_does_not_fire_but_is_learned(self):
-        alerts = []
-        watcher = ArpWatcher(alert_callback=alerts.append, iface='eth0')
+    def test_unknown_ip_fires_a_new_ip_event_not_a_spoof_alert(self):
+        """Not a mismatch (nothing was "known" to conflict with), so not
+        ARP_SPOOF — but a passive "something just connected" signal is
+        still useful (see SentinelScheduler._handle_arp_new_ip), distinct
+        from a real security finding."""
+        events = []
+        watcher = ArpWatcher(alert_callback=events.append, iface='eth0')
 
         watcher._process(_arp_reply('10.0.0.9', 'cc:cc:cc:cc:cc:cc'))
 
-        assert alerts == []
+        assert len(events) == 1
+        assert events[0] == {'type': 'ARP_NEW_IP', 'ip': '10.0.0.9', 'mac': 'cc:cc:cc:cc:cc:cc'}
         assert watcher._table['10.0.0.9'] == 'cc:cc:cc:cc:cc:cc'
+
+    def test_new_ip_event_does_not_fire_again_for_the_same_ip(self):
+        events = []
+        watcher = ArpWatcher(alert_callback=events.append, iface='eth0')
+
+        watcher._process(_arp_reply('10.0.0.9', 'cc:cc:cc:cc:cc:cc'))
+        watcher._process(_arp_reply('10.0.0.9', 'cc:cc:cc:cc:cc:cc'))  # same IP, same MAC, seen again
+
+        assert len(events) == 1  # only the first sighting counts as "new"
 
     def test_arp_request_is_ignored(self):
         alerts = []

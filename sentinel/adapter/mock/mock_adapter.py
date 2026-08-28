@@ -48,6 +48,11 @@ class MockSagemcomAdapter(RouterAdapter):
                 device.signal_strength_dbm = int(max(-95, min(-30, device.signal_strength_dbm)))
         return self._devices
 
+    def invalidate_connected_devices_cache(self) -> None:
+        """No-op — get_connected_devices() is already free/synthetic here,
+        nothing to invalidate. Present only so callers never need to know
+        which adapter kind they're holding (see RouterAdapter's docstring)."""
+
     async def get_traffic_samples(self) -> List[TrafficSample]:
         """Return synthetic traffic deltas with realistic patterns."""
         samples: List[TrafficSample] = []

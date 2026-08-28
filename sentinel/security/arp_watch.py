@@ -143,6 +143,19 @@ class ArpWatcher:
                 'new_mac': mac,
                 'description': f'ARP spoofing suspected: {ip} changed from {known} to {mac}',
             })
+        elif known is None:
+            # An IP this table has never held any MAC for at all — not a
+            # mismatch, so not spoofing, but a strong passive signal a
+            # device just showed up on the wire (a brand-new device, or a
+            # known one reconnecting after being idle long enough to fall
+            # out of this table's LRU cap). No severity/description: this
+            # isn't a security finding, just a "go look" nudge — see
+            # SentinelScheduler._handle_arp_new_ip, which uses it to
+            # invalidate the adapter's connected-devices cache so the next
+            # poll cycle (~15s) picks this up instead of waiting out that
+            # cache's full window (see SagemcomXmoAdapter.
+            # get_connected_devices).
+            self._callback({'type': 'ARP_NEW_IP', 'ip': ip, 'mac': mac})
         self._table[ip] = mac
         self._table.move_to_end(ip)
         if len(self._table) > _MAX_TRACKED_IPS:

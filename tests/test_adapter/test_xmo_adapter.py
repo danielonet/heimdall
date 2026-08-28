@@ -1296,3 +1296,64 @@ class TestDecodeDhcpOption12Hostname:
         from sentinel.adapter.sagemcom.xmo_adapter import _decode_dhcp_option12_hostname
         options = [{'uid': 1, 'Tag': 12, 'Value': 'not-hex'}]
         assert _decode_dhcp_option12_hostname(options) == ''
+
+
+def _empty_associated_devices_response() -> dict:
+    """Matches _get_associated_devices()'s expectations well enough to
+    exercise get_connected_devices()'s caching without needing realistic
+    per-AP client data — every _ACCESS_POINT_ALIASES query just comes back
+    empty."""
+    return {'reply': {'actions': []}}
+
+
+@pytest.mark.asyncio
+class TestGetConnectedDevicesCaching:
+    """Requested explicitly: this fetch (Device/Hosts + WiFi
+    AssociatedDevices) was repeating every single 15s poll cycle purely to
+    feed things that don't change that fast (device directory, online/
+    offline). Cached for _CONNECTED_DEVICES_CACHE_TTL_S; get_traffic_
+    samples() is deliberately untouched — see get_connected_devices()'s
+    docstring."""
+
+    def _wire(self, adapter, host_list):
+        adapter._client.get_value = AsyncMock(return_value=_hosts_response(host_list))
+        adapter._client.post = AsyncMock(return_value=_empty_associated_devices_response())
+
+    async def test_second_call_within_the_ttl_serves_the_cache(self, adapter):
+        self._wire(adapter, [_wifi_host()])
+
+        first = await adapter.get_connected_devices()
+        second = await adapter.get_connected_devices()
+
+        assert first == second
+        adapter._client.get_value.assert_awaited_once()
+        adapter._client.post.assert_awaited_once()
+
+    async def test_invalidate_forces_a_real_refetch(self, adapter):
+        self._wire(adapter, [_wifi_host()])
+        await adapter.get_connected_devices()
+
+        adapter.invalidate_connected_devices_cache()
+        await adapter.get_connected_devices()
+
+        assert adapter._client.get_value.await_count == 2
+        assert adapter._client.post.await_count == 2
+
+    async def test_call_after_the_ttl_has_elapsed_refetches(self, adapter, monkeypatch):
+        self._wire(adapter, [_wifi_host()])
+        await adapter.get_connected_devices()
+
+        # Simulate _CONNECTED_DEVICES_CACHE_TTL_S having elapsed without a
+        # real 5-minute sleep in the test.
+        adapter._connected_devices_cached_at -= 301
+        await adapter.get_connected_devices()
+
+        assert adapter._client.get_value.await_count == 2
+
+    async def test_fresh_adapter_has_no_cache_and_fetches_on_first_call(self, adapter):
+        self._wire(adapter, [])
+        assert adapter._connected_devices_cache is None
+
+        await adapter.get_connected_devices()
+
+        adapter._client.get_value.assert_awaited_once()

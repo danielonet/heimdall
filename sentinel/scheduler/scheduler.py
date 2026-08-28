@@ -1464,9 +1464,34 @@ class SentinelScheduler:
         )
 
     def _on_arp_alert(self, event: dict) -> None:
-        """Sync callback invoked from ArpWatcher's own daemon thread."""
-        if self._loop is not None:
+        """Sync callback invoked from ArpWatcher's own daemon thread — one
+        event type is a security finding (ARP_SPOOF, routed to
+        _persist_arp_alert), the other is just a passive "something
+        connected" nudge (ARP_NEW_IP, routed to _handle_arp_new_ip)."""
+        if self._loop is None:
+            return
+        if event.get('type') == 'ARP_NEW_IP':
+            asyncio.run_coroutine_threadsafe(self._handle_arp_new_ip(event), self._loop)
+        else:
             asyncio.run_coroutine_threadsafe(self._persist_arp_alert(event), self._loop)
+
+    async def _handle_arp_new_ip(self, event: dict) -> None:
+        """ArpWatcher observed a MAC/IP pairing it's never seen before — the
+        "actively sync on a connect event" half of the adaptive device-sync
+        cadence (see SagemcomXmoAdapter.get_connected_devices' caching).
+        Just invalidates the cache; the next poll cycle (~15s, already
+        running regardless) does the actual fetch/upsert, same as any other
+        cycle — this never touches the DB or raises anything itself, and is
+        deliberately not rate-limited: invalidating an already-invalidated
+        cache is a no-op, so a burst of new-IP events (e.g. many devices
+        reconnecting after a router reboot) costs nothing beyond that one
+        eventual re-fetch.
+        """
+        try:
+            adapter = await self._ensure_adapter()
+        except Exception:
+            return
+        adapter.invalidate_connected_devices_cache()
 
     async def _persist_arp_alert(self, event: dict) -> None:
         # new_mac is the attacker's MAC impersonating a known IP — attribute

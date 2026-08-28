@@ -296,3 +296,66 @@ class TestVerifyArpChangeAgainstDhcp:
         assert await scheduler._verify_arp_change_against_dhcp('', '00:e0:4c:68:04:8c') is False
         assert await scheduler._verify_arp_change_against_dhcp('10.100.102.2', '') is False
         adapter.get_dhcp_leases.assert_not_awaited()
+
+
+class TestHandleArpNewIp:
+    """The "actively sync on a connect event" half of the device-sync
+    cadence request: ArpWatcher observing a never-before-seen MAC/IP
+    pairing invalidates SagemcomXmoAdapter's connected-devices cache (see
+    that adapter's _CONNECTED_DEVICES_CACHE_TTL_S) so the device directory
+    catches up within one ~15s poll cycle instead of waiting out the full
+    5-minute cache window."""
+
+    async def test_invalidates_the_connected_devices_cache(self):
+        scheduler, _, adapter = _scheduler_with_mocks([])
+        adapter.invalidate_connected_devices_cache = Mock()  # sync on the real adapter, not async
+
+        await scheduler._handle_arp_new_ip({'type': 'ARP_NEW_IP', 'ip': '10.100.102.9', 'mac': 'aa:bb:cc:dd:ee:01'})
+
+        adapter.invalidate_connected_devices_cache.assert_called_once()
+
+    async def test_adapter_unavailable_does_not_raise(self, monkeypatch):
+        scheduler, _, _ = _scheduler_with_mocks([])
+
+        async def _fail():
+            raise RuntimeError('router unreachable')
+        monkeypatch.setattr(scheduler, '_ensure_adapter', _fail)
+
+        await scheduler._handle_arp_new_ip({'type': 'ARP_NEW_IP', 'ip': '10.100.102.9', 'mac': 'aa:bb:cc:dd:ee:01'})
+
+
+class TestOnArpAlertDispatch:
+    """_on_arp_alert is ArpWatcher's sync callback (invoked from its own
+    daemon thread) — this pins down that it routes each event type to the
+    right coroutine rather than treating every ArpWatcher event as a
+    potential security finding."""
+
+    def test_new_ip_event_dispatches_to_handle_arp_new_ip_not_persist_arp_alert(self, monkeypatch):
+        scheduler = object.__new__(SentinelScheduler)
+        scheduler._loop = Mock()
+        calls = []
+        monkeypatch.setattr(scheduler, '_handle_arp_new_ip', lambda event: calls.append(('new_ip', event)))
+        monkeypatch.setattr(scheduler, '_persist_arp_alert', lambda event: calls.append(('spoof', event)))
+        monkeypatch.setattr('asyncio.run_coroutine_threadsafe', lambda coro, loop: coro)
+
+        scheduler._on_arp_alert({'type': 'ARP_NEW_IP', 'ip': '10.100.102.9', 'mac': 'aa:bb:cc:dd:ee:01'})
+
+        assert calls[0][0] == 'new_ip'
+
+    def test_spoof_event_dispatches_to_persist_arp_alert(self, monkeypatch):
+        scheduler = object.__new__(SentinelScheduler)
+        scheduler._loop = Mock()
+        calls = []
+        monkeypatch.setattr(scheduler, '_handle_arp_new_ip', lambda event: calls.append(('new_ip', event)))
+        monkeypatch.setattr(scheduler, '_persist_arp_alert', lambda event: calls.append(('spoof', event)))
+        monkeypatch.setattr('asyncio.run_coroutine_threadsafe', lambda coro, loop: coro)
+
+        scheduler._on_arp_alert({'type': 'ARP_SPOOF', 'ip': '10.100.102.9', 'new_mac': 'aa:bb:cc:dd:ee:01'})
+
+        assert calls[0][0] == 'spoof'
+
+    def test_no_loop_is_a_no_op(self):
+        """Scheduler not fully started yet — must not raise."""
+        scheduler = object.__new__(SentinelScheduler)
+        scheduler._loop = None
+        scheduler._on_arp_alert({'type': 'ARP_NEW_IP', 'ip': '10.100.102.9', 'mac': 'aa:bb:cc:dd:ee:01'})  # must not raise

@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
@@ -23,6 +24,20 @@ from .xmo_client import XmoClient
 logger = logging.getLogger(__name__)
 
 _PORT_ALIASES = ['PHY1', 'PHY2', 'PHY3', 'PHY4', 'PHY5']
+
+# How long get_connected_devices() serves its cached result before hitting
+# the router again — see that method's docstring. Requested explicitly:
+# the connected-devices fetch (Device/Hosts + WiFi AssociatedDevices) was
+# being repeated every single 15s poll cycle purely to feed things that
+# don't actually change that fast (device directory, online/offline
+# status), same complaint as the ARP/DHCP reconciliation cadence fix.
+# invalidate_connected_devices_cache() lets a caller force a fresh fetch
+# sooner — SentinelScheduler does this the moment ArpWatcher observes a
+# MAC/IP pairing it's never seen before, so a genuinely new device still
+# shows up within one ~15s poll cycle instead of waiting out the full
+# window; there's no equivalent passive signal for a device *leaving*, so
+# a disconnect is only ever noticed on the next natural cache refresh.
+_CONNECTED_DEVICES_CACHE_TTL_S = 300
 
 # WiFi access point aliases (2.4GHz/5GHz main, 2.4GHz/5GHz guest, mesh backhaul)
 # confirmed live via Device/WiFi/AccessPoints/AccessPoint[@uid=N]/Alias — this
@@ -93,16 +108,49 @@ class SagemcomXmoAdapter(RouterAdapter):
         self._poll_interval_s = poll_interval_s
         # Logged once, not every poll — see get_wan_stats().
         self._wan_stats_warned = False
+        # time.monotonic(), not a device list — None means "no cache yet,
+        # fetch for real". See get_connected_devices()/
+        # invalidate_connected_devices_cache().
+        self._connected_devices_cache: List[DeviceSnapshot] | None = None
+        self._connected_devices_cached_at: float | None = None
 
     # ──────────────────────────────────────────────────────────────────────────
     # RouterAdapter interface
     # ──────────────────────────────────────────────────────────────────────────
 
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
-        """Return all currently connected LAN devices."""
+        """Return all currently connected LAN devices.
+
+        Cached for _CONNECTED_DEVICES_CACHE_TTL_S (see that constant's
+        comment) — callers wanting a guaranteed-fresh read (e.g. right
+        after a manual block/unblock) should call
+        invalidate_connected_devices_cache() first, not assume this always
+        hits the router. get_traffic_samples() is unaffected — it reads
+        Hosts/AssociatedDevices independently and isn't cached, since
+        per-poll traffic freshness is still wanted every cycle.
+        """
+        now = time.monotonic()
+        if (
+            self._connected_devices_cache is not None
+            and self._connected_devices_cached_at is not None
+            and now - self._connected_devices_cached_at < _CONNECTED_DEVICES_CACHE_TTL_S
+        ):
+            return self._connected_devices_cache
+
         hosts = await self._get_hosts()
         associated = await self._get_associated_devices()
-        return [self._to_device_snapshot(h, associated) for h in hosts if isinstance(h, dict)]
+        devices = [self._to_device_snapshot(h, associated) for h in hosts if isinstance(h, dict)]
+        self._connected_devices_cache = devices
+        self._connected_devices_cached_at = now
+        return devices
+
+    def invalidate_connected_devices_cache(self) -> None:
+        """Force the next get_connected_devices() call to hit the router
+        again instead of serving the cache. Sync and cheap (clears one
+        timestamp) — safe to call from anywhere, including ArpWatcher's own
+        callback thread by way of the scheduler's existing thread-safe
+        bridge (see SentinelScheduler._handle_arp_new_ip)."""
+        self._connected_devices_cached_at = None
 
     async def get_traffic_samples(self) -> List[TrafficSample]:
         """Return per-device (WiFi) and per-port (wired) traffic deltas.

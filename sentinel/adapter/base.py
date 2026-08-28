@@ -13,7 +13,17 @@ class RouterAdapter(ABC):
 
     @abstractmethod
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
-        """Return all currently connected LAN devices."""
+        """Return all currently connected LAN devices. Implementations may
+        cache this (see SagemcomXmoAdapter) — callers wanting a guaranteed-
+        fresh read must call invalidate_connected_devices_cache() first."""
+
+    @abstractmethod
+    def invalidate_connected_devices_cache(self) -> None:
+        """Force the next get_connected_devices() call to bypass any cache
+        and hit the router again. A no-op for implementations that don't
+        cache (e.g. MockSagemcomAdapter) — still required on every adapter
+        so callers (SentinelScheduler) never need to know which kind of
+        adapter they're holding."""
 
     @abstractmethod
     async def get_traffic_samples(self) -> List[TrafficSample]:
