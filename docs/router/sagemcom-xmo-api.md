@@ -161,6 +161,14 @@ Port status as of last observation:
 
 Sub-path pattern: `Device/Ethernet/Interfaces/Interface[Alias="PHY{N}"]/{sub-path}`
 
+Each `Interface` also carries `IfcName` — the underlying kernel interface
+(`PHY1` → `eth3`, confirmed live 2026-08-28) — which is what the router's
+own admin UI's Device Info → Statistics page displays instead of the
+`PHY{N}` alias. **Same data, different label, not a second source**: that
+page's `eth0`–`eth3`/`wl0`/`wl1` byte counters are this same `Stats`
+subtree, nothing new — ruled out as a route to finer wired-traffic
+granularity than what's already documented above.
+
 | Sub-path | Status | Data |
 |----------|--------|------|
 | `Enable` | ✅ | Boolean |
