@@ -1158,3 +1158,141 @@ class TestUnquarantineDevice:
         })
         adapter._client.delete_object = AsyncMock(return_value=_err_reply())
         assert await adapter.unquarantine_device(mac) is False
+
+
+def _dhcp_pools_response(pools: list) -> dict:
+    """Matches get_dhcp_leases()'s expected shape — Device/DHCPv4/Server/Pools
+    auto-peels to a bare list, same pattern as Device/WiFi/SSIDs, confirmed
+    live 2026-08-28 (see docs/router/sagemcom-xmo-api.md)."""
+    return {
+        'reply': {'actions': [{
+            'id': 0,
+            'callbacks': [{
+                'xpath': 'Device/DHCPv4/Server/Pools',
+                'parameters': {'value': {'Pools': pools}},
+            }],
+        }]},
+    }
+
+
+def _dhcp_client(
+    mac='00:E0:4C:68:04:8C', ip='10.100.102.2', active=True,
+    hostname_hex='4d49424f5834', lease_remaining='1-01-02T02:00:49Z',
+) -> dict:
+    """A Pools[].Clients[] entry — field names/shape confirmed live against
+    a real Sagemcom F@st 5670 (hostname_hex='4d49424f5834' decodes to
+    'MIBOX4', the same device seen live)."""
+    options = [{'uid': 1, 'Tag': 12, 'Value': hostname_hex}] if hostname_hex else []
+    return {
+        'uid': 1,
+        'Alias': 'cpe-1',
+        'Chaddr': mac,
+        'Active': active,
+        'IPv4Addresses': [{'uid': 1, 'IPAddress': ip, 'LeaseTimeRemaining': lease_remaining}],
+        'Options': options,
+    }
+
+
+@pytest.mark.asyncio
+class TestGetDhcpLeases:
+    async def test_returns_active_lease_with_decoded_hostname(self, adapter):
+        pool = {'uid': 1, 'Alias': 'DEFAULT_POOL', 'Clients': [_dhcp_client()]}
+        adapter._client.get_value = AsyncMock(return_value=_dhcp_pools_response([pool]))
+
+        leases = await adapter.get_dhcp_leases()
+
+        assert len(leases) == 1
+        lease = leases[0]
+        assert lease.mac_address == '00:e0:4c:68:04:8c'  # normalized from the router's uppercase
+        assert lease.ip_address == '10.100.102.2'
+        assert lease.hostname == 'MIBOX4'
+        assert lease.lease_expires_at is not None
+
+    async def test_excludes_inactive_clients(self, adapter):
+        pool = {'uid': 1, 'Alias': 'DEFAULT_POOL', 'Clients': [_dhcp_client(active=False, ip='')]}
+        adapter._client.get_value = AsyncMock(return_value=_dhcp_pools_response([pool]))
+
+        assert await adapter.get_dhcp_leases() == []
+
+    async def test_excludes_active_client_with_no_ip(self, adapter):
+        """A client can carry Active=true with an empty IPAddress in the
+        instant a lease is being renegotiated — confirmed live this
+        firmware allows the combination, so it's filtered defensively
+        rather than assumed impossible."""
+        pool = {'uid': 1, 'Alias': 'DEFAULT_POOL', 'Clients': [_dhcp_client(ip='')]}
+        adapter._client.get_value = AsyncMock(return_value=_dhcp_pools_response([pool]))
+
+        assert await adapter.get_dhcp_leases() == []
+
+    async def test_missing_hostname_option_yields_empty_string(self, adapter):
+        pool = {'uid': 1, 'Alias': 'DEFAULT_POOL', 'Clients': [_dhcp_client(hostname_hex=None)]}
+        adapter._client.get_value = AsyncMock(return_value=_dhcp_pools_response([pool]))
+
+        leases = await adapter.get_dhcp_leases()
+        assert leases[0].hostname == ''
+
+    async def test_merges_clients_across_multiple_pools(self, adapter):
+        pool_a = {
+            'uid': 1, 'Alias': 'DEFAULT_POOL',
+            'Clients': [_dhcp_client(mac='AA:BB:CC:DD:EE:01', ip='10.100.102.5')],
+        }
+        pool_b = {
+            'uid': 2, 'Alias': 'GUEST_POOL',
+            'Clients': [_dhcp_client(mac='AA:BB:CC:DD:EE:02', ip='10.100.102.6')],
+        }
+        adapter._client.get_value = AsyncMock(return_value=_dhcp_pools_response([pool_a, pool_b]))
+
+        leases = await adapter.get_dhcp_leases()
+        assert {lease.mac_address for lease in leases} == {'aa:bb:cc:dd:ee:01', 'aa:bb:cc:dd:ee:02'}
+
+    async def test_returns_empty_list_when_xpath_does_not_resolve(self, adapter):
+        adapter._client.get_value = AsyncMock(return_value={'reply': {'actions': []}})
+        assert await adapter.get_dhcp_leases() == []
+
+
+class TestParseLeaseTimeRemaining:
+    """_parse_lease_time_remaining is explicitly best-effort/approximate —
+    see its docstring — these just pin down the defensive edges, not exact
+    output values."""
+
+    def test_valid_duration_string_parses_to_a_future_datetime(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_lease_time_remaining
+        result = _parse_lease_time_remaining('1-01-02T02:00:49Z')
+        assert result is not None
+        assert result > datetime.now(timezone.utc)
+
+    def test_empty_string_returns_none(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_lease_time_remaining
+        assert _parse_lease_time_remaining('') is None
+
+    def test_garbage_returns_none_rather_than_raising(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_lease_time_remaining
+        assert _parse_lease_time_remaining('not-a-date') is None
+
+    def test_zero_duration_sentinel_returns_none(self):
+        """The inactive-client sentinel this firmware uses — get_dhcp_leases()
+        already filters these out before they'd reach here, but the helper
+        itself should still treat a non-positive duration as 'no lease'."""
+        from sentinel.adapter.sagemcom.xmo_adapter import _parse_lease_time_remaining
+        assert _parse_lease_time_remaining('1-01-01T00:00:00Z') is None
+
+
+class TestDecodeDhcpOption12Hostname:
+    def test_decodes_hex_encoded_ascii(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _decode_dhcp_option12_hostname
+        options = [{'uid': 1, 'Tag': 12, 'Value': '4d49424f5834'}]
+        assert _decode_dhcp_option12_hostname(options) == 'MIBOX4'
+
+    def test_no_tag_12_returns_empty_string(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _decode_dhcp_option12_hostname
+        options = [{'uid': 1, 'Tag': 53, 'Value': '03'}]
+        assert _decode_dhcp_option12_hostname(options) == ''
+
+    def test_none_options_returns_empty_string(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _decode_dhcp_option12_hostname
+        assert _decode_dhcp_option12_hostname(None) == ''
+
+    def test_malformed_hex_returns_empty_string_rather_than_raising(self):
+        from sentinel.adapter.sagemcom.xmo_adapter import _decode_dhcp_option12_hostname
+        options = [{'uid': 1, 'Tag': 12, 'Value': 'not-hex'}]
+        assert _decode_dhcp_option12_hostname(options) == ''

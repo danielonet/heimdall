@@ -489,12 +489,43 @@ class SentinelScheduler:
                 adapter, self._redis_client, self._pipeline, self._anomaly_engine, self._rule_engine,
                 self._wan_bandwidth_detector,
             )
+            await self._reconcile_arp_table(adapter)
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
             self._last_poll_duration_s = time.monotonic() - start
         except Exception as exc:
             logger.exception('Poll cycle failed')
             self._last_poll_error = str(exc)
+
+    async def _reconcile_arp_table(self, adapter: RouterAdapter) -> None:
+        """Re-seed ArpWatcher's IP->MAC table from the router's live DHCP
+        leases every poll cycle — not just once at startup (_startup_job
+        does the same overlay, see its comment for the full rationale).
+
+        A device's DHCP lease can move it to a new IP at any point during a
+        long uptime, not just around a restart; without this, that
+        perfectly ordinary reassignment sits as drift between our cache and
+        reality until ArpWatcher's next live observation of that IP
+        disagrees with its own (by-then-stale) table entry — indistinguishable,
+        from inside ArpWatcher, from an actual spoofing attempt. seed()
+        silently overwrites rather than going through _process()'s
+        spoof-comparison logic, which is exactly what's wanted here: a
+        DHCP-confirmed reassignment is legitimate by definition, so
+        reconciling ahead of the next packet means there's nothing left to
+        misdiagnose. Never raises — a DHCP-leases fetch failing this cycle
+        just means reconciliation waits for the next one, same as any other
+        best-effort poll-cycle side task.
+        """
+        if not self._arp_watcher.is_active:
+            return
+        try:
+            leases = await adapter.get_dhcp_leases()
+        except Exception:
+            logger.debug('ARP-table reconciliation: could not fetch DHCP leases this cycle', exc_info=True)
+            return
+        pairs = [(lease.ip_address, lease.mac_address) for lease in leases if lease.ip_address]
+        if pairs:
+            self._arp_watcher.seed(pairs)
 
     async def _startup_job(self) -> None:
         """Runs once at boot: seed + start the packet-sniffing watchers, and
@@ -504,6 +535,31 @@ class SentinelScheduler:
             async with get_session() as session:
                 result = await session.execute(select(Device.ip_address, Device.mac_address))
                 pairs = [(ip, mac) for ip, mac in result.all() if ip]
+            # Then overlay with the router's own live DHCP leases, if
+            # reachable — confirmed live 2026-08-28 that `devices.ip_address`
+            # can drift stale between polls (a device's DHCP lease moves it
+            # to a new IP; our own record doesn't always catch up in time),
+            # and ArpWatcher seeding from that stale pairing is exactly what
+            # turned a routine DHCP reassignment into a false ARP_SPOOF
+            # finding + auto-block right after a restart. seed() lets later
+            # entries in the list win per-IP, so appending lease pairs after
+            # the DB ones means the router's fresher truth overrides our own
+            # cache wherever the two disagree, while devices only known via
+            # the DB (leases call failed, or a statically-addressed device
+            # DHCP never sees) still get seeded from what we do have. See
+            # DhcpLease's docstring and _reconcile_arp_table, which repeats
+            # this same overlay every poll cycle so drift during a long
+            # uptime — not just at startup — self-heals too.
+            try:
+                adapter = await self._ensure_adapter()
+                leases = await adapter.get_dhcp_leases()
+                pairs += [(lease.ip_address, lease.mac_address) for lease in leases]
+            except Exception:
+                logger.warning(
+                    'Could not fetch DHCP leases for ARP-watcher seeding — '
+                    "falling back to the devices table's last-known pairings",
+                    exc_info=True,
+                )
             self._arp_watcher.seed(pairs)
             self._arp_watcher.start()
             self._fingerprinter.start()

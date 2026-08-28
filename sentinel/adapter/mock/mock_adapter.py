@@ -14,6 +14,7 @@ from typing import List, Optional
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import (
     DeviceSnapshot,
+    DhcpLease,
     PortStats,
     RouterInfo,
     TrafficGranularity,
@@ -206,6 +207,22 @@ class MockSagemcomAdapter(RouterAdapter):
             throughput_up_kbps=sent_delta * 8 // 1024 // poll_interval_s,
             throughput_dn_kbps=recv_delta * 8 // 1024 // poll_interval_s,
         )
+
+    async def get_dhcp_leases(self) -> List[DhcpLease]:
+        """Synthetic leases mirroring the mock device list, each with a
+        fresh ~24h expiry — good enough to exercise ArpWatcher reconciliation
+        in tests without a real router (see DhcpLease's docstring)."""
+        from datetime import timedelta
+        return [
+            DhcpLease(
+                mac_address=d.mac_address,
+                ip_address=d.ip_address,
+                hostname=d.hostname,
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+            for d in self._devices
+            if d.is_online and d.mac_address not in self._blocked_macs
+        ]
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helper methods

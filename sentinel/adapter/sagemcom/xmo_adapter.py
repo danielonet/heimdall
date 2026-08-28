@@ -7,6 +7,7 @@ from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip
 from sentinel.adapter.models import (
     DeviceSnapshot,
+    DhcpLease,
     PortStats,
     RouterInfo,
     TrafficGranularity,
@@ -578,6 +579,49 @@ class SagemcomXmoAdapter(RouterAdapter):
             throughput_dn_kbps=sample.throughput_dn_kbps,
         )
 
+    async def get_dhcp_leases(self) -> List[DhcpLease]:
+        """Every currently-active DHCP lease, straight from the router's own
+        DHCP server — the authoritative MAC<->IP source (see DhcpLease's
+        docstring for why this exists).
+
+        Confirmed live: `Device/DHCPv4/Server/Pools` (**not**
+        `.../Pool/Client` as an earlier pass at this doc guessed and marked
+        ✅ off — that xpath is XMO_UNKNOWN_PATH_ERR on this firmware,
+        confirmed live 2026-08-28) returns a bare list of pool objects, each
+        with a nested `Clients` list. A client that's exhausted its lease
+        keeps its Clients entry (Active=false, IPv4Addresses[0].IPAddress
+        empty) rather than disappearing — filtered out here, along with any
+        entry missing a MAC. Iterates every pool (this router has exactly
+        one, DEFAULT_POOL, but nothing stops a future firmware/config from
+        having more, e.g. a separate guest pool) and merges by MAC.
+        """
+        resp = await self._client.get_value('Device/DHCPv4/Server/Pools')
+        pools = self._client._extract_result(resp, 0) or []
+        if isinstance(pools, dict):
+            pools = [pools]
+
+        leases: List[DhcpLease] = []
+        for pool in pools:
+            if not isinstance(pool, dict):
+                continue
+            for client in pool.get('Clients', []) or []:
+                if not isinstance(client, dict) or not _is_active(client):
+                    continue
+                mac = _norm_mac(client.get('Chaddr', ''))
+                addrs = client.get('IPv4Addresses') or []
+                ip = _str_field(addrs[0], 'IPAddress') if addrs else ''
+                if not mac or not ip:
+                    continue
+                leases.append(DhcpLease(
+                    mac_address=mac,
+                    ip_address=ip,
+                    hostname=_decode_dhcp_option12_hostname(client.get('Options')),
+                    lease_expires_at=_parse_lease_time_remaining(
+                        _str_field(addrs[0], 'LeaseTimeRemaining') if addrs else ''
+                    ),
+                ))
+        return leases
+
     def _to_wifi_radio_info(self, radio: dict) -> WifiRadioInfo:
         """Field names confirmed live against a real Sagemcom F@st 5670
         (Channel/TransmitPower/OperatingStandards all present as named).
@@ -806,6 +850,57 @@ class SagemcomXmoAdapter(RouterAdapter):
 def _norm_mac(mac: str) -> str:
     """Normalise a MAC address to lowercase colon-separated format."""
     return mac.lower().strip()
+
+
+def _decode_dhcp_option12_hostname(options: Any) -> str:
+    """DHCP option 12 (Host Name) as the client itself sent it — this
+    firmware's Pools[].Clients[].Options entries carry it hex-encoded, e.g.
+    'MIBOX4' as Value='4d49424f5834'. Confirmed live 2026-08-28 against
+    Device/DHCPv4/Server/Pools. Not every client sends one; '' if absent or
+    undecodable rather than raising — this is cosmetic, never worth failing
+    the whole leases call over one malformed option."""
+    if not isinstance(options, list):
+        return ''
+    for opt in options:
+        if isinstance(opt, dict) and opt.get('Tag') == 12:
+            try:
+                return bytes.fromhex(str(opt.get('Value', ''))).decode('ascii', errors='replace')
+            except ValueError:
+                return ''
+    return ''
+
+
+def _parse_lease_time_remaining(raw: str) -> Optional[datetime]:
+    """Best-effort parse of Clients[].IPv4Addresses[].LeaseTimeRemaining.
+
+    NOT fully reverse-engineered — flagged here rather than asserted with
+    false confidence. Confirmed live values look like a *duration*
+    (e.g. a lease from an 86400s/24h pool reading '1-01-02T02:00:49Z')
+    mis-serialized as an absolute dateTime measured from a 0001-01-01
+    epoch, a known TR-181 firmware quirk — but the parsed duration for a
+    freshly-renewed lease came out to ~26h against a 24h pool LeaseTime,
+    which doesn't cleanly fit "seconds remaining" either. Parsed
+    defensively and returned as an approximate expiry (now + duration)
+    for informational display only — nothing here depends on it being
+    exact to the second. Returns None on any parse failure or an empty
+    string (e.g. the inactive-client sentinel '1-01-01T02:00:00Z' some
+    entries carry, or a genuinely absent value).
+    """
+    if not raw:
+        return None
+    # strptime's %Y wants 4 digits and this firmware's "year" is 1 — split
+    # by hand instead of fighting the format string over it.
+    match = re.match(r'^(\d+)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$', raw)
+    if not match:
+        return None
+    try:
+        year, month, day, hour, minute, second = (int(g) for g in match.groups())
+        duration = datetime(year, month, day, hour, minute, second) - datetime(1, 1, 1)
+        if duration.total_seconds() <= 0:
+            return None
+        return datetime.now(timezone.utc) + duration
+    except (ValueError, OverflowError):
+        return None
 
 
 def _is_active(host: dict) -> bool:

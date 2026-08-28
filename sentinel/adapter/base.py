@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from .models import DeviceSnapshot, PortStats, RouterInfo, TrafficSample, WanStats
+from .models import DeviceSnapshot, DhcpLease, PortStats, RouterInfo, TrafficSample, WanStats
 
 
 class RouterAdapter(ABC):
@@ -66,3 +66,12 @@ class RouterAdapter(ABC):
         xpath that doesn't resolve on this firmware — see
         SagemcomXmoAdapter.get_wan_stats). Callers must treat None as
         "nothing to persist this poll", not an error."""
+
+    @abstractmethod
+    async def get_dhcp_leases(self) -> List[DhcpLease]:
+        """Return every currently-active DHCP lease from the router's own
+        DHCP server — the authoritative MAC<->IP source, independent of
+        whatever Heimdall's own device registry has cached. Only leases with
+        Active=true and a non-empty IP are included (a client that's
+        exhausted its lease still keeps a Clients entry on this firmware,
+        just with an empty address — see SagemcomXmoAdapter.get_dhcp_leases)."""

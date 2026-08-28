@@ -120,3 +120,24 @@ class WanStats:
     bytes_recv_delta: int = 0
     throughput_up_kbps: int = 0
     throughput_dn_kbps: int = 0
+
+
+@dataclass
+class DhcpLease:
+    """One currently-active DHCP lease, straight from the router's own DHCP
+    server — Device/DHCPv4/Server/Pools[*].Clients[*] on the Sagemcom
+    firmware (see docs/router/sagemcom-xmo-api.md's DHCP Leases section).
+
+    This is the router's own authoritative, always-fresh MAC<->IP truth —
+    distinct from (and more current than) whatever Heimdall's own `devices`
+    table happens to have cached from the last poll. Introduced specifically
+    so ArpWatcher can be seeded/reconciled from live reality instead of a
+    potentially-stale DB snapshot, which is what let a routine DHCP
+    reassignment get misread as ARP spoofing (see
+    SentinelScheduler._startup_job / _reconcile_arp_table).
+    """
+
+    mac_address: str
+    ip_address: str
+    hostname: str = ''             # decoded from DHCP option 12 if the client sent one, else ''
+    lease_expires_at: Optional[datetime] = None  # best-effort — see get_dhcp_leases()'s parsing note
