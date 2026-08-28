@@ -9,6 +9,7 @@ kwargs (poll interval, ML config, cron strings, ...) would just be noise here.
 """
 import os
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -16,6 +17,7 @@ from flask import Flask
 from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
+from sentinel.adapter.models import DhcpLease
 from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, Device, TrustedMac
 from sentinel.db.repositories import SettingsRepository, TrustedMacRepository
@@ -57,10 +59,20 @@ async def _init_db():
 
 @pytest.fixture
 def scheduler():
-    """A scheduler with only self._adapter populated — see module docstring."""
+    """A scheduler with only self._adapter populated — see module docstring.
+
+    _arp_verify_max_attempts=1 / _arp_verify_retry_interval_s=0: every
+    TestPersistArpAlert case below is testing what happens once ARP-DHCP
+    verification comes back unresolved (MockSagemcomAdapter's synthetic
+    leases never match these tests' MACs/IPs, so it always does) — none of
+    them need or want to sit through the real ~45s retry budget
+    (_verify_arp_change_against_dhcp) to get there.
+    """
     sched = object.__new__(SentinelScheduler)
     sched._adapter = MockSagemcomAdapter()
     sched._ip_conflict_quiet_until = {}
+    sched._arp_verify_max_attempts = 1
+    sched._arp_verify_retry_interval_s = 0
     return sched
 
 
@@ -359,6 +371,33 @@ class TestPersistArpAlert:
         assert alert.device_mac == _MAC
         device = await _get_device()
         assert device.is_blocked is True
+
+    async def test_dhcp_confirmed_reassignment_is_never_blocked_and_raises_no_alert(self, scheduler):
+        """The adaptive-cadence fix: an untrusted MAC change that the
+        router's own live DHCP leases confirm is a legitimate reassignment
+        must not be treated as spoofing at all — no ARP_SPOOF, no block,
+        not even the softer IP_CONFLICT (unlike the trusted-MAC path below,
+        this MAC was never trusted; DHCP itself is the authority here, not
+        Heimdall's trust registry). ArpWatcher's table gets corrected
+        instead, so a repeat of the same, now-known-good pairing doesn't
+        re-trigger this at all next time."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        scheduler._adapter.get_dhcp_leases = AsyncMock(
+            return_value=[DhcpLease(mac_address=_MAC, ip_address=_IP, hostname='confirmed-by-dhcp')]
+        )
+        scheduler._arp_watcher = Mock()
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        device = await _get_device()
+        assert device.is_blocked is False
+        assert await _latest_alert() is None
+        scheduler._arp_watcher.seed.assert_called_once_with([(_IP, _MAC)])
 
     async def test_trusted_new_mac_is_never_blocked_and_downgrades_to_ip_conflict_info(self, scheduler):
         """Regression coverage for a real incident: ArpWatcher can't tell an

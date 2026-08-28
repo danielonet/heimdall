@@ -167,7 +167,7 @@ regardless of which watcher produced the finding:
 
 | Watcher / source | File | Job / method | Alert type | Severity |
 |---|---|---|---|---|
-| `ArpWatcher` | `sentinel/security/arp_watch.py` | `_persist_arp_alert` | `ARP_SPOOF` (untrusted MAC) / `IP_CONFLICT` (INFO — the new MAC is already trusted, more likely two devices sharing a static IP than an attack) | CRITICAL / INFO |
+| `ArpWatcher` | `sentinel/security/arp_watch.py` | `_persist_arp_alert` | `ARP_SPOOF` (untrusted MAC, and the router's own live DHCP leases don't confirm the reassignment either — see `_verify_arp_change_against_dhcp`) / `IP_CONFLICT` (INFO — the new MAC is already trusted, more likely two devices sharing a static IP than an attack) / no alert at all (untrusted MAC, but a live DHCP-leases re-poll confirms it's a legitimate reassignment) | CRITICAL / INFO / — |
 | `DhcpWatcher` | `sentinel/security/dhcp_watch.py` | `_persist_dhcp_alert` | `ROGUE_DHCP_SERVER` | CRITICAL |
 | `PassiveFingerprinter` | `sentinel/security/fingerprint.py` | `_persist_fingerprint` | `FINGERPRINT_MISMATCH` | CRITICAL |
 | `NetworkScanner` (nmap) | `sentinel/security/scanner.py` | `_nmap_scan_job` | `HIGH_RISK_PORT_OPENED`, `OS_FINGERPRINT_CONFLICT`, `VULNERABILITY_DETECTED`, `CREDENTIAL_EXPOSURE_DETECTED` | CRITICAL / WARNING / CRITICAL / CRITICAL |

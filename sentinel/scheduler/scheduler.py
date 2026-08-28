@@ -122,6 +122,29 @@ DEFAULT_ADAPTER_CALL_TIMEOUT_S = 10.0
 # and would otherwise re-fire on every single flip.
 IP_CONFLICT_QUIET_MINUTES = 30
 
+# Baseline cadence for _reconcile_arp_table's DHCP-lease re-seed (see its
+# docstring) — deliberately much slower than the 15s poll cycle it's called
+# from. Reconciling this often was itself the complaint: a DHCP-leases
+# fetch every single poll cycle, forever, just to catch drift that in
+# practice moves far slower than that. 5 minutes is generous headroom
+# before a stale pairing could plausibly cause a false positive, without
+# hammering the router on every tick.
+ARP_DHCP_RECONCILE_INTERVAL_S = 300
+
+# _verify_arp_change_against_dhcp's retry budget for an in-the-moment
+# suspected spoof — this is the "actively poll" half of the same request:
+# when ArpWatcher actually reports a live mismatch, don't wait for the next
+# 5-minute reconciliation and don't trust a single DHCP snapshot either
+# (the router's own DHCP exchange for a fresh reassignment needs a moment
+# to settle) — poll fast, a few times, and only fall through to
+# ARP_SPOOF/auto-block if the router's own lease data still hasn't
+# confirmed the new pairing by the last attempt. 4 attempts x 15s = up to
+# 45s of added latency before a genuine attack gets blocked — a deliberate
+# tradeoff (verify-before-block) traded for not auto-blocking every
+# ordinary DHCP reassignment.
+ARP_VERIFICATION_MAX_ATTEMPTS = 4
+ARP_VERIFICATION_RETRY_INTERVAL_S = 15
+
 
 class SentinelScheduler:
     """Runs poll_cycle() on an interval, on its own background event loop/thread."""
@@ -242,6 +265,16 @@ class SentinelScheduler:
         self._last_poll_duration_s: float | None = None
         self._last_nmap_scan_at: datetime | None = None
         self._last_canary_check_at: datetime | None = None
+        # time.monotonic(), not a wall-clock timestamp — see
+        # _reconcile_arp_table, which is called every 15s poll cycle but
+        # only actually does anything once ARP_DHCP_RECONCILE_INTERVAL_S has
+        # elapsed. Instance attributes (not bare module constants) purely so
+        # tests can override the cadence/retry budget without a real sleep —
+        # see tests/test_scheduler/test_threat_auto_block.py's scheduler()
+        # fixture.
+        self._last_arp_reconcile_at: float | None = None
+        self._arp_verify_max_attempts = ARP_VERIFICATION_MAX_ATTEMPTS
+        self._arp_verify_retry_interval_s = ARP_VERIFICATION_RETRY_INTERVAL_S
         self._last_zeek_dns_check_at: datetime | None = None
         self._last_zeek_beacon_scan_at: datetime | None = None
         self._last_spike_ip_enrichment_at: datetime | None = None
@@ -499,8 +532,15 @@ class SentinelScheduler:
 
     async def _reconcile_arp_table(self, adapter: RouterAdapter) -> None:
         """Re-seed ArpWatcher's IP->MAC table from the router's live DHCP
-        leases every poll cycle — not just once at startup (_startup_job
-        does the same overlay, see its comment for the full rationale).
+        leases roughly every ARP_DHCP_RECONCILE_INTERVAL_S — called every
+        15s poll cycle (same as _startup_job's one-time version of this
+        overlay at boot, see its comment for the full rationale), but only
+        actually does anything once that interval has elapsed. A DHCP-lease
+        fetch on every single 15s tick, forever, just to catch drift that
+        moves far slower than that, was needless router chatter — the
+        in-the-moment case (ArpWatcher actually reporting a live mismatch)
+        is handled separately and faster by _verify_arp_change_against_dhcp,
+        which this cadence deliberately does *not* try to substitute for.
 
         A device's DHCP lease can move it to a new IP at any point during a
         long uptime, not just around a restart; without this, that
@@ -518,6 +558,13 @@ class SentinelScheduler:
         """
         if not self._arp_watcher.is_active:
             return
+        now = time.monotonic()
+        if (
+            self._last_arp_reconcile_at is not None
+            and now - self._last_arp_reconcile_at < ARP_DHCP_RECONCILE_INTERVAL_S
+        ):
+            return
+        self._last_arp_reconcile_at = now
         try:
             leases = await adapter.get_dhcp_leases()
         except Exception:
@@ -526,6 +573,42 @@ class SentinelScheduler:
         pairs = [(lease.ip_address, lease.mac_address) for lease in leases if lease.ip_address]
         if pairs:
             self._arp_watcher.seed(pairs)
+
+    async def _verify_arp_change_against_dhcp(self, ip: str, new_mac: str) -> bool:
+        """The "actively poll" half of the adaptive-cadence request: when
+        ArpWatcher reports a live IP->MAC mismatch, don't wait for the next
+        ARP_DHCP_RECONCILE_INTERVAL_S reconciliation and don't trust a
+        single DHCP snapshot either — a freshly-issued lease can take a
+        moment to show up. Polls the router's DHCP leases up to
+        self._arp_verify_max_attempts times, self._arp_verify_retry_interval_s
+        apart, and returns True the moment any attempt shows `new_mac` as
+        the current lease holder for `ip` — i.e. the router's own data
+        confirms this is a legitimate reassignment, not spoofing. Returns
+        False (unresolved) if every attempt disagrees or errors — the
+        caller treats that as "raise ARP_SPOOF/auto-block as before".
+        """
+        if not ip or not new_mac:
+            return False
+        try:
+            adapter = await self._ensure_adapter()
+        except Exception:
+            return False
+
+        for attempt in range(self._arp_verify_max_attempts):
+            try:
+                leases = await adapter.get_dhcp_leases()
+            except Exception:
+                logger.debug('ARP verification: DHCP-leases fetch failed (attempt %d)', attempt + 1, exc_info=True)
+                leases = []
+            if any(lease.ip_address == ip and lease.mac_address == new_mac for lease in leases):
+                logger.info(
+                    'ARP change for %s (-> %s) confirmed legitimate by a live DHCP lease '
+                    '(attempt %d) — not treating as spoofing', ip, new_mac, attempt + 1,
+                )
+                return True
+            if attempt < self._arp_verify_max_attempts - 1:
+                await asyncio.sleep(self._arp_verify_retry_interval_s)
+        return False
 
     async def _startup_job(self) -> None:
         """Runs once at boot: seed + start the packet-sniffing watchers, and
@@ -1401,6 +1484,22 @@ class SentinelScheduler:
         # treatment below, regardless of this IP's conflict history.
         if new_mac and await TrustedMacRepository().is_trusted(new_mac):
             await self._persist_ip_conflict_alert(event, new_mac)
+            return
+
+        # Before treating an untrusted MAC change as spoofing: actively
+        # re-poll the router's own DHCP leases (see
+        # _verify_arp_change_against_dhcp) to check whether this is actually
+        # just an ordinary DHCP reassignment the router already agrees
+        # with. Only escalate to a full ARP_SPOOF/auto-block if that
+        # doesn't resolve within its retry budget — this is what stops a
+        # routine lease handoff (e.g. a device reconnecting and getting a
+        # different MAC-to-IP pairing than our own cache expected) from
+        # being auto-blocked the moment ArpWatcher notices, while still
+        # blocking promptly once the router's own data fails to back up
+        # the new pairing.
+        if await self._verify_arp_change_against_dhcp(event.get('ip'), new_mac):
+            if new_mac:
+                self._arp_watcher.seed([(event['ip'], new_mac)])
             return
 
         await self._raise_threat_alert(
