@@ -5,6 +5,7 @@ self._identity_linker, self._liveness_probe, and the DB.
 """
 import os
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -13,6 +14,7 @@ from sqlalchemy import delete, select
 
 from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, Device
+from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.detection.device_identity import DeviceIdentityLinker
 from sentinel.scheduler.scheduler import SentinelScheduler
@@ -194,3 +196,62 @@ class TestIdentityLinkJob:
     async def test_no_groups_does_not_raise(self, scheduler):
         scheduler._liveness_probe = _FakeLivenessProbe(reachable=False)
         await scheduler._identity_link_job()  # must not raise
+
+
+class TestBlockPropagationOnLink:
+    """Confirmed real bypass, not theoretical: block_device() blacklists
+    old_mac's own Host entry — new_mac gets a fresh, unblocked one the
+    moment it appears, and DeviceRepository.link() only ever touches
+    linked_to_mac/linked_at/link_reason. Without this, blocking a device
+    and then having its MAC rotate (which _identity_link_job exists to
+    recognize) would silently un-block it in every way that matters."""
+
+    async def test_blocked_old_mac_propagates_the_block_to_the_new_mac(self, scheduler):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9', is_blocked=True)
+        await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10', is_blocked=False)
+        scheduler._liveness_probe = _FakeLivenessProbe(reachable={'10.0.0.9': False, '10.0.0.10': True})
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+        await SettingsRepository().set_auto_block_expiry_hours(0)
+
+        await scheduler._identity_link_job()
+
+        scheduler._adapter.block_device.assert_awaited_once_with(_MAC_B)
+        async with get_session() as session:
+            b = await session.get(Device, _MAC_B)
+        assert b.is_blocked is True
+        alert = await _open_alert(_MAC_B)
+        assert f'block propagated to {_MAC_B}' in alert.description
+
+    async def test_propagation_failure_is_never_silently_claimed_as_success(self, scheduler):
+        """Same 'AUTO-BLOCK FAILED' convention as _raise_threat_alert — a
+        linked device that's actually still unprotected must not read as
+        if nothing needs attention."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9', is_blocked=True)
+        await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10', is_blocked=False)
+        scheduler._liveness_probe = _FakeLivenessProbe(reachable={'10.0.0.9': False, '10.0.0.10': True})
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=False)  # router didn't confirm
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            b = await session.get(Device, _MAC_B)
+        assert b.is_blocked is False  # never claim success it can't back up
+        alert = await _open_alert(_MAC_B)
+        assert 'AUTO-BLOCK PROPAGATION' in alert.description
+        assert 'FAILED' in alert.description
+
+    async def test_unblocked_old_mac_does_not_touch_the_adapter_at_all(self, scheduler):
+        """The common case — most links have nothing to propagate."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9', is_blocked=False)
+        await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10', is_blocked=False)
+        scheduler._liveness_probe = _FakeLivenessProbe(reachable={'10.0.0.9': False, '10.0.0.10': True})
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+
+        await scheduler._identity_link_job()
+
+        scheduler._adapter.block_device.assert_not_awaited()
+        alert = await _open_alert(_MAC_B)
+        assert 'propagat' not in alert.description.lower()

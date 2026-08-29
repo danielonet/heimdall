@@ -782,6 +782,17 @@ class SagemcomXmoAdapter(RouterAdapter):
             # the client dict by _get_associated_devices(); blank for wired
             # devices, which have no AssociatedDevices entry at all.
             ap_alias=client.get('_ap_alias', '') if client else '',
+            # BlacklistStatus is read-only/computed (see docs/router/
+            # sagemcom-xmo-api.md's "Device blocking" section) — the
+            # router's own answer to "is this MAC actually blacklisted
+            # right now", independent of anything Heimdall remembers.
+            # Confirmed live 2026-08-30 accurately reads False for a
+            # genuinely-unblocked host; **not yet confirmed against a live
+            # blocked one** (didn't want to block a real device just to
+            # check) — if it later turns out BlacklistStatus lags/differs
+            # from the sibling `Blacklisted` field, revisit which one
+            # SentinelScheduler._reconcile_block_enforcement should trust.
+            is_blacklisted_at_router=bool(host.get('BlacklistStatus')),
         )
 
     async def _get_hosts(self) -> List[dict]:

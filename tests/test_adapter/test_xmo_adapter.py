@@ -670,6 +670,26 @@ class TestToDeviceSnapshotActive:
         assert snap.is_online is True
 
 
+class TestToDeviceSnapshotBlacklistStatus:
+    """Ground truth for SentinelScheduler._reconcile_block_enforcement —
+    see that method's docstring for why devices.is_blocked alone isn't
+    trustworthy."""
+
+    def test_blacklist_status_true(self, adapter):
+        snap = adapter._to_device_snapshot(_wifi_host(BlacklistStatus=True))
+        assert snap.is_blacklisted_at_router is True
+
+    def test_blacklist_status_false(self, adapter):
+        snap = adapter._to_device_snapshot(_wifi_host(BlacklistStatus=False))
+        assert snap.is_blacklisted_at_router is False
+
+    def test_missing_field_defaults_to_false(self, adapter):
+        host = _wifi_host()
+        host.pop('BlacklistStatus', None)
+        snap = adapter._to_device_snapshot(host)
+        assert snap.is_blacklisted_at_router is False
+
+
 class TestToDeviceSnapshotDefaults:
     def test_vendor_name_defaults_to_empty(self, adapter):
         snap = adapter._to_device_snapshot(_wifi_host())
@@ -686,6 +706,9 @@ class TestToDeviceSnapshotDefaults:
     def test_tags_defaults_to_empty_set(self, adapter):
         snap = adapter._to_device_snapshot(_wifi_host())
         assert snap.tags == set()
+
+    def test_is_blacklisted_at_router_defaults_to_false(self, adapter):
+        assert adapter._to_device_snapshot(_wifi_host()).is_blacklisted_at_router is False
 
     def test_real_device_snapshot(self, adapter):
         """Smoke test with actual device data from the network topology."""

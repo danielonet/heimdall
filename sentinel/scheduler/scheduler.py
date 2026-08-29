@@ -145,6 +145,15 @@ ARP_DHCP_RECONCILE_INTERVAL_S = 300
 ARP_VERIFICATION_MAX_ATTEMPTS = 4
 ARP_VERIFICATION_RETRY_INTERVAL_S = 15
 
+# Cadence for _reconcile_block_enforcement — see that method's docstring.
+# Piggybacks entirely on adapter.get_connected_devices()'s own 5-minute
+# cache (SagemcomXmoAdapter._CONNECTED_DEVICES_CACHE_TTL_S), so this rate
+# limit isn't there to protect the router (that call is usually already
+# free by the time this runs) — it's just to avoid re-running the DB scan
+# and comparison every single 15s poll cycle for a class of drift that
+# doesn't appear or disappear that fast.
+BLOCK_ENFORCEMENT_RECONCILE_INTERVAL_S = 300
+
 
 class SentinelScheduler:
     """Runs poll_cycle() on an interval, on its own background event loop/thread."""
@@ -275,6 +284,7 @@ class SentinelScheduler:
         self._last_arp_reconcile_at: float | None = None
         self._arp_verify_max_attempts = ARP_VERIFICATION_MAX_ATTEMPTS
         self._arp_verify_retry_interval_s = ARP_VERIFICATION_RETRY_INTERVAL_S
+        self._last_block_reconcile_at: float | None = None
         self._last_zeek_dns_check_at: datetime | None = None
         self._last_zeek_beacon_scan_at: datetime | None = None
         self._last_spike_ip_enrichment_at: datetime | None = None
@@ -523,6 +533,7 @@ class SentinelScheduler:
                 self._wan_bandwidth_detector,
             )
             await self._reconcile_arp_table(adapter)
+            await self._reconcile_block_enforcement(adapter)
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
             self._last_poll_duration_s = time.monotonic() - start
@@ -573,6 +584,121 @@ class SentinelScheduler:
         pairs = [(lease.ip_address, lease.mac_address) for lease in leases if lease.ip_address]
         if pairs:
             self._arp_watcher.seed(pairs)
+
+    async def _reconcile_block_enforcement(self, adapter: RouterAdapter) -> None:
+        """Compares devices.is_blocked against the router's own live
+        BlacklistStatus for every MAC it currently has a Host entry for, and
+        corrects any mismatch it finds. Rate-limited to
+        BLOCK_ENFORCEMENT_RECONCILE_INTERVAL_S the same way
+        _reconcile_arp_table is — see that constant's comment.
+
+        Why this exists: devices.is_blocked is Heimdall's own memory of
+        what it *asked* the router to do, not a live read of what the
+        router is *actually* enforcing right now. Those two can drift —
+        confirmed live 2026-08-30, and the specific gap this closes: a
+        blocked device's MAC rotates (see _identity_link_job), gets
+        recognized as the same device, and — before _propagate_block_
+        after_link existed — the new MAC would end up fully unblocked at
+        the router while the dashboard kept showing the old MAC as
+        blocked. This job is the general-purpose safety net for that
+        entire class of bug, not just the one instance already fixed
+        directly: any other cause of the same drift (a Host record that
+        lost its schedule, a block applied or cleared by hand at the
+        router's own admin UI) gets caught here too, without needing its
+        own dedicated fix.
+
+        get_connected_devices() is usually a cache hit by the time this
+        runs (see SagemcomXmoAdapter's 5-minute cache) — this adds no
+        router calls of its own in the common case. A MAC the router
+        currently has no Host entry for at all (e.g. it's been gone long
+        enough to age out) is skipped rather than treated as "confirmed
+        unblocked" — no live signal for it either way this cycle.
+        """
+        now = time.monotonic()
+        if (
+            self._last_block_reconcile_at is not None
+            and now - self._last_block_reconcile_at < BLOCK_ENFORCEMENT_RECONCILE_INTERVAL_S
+        ):
+            return
+        self._last_block_reconcile_at = now
+
+        try:
+            devices = await adapter.get_connected_devices()
+        except Exception:
+            logger.debug('Block-enforcement reconciliation: could not fetch device list this cycle', exc_info=True)
+            return
+        router_state = {d.mac_address: d.is_blacklisted_at_router for d in devices}
+        if not router_state:
+            return
+
+        async with get_session() as session:
+            db_state = (await session.execute(select(Device.mac_address, Device.is_blocked))).all()
+
+        for mac, db_blocked in db_state:
+            if mac not in router_state:
+                continue
+            router_blocked = router_state[mac]
+            if db_blocked != router_blocked:
+                await self._correct_block_drift(mac, db_blocked=db_blocked, router_blocked=router_blocked)
+
+    async def _correct_block_drift(self, mac: str, *, db_blocked: bool, router_blocked: bool) -> None:
+        """One MAC where devices.is_blocked disagrees with the router's own
+        live enforcement state — see _reconcile_block_enforcement. Raises a
+        BLOCK_ENFORCEMENT_DRIFT alert either way (via upsert, so repeated
+        drift on the same MAC touches one row instead of spamming), but the
+        two directions are handled asymmetrically on purpose:
+
+        DB says blocked, router disagrees: the more serious direction — a
+        device the admin believes is contained is actually free on the
+        network. Re-issues the block immediately, same "always re-issue,
+        never trust the cached flag" philosophy as _raise_threat_alert, and
+        never silently claims success if the router doesn't confirm it.
+
+        DB says NOT blocked, router says blocked: most likely a block
+        applied by hand via the router's own admin UI, outside Heimdall
+        entirely. Heimdall updates its own record to match reality rather
+        than calling unblock_device() to force the router back in line —
+        overriding a human's deliberate action taken outside this app
+        would be a worse outcome than a dashboard that was briefly out of
+        sync.
+        """
+        if db_blocked and not router_blocked:
+            try:
+                adapter = await self._ensure_adapter()
+                reblocked = await adapter.block_device(mac)
+            except Exception:
+                logger.exception('Block-enforcement reconciliation: failed to re-block %s', mac)
+                reblocked = False
+            if reblocked:
+                description = (
+                    f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
+                    f'blacklisted — re-applied the block.'
+                )
+                severity = 'WARNING'
+            else:
+                description = (
+                    f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
+                    f'blacklisted — AUTO-BLOCK RE-APPLICATION FAILED, device may be unprotected '
+                    f'(see backend logs).'
+                )
+                severity = 'CRITICAL'
+        else:
+            async with get_session() as session:
+                device = await session.get(Device, mac)
+                if device is not None:
+                    device.is_blocked = True
+            description = (
+                f'{mac} is blacklisted at the router but Heimdall had no record of blocking it — likely '
+                f'blocked manually via the router\'s own admin UI. Updated Heimdall\'s record to match.'
+            )
+            severity = 'INFO'
+
+        alert, is_new = await AlertRepository().upsert(
+            device_mac=mac, alert_type='BLOCK_ENFORCEMENT_DRIFT', severity=severity, description=description,
+            raw_data={'db_blocked': db_blocked, 'router_blocked': router_blocked},
+        )
+        if is_new:
+            emit_alert(alert_to_dict(alert))
 
     async def _verify_arp_change_against_dhcp(self, ip: str, new_mac: str) -> bool:
         """The "actively poll" half of the adaptive-cadence request: when
@@ -1004,6 +1130,21 @@ class SentinelScheduler:
                     await AlertRepository().resolve(device_mac=old_mac, alert_type='NEW_DEVICE')
 
                     description = f"{group['hostname']} ({old_mac}) linked to {new_mac} — {reason}"
+                    # Confirmed real bypass, not theoretical: block_device()
+                    # blacklists old_mac's own Host entry at the router —
+                    # new_mac gets a completely fresh, unblocked Host entry
+                    # the moment it appears, and link() above only ever
+                    # touches linked_to_mac/linked_at/link_reason. Without
+                    # this, blocking a device and then having its MAC
+                    # rotate (which this whole job exists to recognize)
+                    # would silently un-block it in every way that matters,
+                    # while the dashboard kept showing the old MAC as
+                    # blocked. `linked` is the refreshed old-mac row link()
+                    # returns, so linked.is_blocked reflects its state at
+                    # the moment of linking.
+                    if linked.is_blocked:
+                        description += await self._propagate_block_after_link(old_mac, new_mac)
+
                     async with get_session() as session:
                         alert = Alert(
                             device_mac=new_mac, alert_type='DEVICE_IDENTITY_LINKED', severity='INFO',
@@ -1014,6 +1155,39 @@ class SentinelScheduler:
                     emit_alert(alert_to_dict(alert))
         except Exception:
             logger.exception('Device identity-link scan failed')
+
+    async def _propagate_block_after_link(self, old_mac: str, new_mac: str) -> str:
+        """old_mac was blocked before being recognized as the same physical
+        device as new_mac — re-issue the block against new_mac's own Host
+        entry so it actually carries over (see _identity_link_job's comment
+        for why this doesn't happen automatically). Returns a suffix to
+        append to the DEVICE_IDENTITY_LINKED alert's description — never
+        silently claims success, same convention as _raise_threat_alert's
+        'AUTO-BLOCK FAILED' wording, since a linked device that's actually
+        still unprotected must not read as if nothing needs attention.
+        """
+        try:
+            adapter = await self._ensure_adapter()
+            blocked_now = await adapter.block_device(new_mac)
+        except Exception:
+            logger.exception('Failed to propagate block from %s to %s after identity link', old_mac, new_mac)
+            blocked_now = False
+
+        if not blocked_now:
+            return (
+                f' — {old_mac} was blocked; AUTO-BLOCK PROPAGATION TO {new_mac} FAILED, '
+                f'device may be unprotected (see backend logs)'
+            )
+
+        async with get_session() as session:
+            new_device = await session.get(Device, new_mac)
+            if new_device is not None:
+                new_device.is_blocked = True
+                expiry_hours = await SettingsRepository().get_auto_block_expiry_hours()
+                now = datetime.now(timezone.utc)
+                new_device.blocked_at = now
+                new_device.blocked_until = now + timedelta(hours=expiry_hours) if expiry_hours > 0 else None
+        return f' — {old_mac} was blocked; block propagated to {new_mac}'
 
     async def _stale_device_reap_job(self) -> None:
         """ARP-probes every device the DB currently believes is online and

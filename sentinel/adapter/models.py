@@ -30,6 +30,16 @@ class DeviceSnapshot:
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     tags: Set[str] = field(default_factory=set)
+    # The router's own, live, computed enforcement state for this MAC's Host
+    # entry (Blacklisted/BlacklistStatus — see SagemcomXmoAdapter.
+    # _to_device_snapshot) — independent of whatever devices.is_blocked
+    # happens to say. Ground truth for SentinelScheduler._reconcile_block_
+    # enforcement, which exists because a device's block can silently stop
+    # being enforced (e.g. its MAC rotates and a since-recognized identity
+    # link doesn't automatically carry the block to the new MAC — see
+    # _propagate_block_after_link) without devices.is_blocked ever
+    # reflecting that.
+    is_blacklisted_at_router: bool = False
 
 
 @dataclass
