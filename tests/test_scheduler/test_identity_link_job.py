@@ -242,6 +242,24 @@ class TestBlockPropagationOnLink:
         assert 'AUTO-BLOCK PROPAGATION' in alert.description
         assert 'FAILED' in alert.description
 
+    async def test_disable_auto_block_dev_override_skips_propagation(self, scheduler, monkeypatch):
+        from sentinel.config import settings
+        monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9', is_blocked=True)
+        await _add_device(_MAC_B, 'phone', ip_address='10.0.0.10', is_blocked=False)
+        scheduler._liveness_probe = _FakeLivenessProbe(reachable={'10.0.0.9': False, '10.0.0.10': True})
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+
+        await scheduler._identity_link_job()
+
+        scheduler._adapter.block_device.assert_not_awaited()
+        async with get_session() as session:
+            b = await session.get(Device, _MAC_B)
+        assert b.is_blocked is False
+        alert = await _open_alert(_MAC_B)
+        assert 'AUTO-BLOCK DISABLED' in alert.description
+
     async def test_unblocked_old_mac_does_not_touch_the_adapter_at_all(self, scheduler):
         """The common case — most links have nothing to propagate."""
         await _add_device(_MAC_A, 'phone', ip_address='10.0.0.9', is_blocked=False)

@@ -107,6 +107,23 @@ class TestRaiseThreatAlert:
         assert alert.alert_type == 'ARP_SPOOF'
         assert 'auto-blocked' in alert.description
 
+    async def test_disable_auto_block_dev_override_wins_even_when_armed(self, scheduler, monkeypatch):
+        """Settings.DISABLE_AUTO_BLOCK is the hard kill-switch for attack-
+        testing — must override auto_block_on_threat=True, not just add to
+        it."""
+        from sentinel.config import settings
+        monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+
+        device = await _get_device()
+        assert device.is_blocked is False
+        alert = await _latest_alert()
+        assert 'AUTO-BLOCK DISABLED' in alert.description
+        assert 'auto-blocked' not in alert.description
+
     async def test_does_not_block_when_disarmed(self, scheduler):
         await _seed_device(is_blocked=False)
         await SettingsRepository().set_auto_block_on_threat(False)

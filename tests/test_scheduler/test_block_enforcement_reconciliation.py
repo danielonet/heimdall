@@ -195,6 +195,20 @@ class TestCorrectBlockDrift:
         assert alert.severity == 'CRITICAL'
         assert 'FAILED' in alert.description
 
+    async def test_disable_auto_block_dev_override_skips_the_reblock(self, monkeypatch):
+        from sentinel.config import settings
+        monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
+        await _seed_device(_MAC, is_blocked=True)
+        scheduler = object.__new__(SentinelScheduler)
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+
+        await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)
+
+        scheduler._adapter.block_device.assert_not_awaited()
+        alert = await _drift_alert(_MAC)
+        assert 'AUTO-BLOCK DISABLED' in alert.description
+
     async def test_repeated_drift_touches_one_alert_row_instead_of_spamming(self):
         await _seed_device(_MAC, is_blocked=True)
         scheduler = object.__new__(SentinelScheduler)

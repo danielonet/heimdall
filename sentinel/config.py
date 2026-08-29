@@ -173,6 +173,22 @@ class Settings(BaseSettings):
     # a leak. See sentinel/api/routes/debug.py.
     MEMORY_DEBUG_ENABLED: bool = False
 
+    # ── Safety overrides ──────────────────────────────────────────────────────
+    # Hard kill-switch for every auto-block code path (SentinelScheduler.
+    # _raise_threat_alert, _propagate_block_after_link, and
+    # _correct_block_drift's re-block branch) — every one of them still
+    # raises its alert exactly as normal, just never calls block_device()
+    # or flips is_blocked. Deliberately env-only (like every other flag in
+    # this section), NOT the DB-backed auto_block_on_threat setting
+    # (SettingsRepository/the Settings tab): that setting is part of the
+    # app's own mutable state, and this exists specifically so it can't be
+    # flipped back on by anything happening *inside* the app while it's
+    # armed for a live attack-simulation test (a bug, a stray API call from
+    # a Kali box, /api/settings/purge resetting settings to defaults) — only
+    # restarting the process with this unset turns auto-block back on.
+    # See scripts/dev.sh's --no-auto-block flag.
+    DISABLE_AUTO_BLOCK: bool = False
+
     # ── Notifications ─────────────────────────────────────────────────────────
     NTFY_URL: str = ''             # e.g. https://ntfy.sh/heimdall-alerts
     SMTP_HOST: str = ''

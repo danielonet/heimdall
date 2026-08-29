@@ -35,6 +35,7 @@ from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
+from sentinel.config import settings
 from sentinel.db.models import Device, Rule
 from sentinel.db.repositories import AlertRepository
 from sentinel.db.session import get_session
@@ -167,8 +168,14 @@ class RuleEngine:
         if action_type == 'ALERT':
             await self._create_alert(rule, mac, severity, description)
         elif action_type == 'BLOCK_DEVICE':
-            await self._block_device(mac)
-            await self._create_alert(rule, mac, severity, description + ' — device blocked')
+            blocked = await self._block_device(mac)
+            if settings.DISABLE_AUTO_BLOCK:
+                suffix = ' — AUTO-BLOCK DISABLED (dev override), device not blocked'
+            elif blocked:
+                suffix = ' — device blocked'
+            else:
+                suffix = ' — AUTO-BLOCK FAILED, device not blocked (see backend logs)'
+            await self._create_alert(rule, mac, severity, description + suffix)
         elif action_type == 'TAG_DEVICE':
             await self._tag_device(mac, action.get('tag', 'flagged'))
         elif action_type == 'NOTIFY':
@@ -206,15 +213,26 @@ class RuleEngine:
         if is_new:
             emit_alert(alert_to_dict(alert))
 
-    async def _block_device(self, mac: str) -> None:
+    async def _block_device(self, mac: str) -> bool:
+        """Returns whether the device actually ended up blocked — callers
+        must not claim "device blocked" in an alert just because this was
+        called (see _fire, which used to do exactly that regardless of
+        outcome). Settings.DISABLE_AUTO_BLOCK short-circuits before ever
+        touching the adapter, same kill-switch SentinelScheduler._raise_
+        threat_alert honors."""
+        if settings.DISABLE_AUTO_BLOCK:
+            return False
         try:
-            await self._adapter.block_device(mac)
+            blocked = await self._adapter.block_device(mac)
+        except Exception:
+            logger.exception('Rule action BLOCK_DEVICE failed for %s', mac)
+            return False
+        if blocked:
             async with get_session() as session:
                 device = await session.get(Device, mac)
                 if device is not None:
                     device.is_blocked = True
-        except Exception:
-            logger.exception('Rule action BLOCK_DEVICE failed for %s', mac)
+        return blocked
 
     async def _tag_device(self, mac: str, tag: str) -> None:
         async with get_session() as session:

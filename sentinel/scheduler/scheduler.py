@@ -653,6 +653,9 @@ class SentinelScheduler:
         network. Re-issues the block immediately, same "always re-issue,
         never trust the cached flag" philosophy as _raise_threat_alert, and
         never silently claims success if the router doesn't confirm it.
+        Also honors Settings.DISABLE_AUTO_BLOCK — same kill-switch
+        _raise_threat_alert checks, so this reconciliation stays as inert
+        as every other auto-block path while it's set.
 
         DB says NOT blocked, router says blocked: most likely a block
         applied by hand via the router's own admin UI, outside Heimdall
@@ -660,9 +663,17 @@ class SentinelScheduler:
         than calling unblock_device() to force the router back in line —
         overriding a human's deliberate action taken outside this app
         would be a worse outcome than a dashboard that was briefly out of
-        sync.
+        sync. Not gated by DISABLE_AUTO_BLOCK: this branch never calls
+        block_device()/unblock_device() at all, just updates Heimdall's own
+        record to match what the router already reports.
         """
-        if db_blocked and not router_blocked:
+        if db_blocked and not router_blocked and settings.DISABLE_AUTO_BLOCK:
+            description = (
+                f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
+                f'blacklisted — AUTO-BLOCK DISABLED (dev override), not re-applied.'
+            )
+            severity = 'WARNING'
+        elif db_blocked and not router_blocked:
             try:
                 adapter = await self._ensure_adapter()
                 reblocked = await adapter.block_device(mac)
@@ -1165,7 +1176,14 @@ class SentinelScheduler:
         silently claims success, same convention as _raise_threat_alert's
         'AUTO-BLOCK FAILED' wording, since a linked device that's actually
         still unprotected must not read as if nothing needs attention.
+        Also honors Settings.DISABLE_AUTO_BLOCK — same kill-switch
+        _raise_threat_alert checks, since this is just as much an
+        auto-block action as any other and must be just as inert while
+        it's set.
         """
+        if settings.DISABLE_AUTO_BLOCK:
+            return f' — {old_mac} was blocked; AUTO-BLOCK DISABLED (dev override) — not propagated to {new_mac}'
+
         try:
             adapter = await self._ensure_adapter()
             blocked_now = await adapter.block_device(new_mac)
@@ -1783,8 +1801,9 @@ class SentinelScheduler:
         raw_data: dict | None = None, dedup_key: str | None = None,
     ) -> None:
         """Create/touch+broadcast an Alert for a detected attack. If
-        auto_block_on_threat is armed, blocks the device via the router
-        adapter first so the alert description can note it — the single
+        Settings.DISABLE_AUTO_BLOCK isn't set and auto_block_on_threat is
+        armed, blocks the device via the router adapter first so the alert
+        description can note it — the single
         choke point every attack-signal source (ArpWatcher, DhcpWatcher,
         PassiveFingerprinter, NetworkScanner, Zeek DNS/beaconing/file-
         extraction, Suricata, OpenCanary) routes through, so all of them
@@ -1843,8 +1862,16 @@ class SentinelScheduler:
         """
         blocked_now = False
         block_failed = False
-        is_self = bool(mac) and await self._is_own_host(mac)
-        if is_self:
+        # Hard kill-switch, checked before anything else — see Settings.
+        # DISABLE_AUTO_BLOCK's docstring for why this is a separate,
+        # env-only override rather than just relying on the DB-backed
+        # auto_block_on_threat setting this same method also checks below.
+        auto_block_disabled = settings.DISABLE_AUTO_BLOCK
+        is_self = False
+        if auto_block_disabled:
+            pass  # every block attempt skipped outright — see description branch below
+        elif bool(mac) and await self._is_own_host(mac):
+            is_self = True
             logger.warning(
                 'Suppressing auto-block for %s (%s) — this MAC resolves to the Heimdall '
                 'host itself (see discover_local_ips()); never auto-blocking our own machine.',
@@ -1860,7 +1887,9 @@ class SentinelScheduler:
                 block_failed = True
                 logger.exception('Auto-block failed for %s (%s)', mac, alert_type)
 
-        if is_self:
+        if auto_block_disabled:
+            description = f'{description} — AUTO-BLOCK DISABLED (dev override) — alert only, device not blocked'
+        elif is_self:
             description = f'{description} — auto-block suppressed: this device is the Heimdall host itself'
         elif blocked_now:
             description = f'{description} — device auto-blocked'
