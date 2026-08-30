@@ -38,15 +38,9 @@ from sentinel.security.mac_vendor import is_locally_administered
 
 # Bounds the candidate query so a MAC that hasn't been seen in a very long
 # time doesn't get dragged into a fresh probe forever — same reasoning as
-# correlation.py's _LOOKBACK_HOURS.
+# correlation.py's _LOOKBACK_HOURS. Also the bound find_ip_continuity_
+# candidates uses for its old-device side, below.
 _LOOKBACK_HOURS = 24
-
-# Window for find_ip_continuity_candidates' fallback match — tighter than
-# _LOOKBACK_HOURS since a genuine MAC-rotation handoff shows up within one
-# lease renewal/reconnect, not up to a full day later; a shared IP that far
-# apart is more likely coincidental reuse of a freed address than the same
-# device reconnecting.
-_IP_CONTINUITY_WINDOW_HOURS = 4
 
 
 class DeviceGroupMember(TypedDict):
@@ -133,15 +127,30 @@ class DeviceIdentityLinker:
         the one actually answering for that IP right now before linking
         anything (see ArpLivenessProbe.resolve_mac) — necessary here
         specifically because both rows share the *same* on-file IP, so
-        "is this IP reachable" alone can't tell the two apart.
+        "is this IP reachable" alone can't tell the two apart. That direct
+        ARP check is the real safety gate; the DB-side filters below only
+        bound the *candidate set* that gets probed, deliberately not relied
+        on for correctness on their own.
+
+        Does NOT filter new_row by recency (first_seen/last_seen) the way
+        an earlier version of this method did — confirmed live 2026-08-30
+        that's actively wrong on a devices table seeded in bulk (see
+        scripts/seed_baseline.py): every row from that seed shares the
+        exact same first_seen, including ones that have rotated in many
+        times since, so a "new_row.first_seen is recent" filter silently
+        excluded every real candidate in that (very common) situation. The
+        old side still bounds to _LOOKBACK_HOURS via last_seen, same as
+        find_candidate_groups, purely to keep the candidate set from
+        growing unbounded over a long-running devices table — it does not
+        need to be tighter than that, since the ARP probe is what actually
+        decides correctness, not this window.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=_IP_CONTINUITY_WINDOW_HOURS)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=_LOOKBACK_HOURS)
 
         new_rows = (await session.execute(
             select(Device).where(
                 Device.linked_to_mac.is_(None),
                 (Device.hostname.is_(None)) | (Device.hostname == ''),
-                Device.first_seen >= cutoff,
             )
         )).scalars().all()
 
@@ -158,7 +167,6 @@ class DeviceIdentityLinker:
                     Device.hostname != '',
                     Device.ip_address == new_row.ip_address,
                     Device.last_seen >= cutoff,
-                    Device.last_seen <= new_row.first_seen,
                 ).order_by(Device.last_seen.desc())
             )).scalars().first()
             if old_row is None or not is_locally_administered(old_row.mac_address):

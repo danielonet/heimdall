@@ -219,8 +219,8 @@ class TestFindIpContinuityCandidates:
 
         assert candidates == []
 
-    async def test_old_device_outside_the_continuity_window_is_excluded(self, linker):
-        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=8))
+    async def test_old_device_beyond_the_lookback_window_is_excluded(self, linker):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=30))
         await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
 
         async with get_session() as session:
@@ -228,17 +228,27 @@ class TestFindIpContinuityCandidates:
 
         assert candidates == []
 
-    async def test_new_device_outside_the_continuity_window_is_excluded(self, linker):
+    async def test_new_devices_stale_first_seen_does_not_exclude_it(self, linker):
+        """Regression for a real, confirmed-live bug: an earlier version of
+        this query required the new MAC's first_seen to be recent, which
+        silently broke on a devices table seeded in bulk (see
+        scripts/seed_baseline.py) — every row from that seed shares the
+        exact same (long-past) first_seen no matter how many times it's
+        rotated in since, since _upsert_devices never touches first_seen
+        for an already-existing row. A device that's actively answering
+        right now (fresh last_seen) must still match even when first_seen
+        is old."""
         await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
         await _add_device(
             _MAC_B, '', ip_address='10.0.0.18',
-            first_seen=_NOW - timedelta(hours=8), last_seen=_NOW - timedelta(hours=8),
+            first_seen=_NOW - timedelta(days=4), last_seen=_NOW,
         )
 
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert len(candidates) == 1
+        assert candidates[0]['new_mac'] == _MAC_B
 
     async def test_already_linked_devices_are_excluded_from_either_side(self, linker):
         await _add_device(
