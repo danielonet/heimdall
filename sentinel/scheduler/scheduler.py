@@ -166,6 +166,7 @@ class SentinelScheduler:
         ml_min_samples: int,
         ml_contamination: float,
         ml_anomaly_magnitude_multiplier: float,
+        ml_anomaly_alert_magnitude_multiplier: float,
         ml_retrain_cron: str,
         sniff_iface: str,
         otx_api_key: str,
@@ -201,6 +202,7 @@ class SentinelScheduler:
         self._ml_min_samples = ml_min_samples
         self._ml_contamination = ml_contamination
         self._ml_anomaly_magnitude_multiplier = ml_anomaly_magnitude_multiplier
+        self._ml_anomaly_alert_magnitude_multiplier = ml_anomaly_alert_magnitude_multiplier
         self._ml_retrain_cron = ml_retrain_cron
         self._sniff_iface = sniff_iface
         self._router_ip: str = ''  # resolved in _run_loop via _resolve_router_ip
@@ -359,6 +361,7 @@ class SentinelScheduler:
             min_samples=self._ml_min_samples,
             contamination=self._ml_contamination,
             magnitude_multiplier=self._ml_anomaly_magnitude_multiplier,
+            alert_magnitude_multiplier=self._ml_anomaly_alert_magnitude_multiplier,
         )
         self._pipeline = create_default_pipeline(self._anomaly_engine)
         self._wan_bandwidth_detector = WanBandwidthDetector()
@@ -2336,6 +2339,7 @@ def init_scheduler(app: Flask) -> None:
         ml_min_samples=app.config['ML_MIN_SAMPLES_TO_TRAIN'],
         ml_contamination=app.config['ML_CONTAMINATION'],
         ml_anomaly_magnitude_multiplier=app.config['ML_ANOMALY_MAGNITUDE_MULTIPLIER'],
+        ml_anomaly_alert_magnitude_multiplier=app.config['ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER'],
         ml_retrain_cron=app.config['ML_RETRAIN_CRON'],
         sniff_iface=app.config['SNIFF_IFACE'],
         otx_api_key=app.config['OTX_API_KEY'],

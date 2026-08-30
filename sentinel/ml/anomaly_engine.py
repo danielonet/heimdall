@@ -42,7 +42,7 @@ class AnomalyEngine:
 
     def __init__(
         self, model_store: ModelStore, min_samples: int, contamination: float,
-        magnitude_multiplier: float = 0.5,
+        magnitude_multiplier: float = 0.5, alert_magnitude_multiplier: float = 1.5,
     ) -> None:
         self._store = model_store
         self._min_samples = min_samples
@@ -51,6 +51,11 @@ class AnomalyEngine:
         # 0.0 boundary (in units of that device's own fitted training-score
         # std) a sample must be before it counts as anomalous at all.
         self._magnitude_multiplier = magnitude_multiplier
+        # A second, stricter multiplier — see anomaly_severity(). Clearing
+        # magnitude_multiplier only means "anomalous at all"; escalating
+        # from an informational data point to a WARNING requires clearing
+        # this one too.
+        self._alert_magnitude_multiplier = alert_magnitude_multiplier
         self._buffers: dict[str, list[np.ndarray]] = {}
         self._model_cache: dict[str, dict] = {}
 
@@ -121,6 +126,46 @@ class AnomalyEngine:
         iso_anomalous = bool(model['iso'].decision_function(vec)[0] < magnitude_threshold)
         lof_anomalous = bool(model['lof'].predict(vec)[0])  # PyOD: 1 = outlier
         return iso_anomalous and lof_anomalous
+
+    def anomaly_severity(self, sample: TrafficSample) -> Optional[str]:
+        """None if this sample isn't anomalous at all (same two-model-
+        agreement + magnitude_multiplier gate as is_anomalous()); otherwise
+        'INFO' or 'WARNING' depending on how far past that gate the
+        IsolationForest score actually is.
+
+        Requested directly after a real pattern: clearing the base
+        magnitude_multiplier gate only means "notably unusual for this
+        device" — a family video call or a long social-media video binge
+        clears it easily, but is perfectly ordinary heavy use, not
+        something needing attention. Escalating to WARNING requires
+        clearing a second, stricter gate (alert_magnitude_multiplier,
+        default 3x the base one) — further out along this same device's
+        own fitted score spread. A sample between the two gates is still
+        surfaced (AnomalousVolumeDetector still raises an alert for it),
+        just as background information rather than a threat.
+
+        Both gates are self-relative (each device compared only to its own
+        history), same reasoning as magnitude_threshold below — a fixed,
+        cross-device constant here would have exactly the same failure
+        mode ANOMALY_THRESHOLD's own comment describes.
+
+        Read-only, same as is_anomalous() — does not buffer or train.
+        """
+        model = self._get_model(sample.mac_address)
+        if model is None:
+            return None
+
+        vec = build_feature_vector(sample).reshape(1, -1)
+        score_std = model.get('score_std', 0.0)
+        magnitude_threshold = ANOMALY_THRESHOLD - (self._magnitude_multiplier * score_std)
+        iso_score = float(model['iso'].decision_function(vec)[0])
+        iso_anomalous = bool(iso_score < magnitude_threshold)
+        lof_anomalous = bool(model['lof'].predict(vec)[0])  # PyOD: 1 = outlier
+        if not (iso_anomalous and lof_anomalous):
+            return None
+
+        alert_threshold = ANOMALY_THRESHOLD - (self._alert_magnitude_multiplier * score_std)
+        return 'WARNING' if iso_score < alert_threshold else 'INFO'
 
     def train(self, mac: str) -> None:
         """Fit fresh models from this device's buffered samples, if there are enough.

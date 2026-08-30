@@ -92,7 +92,8 @@ pursued" below).
 
 ```python
 class AnomalyEngine:
-    def __init__(self, model_store, min_samples, contamination, magnitude_multiplier=0.5):
+    def __init__(self, model_store, min_samples, contamination,
+                 magnitude_multiplier=0.5, alert_magnitude_multiplier=1.5):
         ...
 
     def score(self, sample) -> float:
@@ -100,6 +101,11 @@ class AnomalyEngine:
 
     def is_anomalous(self, sample) -> bool:
         """Both models agree AND the score clears the magnitude bar (see below)."""
+
+    def anomaly_severity(self, sample) -> str | None:
+        """None / 'INFO' / 'WARNING' — see Layer 4. AnomalousVolumeDetector's
+        actual entry point; is_anomalous() is unchanged and still used/tested
+        directly."""
 
     def train(self, mac) -> None:
         """Bootstrap fit, from the in-memory buffer, at the global default contamination."""
@@ -114,6 +120,7 @@ class AnomalyEngine:
 | `min_samples` (`ML_MIN_SAMPLES_TO_TRAIN`) | 100 (~25 min at the default poll interval) | Env var |
 | `contamination` (`ML_CONTAMINATION`) | 0.05 global default | Env var globally; **per-device-type on nightly retrain**, see Layer 3 |
 | `magnitude_multiplier` (`ML_ANOMALY_MAGNITUDE_MULTIPLIER`) | 0.5 | Env var, see Layer 2 |
+| `alert_magnitude_multiplier` (`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`) | 1.5 | Env var, see Layer 4 |
 | LOF `n_neighbors` | `min(20, max(len(X)//5, 1))` | No — derived from sample count |
 | `IsolationForest(n_estimators=100, random_state=42)` | fixed | No |
 
@@ -138,7 +145,11 @@ each owning its own alerting policy:
   2. Requires a streak of consecutive flagged polls (`volume_sustained_polls`,
      device-type-aware — see Layer 1) before alerting, resetting on any
      non-flagged poll in between.
-  3. Applies a fixed 30-minute per-device cooldown after firing.
+  3. Calls `engine.anomaly_severity()`, not `is_anomalous()`, for the
+     completing poll's severity — INFO or WARNING depending on how far past
+     the base gate the score is (see Layer 4). Dedup/re-firing is
+     `AlertRepository.upsert()`'s job (at the `poll_cycle` level) — no
+     separate cooldown of its own.
 
 `HighUploadDetector` (`sentinel/detection/detectors/high_upload.py`) is a
 **separate, non-ML** detector — a plain upload:download ratio check with its
@@ -225,6 +236,38 @@ device's first model is superseded by the very next nightly retrain within
 at most 24 hours, so it self-corrects to the right contamination quickly
 regardless.
 
+### Layer 4 — INFO/WARNING severity split
+
+Requested directly after a real pattern: clearing Layer 2's magnitude gate
+only means "notably unusual for *this* device", which routinely includes
+perfectly ordinary heavy use — a family video call, a long social-media
+video binge — that just isn't what the device usually does. Before this
+layer, every `ANOMALOUS_VOLUME` alert was a fixed WARNING regardless of how
+mild the outlier actually was.
+
+`AnomalyEngine.anomaly_severity(sample)` replaces `is_anomalous()` as
+`AnomalousVolumeDetector`'s entry point (the latter is unchanged and still
+used/tested directly). It applies the *same* two-model-agreement +
+`magnitude_multiplier` gate first (returning `None`, not anomalous at all,
+exactly like `is_anomalous() == False`) — a sample that clears it is then
+checked against a second, stricter, self-relative gate:
+`ANOMALY_THRESHOLD - (alert_magnitude_multiplier * score_std)`
+(`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`, default 1.5 — 3x the base 0.5).
+Clearing the base gate but not this one returns `'INFO'`; clearing both
+returns `'WARNING'`. Both gates use the *same* self-relative `score_std`
+Layer 2 already computes — no new model state, no migration.
+
+The alert still fires either way (still visible on the dashboard, still
+contributing to the client-side threat score — 2 points for INFO vs 8 for
+WARNING, see `frontend/src/lib/threatScore.js`) and still renders with
+the INFO severity's existing calmer treatment (blue `SeverityBar`, its own
+filter option on the Alerts page) — no frontend changes were needed for
+this, only the backend severity computation. Severity is re-evaluated
+every time the alert fires again (a touch on an already-open row updates
+`severity` in place — see `AlertRepository.upsert()`), so a condition that
+starts mild and later intensifies escalates from INFO to WARNING without
+waiting for a fresh streak.
+
 ## Observed extremes — measured, not guessed, reference numbers
 
 Rules → Device Type Profiles shows each editable RATIO/POLLS/CONTAM. field
@@ -248,7 +291,8 @@ that type actually did, instead of guessing at a number in a vacuum.
 
 | Knob | Where | When to change |
 |---|---|---|
-| `ML_ANOMALY_MAGNITUDE_MULTIPLIER` | env var, global | Raise to require more extreme outliers before alerting (fewer, higher-confidence alerts); lower toward 0 to approach pre-Layer-2 behavior |
+| `ML_ANOMALY_MAGNITUDE_MULTIPLIER` | env var, global | Raise to require more extreme outliers before alerting at all (fewer, higher-confidence alerts, INFO or WARNING); lower toward 0 to approach pre-Layer-2 behavior |
+| `ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER` | env var, global | Raise to escalate fewer anomalies to WARNING (more of them stay INFO); lower toward `ML_ANOMALY_MAGNITUDE_MULTIPLIER` to approach pre-Layer-4 behavior (everything that's anomalous at all is WARNING) |
 | Per-device-type `contamination` | Rules → Device Type Profiles | Raise for a type prone to short, legitimate, recurring bursts; keep near the global default for types that should stay strict |
 | Per-device-type `volume_sustained_polls` | Rules → Device Type Profiles | Raise for a type with naturally bursty/variable traffic; lower for a type that should alert fast (e.g. a printer) |
 | `ML_MIN_SAMPLES_TO_TRAIN` | env var | Lower for faster bootstrap; raise for more reliable initial models |

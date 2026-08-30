@@ -48,11 +48,21 @@ _LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)  # well past any lea
 
 
 class _FakeAnomalyEngine:
-    def __init__(self, anomalous: bool) -> None:
-        self._anomalous = anomalous
+    """anomalous (mutable — several tests flip it mid-test via
+    detector._engine._anomalous = ...) drives the fire/no-fire decision.
+    severity_override, if set, controls INFO vs WARNING for the tests that
+    care about that split; otherwise anomalous=True defaults to 'WARNING' —
+    today's fixed value, preserved so every existing caller that only cares
+    about "does this fire at all" keeps working unchanged."""
 
-    def is_anomalous(self, sample: TrafficSample) -> bool:
-        return self._anomalous
+    def __init__(self, anomalous: bool = False, severity: str | None = None) -> None:
+        self._anomalous = anomalous
+        self._severity_override = severity
+
+    def anomaly_severity(self, sample: TrafficSample) -> str | None:
+        if not self._anomalous:
+            return None
+        return self._severity_override if self._severity_override is not None else 'WARNING'
 
 
 class _FakeDeviceRepository:
@@ -87,12 +97,14 @@ def _sample(granularity=TrafficGranularity.PER_DEVICE) -> TrafficSample:
 
 def _detector(
     anomalous: bool = True,
+    severity: str | None = None,
     first_seen: datetime | None = _LONG_AGO,
     learning_period_hours: int = 72,
 ) -> AnomalousVolumeDetector:
     device_repo = _FakeDeviceRepository({'aa:bb:cc:dd:ee:ff': first_seen} if first_seen is not None else {})
     settings_repo = _FakeSettingsRepository(learning_period_hours)
-    return AnomalousVolumeDetector(_FakeAnomalyEngine(anomalous=anomalous), device_repo, settings_repo)
+    engine = _FakeAnomalyEngine(anomalous=anomalous, severity=severity)
+    return AnomalousVolumeDetector(engine, device_repo, settings_repo)
 
 
 class TestInspectTraffic:
@@ -184,6 +196,29 @@ class TestInspectTraffic:
         detector = _detector(anomalous=False)
         for _ in range(_SUSTAINED_POLLS + 2):
             assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+
+    async def test_sustained_mild_anomaly_produces_info_not_warning(self):
+        """Requested directly: real family VoIP/social-media traffic
+        clearing the base anomaly gate but not the stricter alert gate
+        (AnomalyEngine.anomaly_severity()'s 'INFO' case) must not read as a
+        WARNING needing attention."""
+        detector = _detector(severity='INFO')
+        for _ in range(_SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is not None
+        assert alert.severity == 'INFO'
+
+    async def test_severity_escalating_mid_streak_uses_the_completing_polls_severity(self):
+        """Severity reflects the poll that actually completes the streak,
+        not whatever the first poll in it was — an anomaly that starts mild
+        and intensifies should fire as WARNING, not INFO."""
+        detector = _detector(severity='INFO')
+        for _ in range(_SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+        detector._engine._severity_override = 'WARNING'
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert.severity == 'WARNING'
 
     async def test_per_port_samples_are_skipped_even_if_anomalous(self):
         detector = _detector(anomalous=True)

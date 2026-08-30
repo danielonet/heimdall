@@ -21,6 +21,18 @@ class AnomalousVolumeDetector(BaseDetector):
     """Fires when both IsolationForest and LOF agree a PER_DEVICE sample is an
     outlier, sustained across several consecutive samples.
 
+    Severity is dynamic, not fixed WARNING — see AnomalyEngine.
+    anomaly_severity(). Clearing the base anomaly gate at all only means
+    "notably unusual for this device", which routinely includes perfectly
+    ordinary heavy use (a family video call, a long social-media video
+    binge) that just isn't what this device usually does. Requested
+    directly after exactly that pattern flooding WARNING alerts: this
+    still surfaces every anomaly (visible on the dashboard, contributing a
+    small amount to the threat score) but only escalates to WARNING once
+    the sample clears a second, much stricter magnitude gate — otherwise
+    it's raised as INFO, the same "here's something notable, no action
+    needed" treatment already used elsewhere (e.g. an internal-IP ML spike).
+
     The number of consecutive samples required is looked up per
     snapshot.device_type via device_profiles.get_profile()
     ('volume_sustained_polls') — a NAS's traffic pattern is naturally more
@@ -52,7 +64,7 @@ class AnomalousVolumeDetector(BaseDetector):
     the very next poll, without restarting the process.
     """
 
-    severity = 'WARNING'
+    severity = 'WARNING'  # the ceiling — see anomaly_severity() for the actual per-alert value (INFO or WARNING)
     _ALERT_TYPE = 'ANOMALOUS_VOLUME'
 
     def __init__(
@@ -80,7 +92,8 @@ class AnomalousVolumeDetector(BaseDetector):
         if first_seen is None or datetime.now(timezone.utc) - first_seen < timedelta(hours=learning_period_hours):
             return None
 
-        if not self._engine.is_anomalous(sample):
+        severity = self._engine.anomaly_severity(sample)
+        if severity is None:
             self._consecutive_anomalous[mac] = 0
             if self._alert_open.get(mac):
                 await AlertRepository().resolve(device_mac=mac, alert_type=self._ALERT_TYPE)
@@ -95,10 +108,15 @@ class AnomalousVolumeDetector(BaseDetector):
         self._consecutive_anomalous[mac] = 0  # reset so the next fire needs its own fresh streak
         self._alert_open[mac] = True
 
+        # INFO vs WARNING purely reflects *this* poll's magnitude, not the
+        # streak as a whole — a touch on an already-open alert (see
+        # AlertRepository.upsert) updates severity to match every time this
+        # fires again, so a sustained condition that later intensifies (or
+        # eases off) is reflected without waiting for a fresh streak.
         return Alert(
             device_mac=mac,
             alert_type='ANOMALOUS_VOLUME',
-            severity=self.severity,
+            severity=severity,
             description=(
                 f'{snapshot.hostname or mac} traffic pattern flagged as '
                 f'anomalous by both anomaly models for {sustained_polls} consecutive polls '

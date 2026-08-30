@@ -55,6 +55,7 @@ def _scheduler() -> SentinelScheduler:
         ml_min_samples=100,
         ml_contamination=0.05,
         ml_anomaly_magnitude_multiplier=0.5,
+        ml_anomaly_alert_magnitude_multiplier=1.5,
         ml_retrain_cron='0 3 * * *',
         sniff_iface='lo',
         otx_api_key='',

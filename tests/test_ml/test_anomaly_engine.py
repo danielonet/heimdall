@@ -226,3 +226,52 @@ class TestMagnitudeGate:
         engine._magnitude_multiplier = 0.5
         engine._model_cache[self._MAC] = {'iso': _FakeIso(-100.0), 'lof': _FakeLof(outlier=False), 'score_std': 1.0}
         assert engine.is_anomalous(_sample(self._MAC)) is False
+
+
+class TestAnomalySeverity:
+    """anomaly_severity() — requested directly after real family VoIP/video
+    traffic tripped WARNING-level ANOMALOUS_VOLUME alerts: clearing the base
+    magnitude gate alone should read as INFO; only a sample that also clears
+    the second, stricter alert_magnitude_multiplier gate should read as
+    WARNING. Same _FakeIso/_FakeLof precision-testing approach as
+    TestMagnitudeGate."""
+
+    _MAC = 'aa:bb:cc:dd:ee:ff'
+
+    def test_not_anomalous_at_all_returns_none(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof(), 'score_std': 1.0}
+        # threshold = 0.0 - 0.5*1.0 = -0.5; -0.01 doesn't clear it.
+        assert engine.anomaly_severity(_sample(self._MAC)) is None
+
+    def test_no_model_yet_returns_none(self, engine):
+        assert engine.anomaly_severity(_sample('bb:bb:bb:bb:bb:bb')) is None
+
+    def test_lof_disagreement_returns_none_even_with_an_extreme_iso_score(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._alert_magnitude_multiplier = 1.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-100.0), 'lof': _FakeLof(outlier=False), 'score_std': 1.0}
+        assert engine.anomaly_severity(_sample(self._MAC)) is None
+
+    def test_clears_base_gate_but_not_alert_gate_is_info(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._alert_magnitude_multiplier = 1.5
+        # base threshold = -0.5, alert threshold = -1.5; -0.9 clears the
+        # first but not the second.
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.9), 'lof': _FakeLof(), 'score_std': 1.0}
+        assert engine.anomaly_severity(_sample(self._MAC)) == 'INFO'
+
+    def test_clears_both_gates_is_warning(self, engine):
+        engine._magnitude_multiplier = 0.5
+        engine._alert_magnitude_multiplier = 1.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-2.0), 'lof': _FakeLof(), 'score_std': 1.0}
+        assert engine.anomaly_severity(_sample(self._MAC)) == 'WARNING'
+
+    def test_score_std_of_zero_collapses_both_gates_to_the_bare_boundary(self, engine):
+        """Same reasoning as the is_anomalous() equivalent — a device with
+        ~zero training-score spread has nothing to scale the gates by, so
+        any negative score clears both and reads as WARNING, not INFO."""
+        engine._magnitude_multiplier = 0.5
+        engine._alert_magnitude_multiplier = 1.5
+        engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof(), 'score_std': 0.0}
+        assert engine.anomaly_severity(_sample(self._MAC)) == 'WARNING'

@@ -86,6 +86,17 @@ class Settings(BaseSettings):
     # ANOMALY_THRESHOLD comment for why a shared constant caused a real
     # incident previously; this is a different shape of comparison.
     ML_ANOMALY_MAGNITUDE_MULTIPLIER: float = 0.5
+    # A second, stricter multiplier on top of the one above — clearing
+    # MAGNITUDE_MULTIPLIER only means "notably unusual for this device",
+    # which in practice includes a lot of perfectly ordinary heavy use (a
+    # family video call, a long social-media video binge) that just isn't
+    # what this device usually does. Requested directly after exactly that:
+    # real family VoIP/video traffic tripping WARNING-level ANOMALOUS_VOLUME
+    # alerts. A sample has to clear *this* multiplier — further out along
+    # the same device's own fitted score spread — before it's escalated
+    # from an informational data point to something worth a WARNING. See
+    # AnomalyEngine.anomaly_severity().
+    ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER: float = 1.5
     ML_RETRAIN_CRON: str = '0 3 * * *'       # 03:00 daily
     ML_MODEL_DIR: str = '/data/models'       # matches the ml-models Docker volume;
                                               # override in .env for host/console dev
