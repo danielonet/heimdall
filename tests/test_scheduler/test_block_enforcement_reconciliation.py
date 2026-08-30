@@ -12,6 +12,16 @@ job is the general-purpose net underneath it — any other cause of the same
 kind of drift (a Host record that lost its schedule, a block applied or
 cleared by hand at the router's own admin UI) gets caught here too.
 
+_correct_block_drift always defers to the router (both directions just
+update Heimdall's own record, never block_device()/unblock_device()) —
+changed from an earlier, asymmetric version that re-issued the block when
+Heimdall's own record said "blocked" and the router disagreed. Also
+confirmed live 2026-08-30: an admin had unblocked a device directly via the
+router's own admin UI (Heimdall's own unblock wasn't working at the time),
+and the old behavior would have silently re-blocked it right back on the
+next reconciliation cycle — fighting a deliberate, out-of-band admin
+action.
+
 Mirrors tests/test_scheduler/test_threat_auto_block.py's
 object.__new__(SentinelScheduler) pattern — these methods only ever touch
 self._adapter, self._last_block_reconcile_at, and the DB.
@@ -101,11 +111,13 @@ class TestReconcileBlockEnforcement:
 
         await scheduler._reconcile_block_enforcement(scheduler._adapter)
 
-        scheduler._adapter.block_device.assert_awaited_once_with(_MAC)
+        scheduler._adapter.block_device.assert_not_awaited()  # never re-assert Heimdall's belief onto the router
+        device = await _get_device(_MAC)
+        assert device.is_blocked is False
         alert = await _drift_alert(_MAC)
         assert alert is not None
         assert alert.severity == 'WARNING'
-        assert 're-applied the block' in alert.description
+        assert 'updated' in alert.description.lower()
 
     async def test_db_not_blocked_router_blacklisted_triggers_correction(self):
         await _seed_device(_MAC, is_blocked=False)
@@ -183,37 +195,60 @@ class TestReconcileBlockEnforcementCadence:
 
 
 class TestCorrectBlockDrift:
-    async def test_reblock_failure_raises_critical_and_never_claims_success(self):
+    async def test_db_blocked_router_not_updates_the_record_and_never_touches_the_adapter(self):
+        """The exact incident this method was changed for: an admin
+        unblocked a device directly via the router's own admin UI. The
+        router's live state must win outright, not get re-asserted over."""
         await _seed_device(_MAC, is_blocked=True)
         scheduler = object.__new__(SentinelScheduler)
         scheduler._adapter = AsyncMock()
-        scheduler._adapter.block_device = AsyncMock(return_value=False)
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+        scheduler._adapter.unblock_device = AsyncMock(return_value=True)
 
         await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)
 
+        scheduler._adapter.block_device.assert_not_awaited()
+        scheduler._adapter.unblock_device.assert_not_awaited()
+        device = await _get_device(_MAC)
+        assert device.is_blocked is False
         alert = await _drift_alert(_MAC)
-        assert alert.severity == 'CRITICAL'
-        assert 'FAILED' in alert.description
+        assert alert.severity == 'WARNING'
+        assert 'updated' in alert.description.lower()
 
-    async def test_disable_auto_block_dev_override_skips_the_reblock(self, monkeypatch):
+    async def test_db_not_blocked_router_blocked_updates_the_record_and_never_touches_the_adapter(self):
+        await _seed_device(_MAC, is_blocked=False)
+        scheduler = object.__new__(SentinelScheduler)
+        scheduler._adapter = AsyncMock()
+        scheduler._adapter.block_device = AsyncMock(return_value=True)
+
+        await scheduler._correct_block_drift(_MAC, db_blocked=False, router_blocked=True)
+
+        scheduler._adapter.block_device.assert_not_awaited()
+        device = await _get_device(_MAC)
+        assert device.is_blocked is True
+        alert = await _drift_alert(_MAC)
+        assert alert.severity == 'INFO'
+
+    async def test_disable_auto_block_is_irrelevant_here_since_nothing_is_auto_blocked(self, monkeypatch):
+        """This method never calls block_device()/unblock_device() at all
+        any more — DISABLE_AUTO_BLOCK has nothing to gate here."""
         from sentinel.config import settings
         monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
         await _seed_device(_MAC, is_blocked=True)
         scheduler = object.__new__(SentinelScheduler)
         scheduler._adapter = AsyncMock()
-        scheduler._adapter.block_device = AsyncMock(return_value=True)
 
         await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)
 
-        scheduler._adapter.block_device.assert_not_awaited()
+        device = await _get_device(_MAC)
+        assert device.is_blocked is False
         alert = await _drift_alert(_MAC)
-        assert 'AUTO-BLOCK DISABLED' in alert.description
+        assert 'AUTO-BLOCK DISABLED' not in alert.description
 
     async def test_repeated_drift_touches_one_alert_row_instead_of_spamming(self):
         await _seed_device(_MAC, is_blocked=True)
         scheduler = object.__new__(SentinelScheduler)
         scheduler._adapter = AsyncMock()
-        scheduler._adapter.block_device = AsyncMock(return_value=True)
 
         await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)
         await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)

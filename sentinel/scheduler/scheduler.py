@@ -645,59 +645,41 @@ class SentinelScheduler:
         """One MAC where devices.is_blocked disagrees with the router's own
         live enforcement state — see _reconcile_block_enforcement. Raises a
         BLOCK_ENFORCEMENT_DRIFT alert either way (via upsert, so repeated
-        drift on the same MAC touches one row instead of spamming), but the
-        two directions are handled asymmetrically on purpose:
+        drift on the same MAC touches one row instead of spamming).
 
-        DB says blocked, router disagrees: the more serious direction — a
-        device the admin believes is contained is actually free on the
-        network. Re-issues the block immediately, same "always re-issue,
-        never trust the cached flag" philosophy as _raise_threat_alert, and
-        never silently claims success if the router doesn't confirm it.
-        Also honors Settings.DISABLE_AUTO_BLOCK — same kill-switch
-        _raise_threat_alert checks, so this reconciliation stays as inert
-        as every other auto-block path while it's set.
+        The router is the source of truth in *both* directions — this only
+        ever updates Heimdall's own record to match what the router
+        reports, never calls block_device()/unblock_device() to push
+        Heimdall's belief back onto the router.
 
-        DB says NOT blocked, router says blocked: most likely a block
-        applied by hand via the router's own admin UI, outside Heimdall
-        entirely. Heimdall updates its own record to match reality rather
-        than calling unblock_device() to force the router back in line —
-        overriding a human's deliberate action taken outside this app
-        would be a worse outcome than a dashboard that was briefly out of
-        sync. Not gated by DISABLE_AUTO_BLOCK: this branch never calls
-        block_device()/unblock_device() at all, just updates Heimdall's own
-        record to match what the router already reports.
+        This used to be asymmetric: "DB blocked, router disagrees" re-issued
+        the block instead of updating the record, on the theory that the
+        admin's original intent (recorded in Heimdall) should win. Changed
+        after a real incident: an admin unblocked a device directly via the
+        router's own admin UI (because Heimdall's own unblock wasn't
+        working at the time), and the old behavior would have silently
+        re-blocked it right back the next reconciliation cycle — fighting a
+        deliberate, out-of-band admin action, exactly the failure mode the
+        *other* direction was already careful to avoid. There is no way to
+        tell "the block silently decayed" apart from "an admin reversed it
+        on purpose" from in here, so don't try — the router's live state
+        always wins, and Settings.DISABLE_AUTO_BLOCK is irrelevant to this
+        method now that it never calls block_device()/unblock_device() at
+        all.
         """
-        if db_blocked and not router_blocked and settings.DISABLE_AUTO_BLOCK:
+        async with get_session() as session:
+            device = await session.get(Device, mac)
+            if device is not None:
+                device.is_blocked = router_blocked
+
+        if db_blocked and not router_blocked:
             description = (
-                f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
-                f'blacklisted — AUTO-BLOCK DISABLED (dev override), not re-applied.'
+                f'{mac} was marked blocked in Heimdall but the router reports it is not currently '
+                f'blacklisted (unblocked directly at the router, the block expired, or it never took '
+                f'effect) — updated Heimdall\'s record to match.'
             )
             severity = 'WARNING'
-        elif db_blocked and not router_blocked:
-            try:
-                adapter = await self._ensure_adapter()
-                reblocked = await adapter.block_device(mac)
-            except Exception:
-                logger.exception('Block-enforcement reconciliation: failed to re-block %s', mac)
-                reblocked = False
-            if reblocked:
-                description = (
-                    f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
-                    f'blacklisted — re-applied the block.'
-                )
-                severity = 'WARNING'
-            else:
-                description = (
-                    f'{mac} is marked blocked in Heimdall but the router reported it as not currently '
-                    f'blacklisted — AUTO-BLOCK RE-APPLICATION FAILED, device may be unprotected '
-                    f'(see backend logs).'
-                )
-                severity = 'CRITICAL'
         else:
-            async with get_session() as session:
-                device = await session.get(Device, mac)
-                if device is not None:
-                    device.is_blocked = True
             description = (
                 f'{mac} is blacklisted at the router but Heimdall had no record of blocking it — likely '
                 f'blocked manually via the router\'s own admin UI. Updated Heimdall\'s record to match.'
