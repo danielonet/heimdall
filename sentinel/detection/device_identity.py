@@ -144,6 +144,20 @@ class DeviceIdentityLinker:
         growing unbounded over a long-running devices table — it does not
         need to be tighter than that, since the ARP probe is what actually
         decides correctness, not this window.
+
+        The anchor row matched by IP is deliberately NOT required to be
+        unlinked, unlike find_candidate_groups' members — confirmed live
+        2026-08-30 that excluding linked anchors is actively wrong for a
+        phone that's already rotated once before: its previous MAC is
+        still on file at that IP with the right hostname, but it's already
+        someone's linked-away duplicate (from the *first* rotation), so
+        requiring linked_to_mac IS NULL here silently excluded the exact
+        row every subsequent rotation needed to match, forever. Instead,
+        old_mac resolves through one level of the anchor's own link if it
+        has one — the same "no multi-hop chains" resolution
+        DeviceRepository.link() already does for new_mac in the hostname
+        path — so a third (or fourth, ...) rotation attaches to the same
+        original canonical identity instead of a stale intermediate one.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(hours=_LOOKBACK_HOURS)
 
@@ -159,21 +173,24 @@ class DeviceIdentityLinker:
             if not new_row.ip_address or not is_locally_administered(new_row.mac_address):
                 continue
 
-            old_row = (await session.execute(
+            anchor = (await session.execute(
                 select(Device).where(
                     Device.mac_address != new_row.mac_address,
-                    Device.linked_to_mac.is_(None),
                     Device.hostname.isnot(None),
                     Device.hostname != '',
                     Device.ip_address == new_row.ip_address,
                     Device.last_seen >= cutoff,
                 ).order_by(Device.last_seen.desc())
             )).scalars().first()
-            if old_row is None or not is_locally_administered(old_row.mac_address):
+            if anchor is None or not is_locally_administered(anchor.mac_address):
                 continue
 
+            old_mac = anchor.linked_to_mac or anchor.mac_address
+            if old_mac == new_row.mac_address:
+                continue  # already resolves to the new MAC itself — nothing to do
+
             candidates.append(IpContinuityCandidate(
-                old_mac=old_row.mac_address, new_mac=new_row.mac_address,
-                ip_address=new_row.ip_address, hostname=old_row.hostname,
+                old_mac=old_mac, new_mac=new_row.mac_address,
+                ip_address=new_row.ip_address, hostname=anchor.hostname,
             ))
         return candidates

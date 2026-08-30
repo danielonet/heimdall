@@ -150,6 +150,17 @@ class TestFindCandidateGroups:
         assert ips == {_MAC_A: '10.0.0.9', _MAC_B: '10.0.0.10'}
 
 
+def _for(candidates, new_mac: str) -> list:
+    """This suite runs against the shared dev DB (see module docstring),
+    and find_ip_continuity_candidates' outer query has no IP scoping of
+    its own — it's expected to see genuine unrelated rows alongside each
+    test's own synthetic ones (confirmed live: this file routinely also
+    surfaces a real production candidate on every run). Filter to just
+    this test's own new_mac before asserting, same reasoning as
+    TestFindCandidateGroups' `matches = [g for g in groups if ...]`."""
+    return [c for c in candidates if c['new_mac'] == new_mac]
+
+
 class TestFindIpContinuityCandidates:
     """The fallback for a rotated MAC that never reported a hostname at
     all, so find_candidate_groups' hostname rule can never match it — see
@@ -162,11 +173,11 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert len(candidates) == 1
-        assert candidates[0]['old_mac'] == _MAC_A
-        assert candidates[0]['new_mac'] == _MAC_B
-        assert candidates[0]['ip_address'] == '10.0.0.18'
-        assert candidates[0]['hostname'] == 'phone'
+        matches = _for(candidates, _MAC_B)
+        assert len(matches) == 1
+        assert matches[0]['old_mac'] == _MAC_A
+        assert matches[0]['ip_address'] == '10.0.0.18'
+        assert matches[0]['hostname'] == 'phone'
 
     async def test_new_mac_with_a_real_manufacturer_oui_is_excluded(self, linker):
         """A device with a genuine hardware MAC claiming a freed IP is just
@@ -177,7 +188,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MANUFACTURER_MAC) == []
 
     async def test_old_mac_with_a_real_manufacturer_oui_is_excluded(self, linker):
         await _add_device(_MANUFACTURER_MAC, 'printer', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
@@ -186,7 +197,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MAC_B) == []
 
     async def test_new_mac_with_a_hostname_is_excluded(self, linker):
         """Has a hostname of its own — find_candidate_groups is the right
@@ -197,7 +208,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MAC_B) == []
 
     async def test_old_device_with_no_hostname_is_excluded(self, linker):
         """Nothing to carry forward — the whole point is anchoring on the
@@ -208,7 +219,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MAC_B) == []
 
     async def test_different_ips_do_not_match(self, linker):
         await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
@@ -217,7 +228,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MAC_B) == []
 
     async def test_old_device_beyond_the_lookback_window_is_excluded(self, linker):
         await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=30))
@@ -226,7 +237,7 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        assert _for(candidates, _MAC_B) == []
 
     async def test_new_devices_stale_first_seen_does_not_exclude_it(self, linker):
         """Regression for a real, confirmed-live bug: an earlier version of
@@ -247,10 +258,18 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert len(candidates) == 1
-        assert candidates[0]['new_mac'] == _MAC_B
+        assert len(_for(candidates, _MAC_B)) == 1
 
-    async def test_already_linked_devices_are_excluded_from_either_side(self, linker):
+    async def test_already_linked_anchor_resolves_through_its_own_link(self, linker):
+        """Regression for a real, confirmed-live bug: a phone that had
+        already rotated once (MAC_A already linked to MAC_C from that
+        first rotation) rotated *again* to MAC_B. MAC_A is still the
+        on-file anchor at this IP with the right hostname — excluding it
+        just because it's already linked meant every rotation after the
+        first one could never match anything, forever. old_mac must
+        resolve to MAC_A's own target (MAC_C), not MAC_A itself, so MAC_B
+        attaches to the original canonical identity rather than a stale
+        intermediate one."""
         await _add_device(
             _MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1),
             linked_to_mac=_MAC_C,
@@ -260,4 +279,21 @@ class TestFindIpContinuityCandidates:
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)
 
-        assert candidates == []
+        matches = _for(candidates, _MAC_B)
+        assert len(matches) == 1
+        assert matches[0]['old_mac'] == _MAC_C
+        assert matches[0]['hostname'] == 'phone'
+
+    async def test_anchor_already_linked_to_the_new_mac_itself_is_excluded(self, linker):
+        """Nothing to do — it already resolves to exactly the target this
+        would try to create."""
+        await _add_device(
+            _MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1),
+            linked_to_mac=_MAC_B,
+        )
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert _for(candidates, _MAC_B) == []
