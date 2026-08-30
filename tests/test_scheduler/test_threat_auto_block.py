@@ -54,6 +54,11 @@ async def _init_db():
         await session.execute(delete(Alert).where(Alert.device_mac.is_(None)))
         await session.execute(delete(Device).where(Device.mac_address == _MAC))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == _MAC))
+        # TestPersistArpAlertIdentityLink gives this literal (used elsewhere
+        # in this file only as an unpersisted event['old_mac'] string) an
+        # actual Device row, to exercise DeviceRepository.canonical_mac —
+        # clean it up too, same reasoning as the _MAC cleanup above.
+        await session.execute(delete(Device).where(Device.mac_address == 'de:ad:be:ef:00:01'))
     await get_engine().dispose()
 
 
@@ -524,6 +529,78 @@ class TestPersistArpAlert:
         # block-target-lookup behavior (see xmo_adapter.py for the real
         # adapter's stricter host-lookup requirement).
         assert 'auto-blocked' in alert.description
+
+
+class TestPersistArpAlertIdentityLink:
+    """Regression coverage for a real incident: a phone's rotated MAC gets
+    identity-linked (see _identity_link_job/DeviceIdentityLinker), but the
+    old MAC can still briefly reappear on the wire afterward — a stale ARP
+    cache entry elsewhere on the LAN, a gratuitous ARP, or
+    _reconcile_arp_table's own periodic DHCP-lease reseed catching a
+    not-yet-expired old lease. ArpWatcher has no idea the two MACs were ever
+    linked, so without DeviceRepository.canonical_mac this re-raises
+    ARP_SPOOF against an identity Heimdall already resolved, indefinitely."""
+
+    async def test_arp_change_between_two_already_linked_macs_is_not_spoofing(self, scheduler):
+        old_mac = 'de:ad:be:ef:00:01'
+        await _seed_device(is_blocked=False)  # the new_mac (_MAC) row
+        async with get_session() as session:
+            session.add(Device(
+                mac_address=old_mac, ip_address=_IP, hostname='old-hostname',
+                linked_to_mac=_MAC, linked_at=datetime.now(timezone.utc), link_reason='test setup',
+            ))
+        scheduler._arp_watcher = Mock()
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': old_mac, 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        assert await _latest_alert() is None
+        device = await _get_device()
+        assert device.is_blocked is False
+        scheduler._arp_watcher.seed.assert_called_once_with([(_IP, _MAC)])
+
+    async def test_old_mac_side_already_linked_to_a_third_mac_still_resolves(self, scheduler):
+        """old_mac itself is already someone else's linked-away alias (a
+        second-or-later rotation) — must resolve through it, same one-hop
+        rule DeviceRepository.link() uses for its own new_mac side."""
+        stale_alias = 'de:ad:be:ef:00:01'
+        await _seed_device(is_blocked=False)  # the canonical MAC (_MAC) row
+        async with get_session() as session:
+            session.add(Device(
+                mac_address=stale_alias, ip_address=_IP, hostname='old-hostname',
+                linked_to_mac=_MAC, linked_at=datetime.now(timezone.utc), link_reason='test setup',
+            ))
+        scheduler._arp_watcher = Mock()
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': stale_alias, 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        assert await _latest_alert() is None
+
+    async def test_unlinked_macs_still_get_full_arp_spoof_treatment(self, scheduler):
+        """Sanity check the new gate doesn't swallow real spoofing: neither
+        side has a devices row at all (matches this file's other
+        already-passing ARP_SPOOF cases), so canonical_mac resolves both to
+        themselves — never equal, never suppressed."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        alert = await _latest_alert()
+        assert alert.alert_type == 'ARP_SPOOF'
+        device = await _get_device()
+        assert device.is_blocked is True
 
 
 class TestPersistDhcpAlert:

@@ -254,6 +254,34 @@ class TestLink:
         assert a.linked_to_mac == _MAC_3
 
 
+class TestCanonicalMac:
+    async def test_unlinked_device_resolves_to_itself(self):
+        await _seed_device(_MAC)
+        assert await DeviceRepository().canonical_mac(_MAC) == _MAC
+
+    async def test_unknown_mac_resolves_to_itself(self):
+        assert await DeviceRepository().canonical_mac(_MAC) == _MAC
+
+    async def test_linked_device_resolves_to_its_target(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='test reason')
+
+        assert await DeviceRepository().canonical_mac(_MAC) == _MAC_2
+        assert await DeviceRepository().canonical_mac(_MAC_2) == _MAC_2
+
+    async def test_second_rotation_resolves_through_one_hop_to_the_same_target(self):
+        """A -> B already linked; C -> A must resolve to B, not A — same
+        no-multi-hop-chain invariant link() itself maintains."""
+        await _seed_device(_MAC)      # A
+        await _seed_device(_MAC_2)    # B
+        await _seed_device(_MAC_3)    # C
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='A->B')
+        await DeviceRepository().link(old_mac=_MAC_3, new_mac=_MAC, reason='C->A, resolves onto B')
+
+        assert await DeviceRepository().canonical_mac(_MAC_3) == _MAC_2
+
+
 class TestUnlink:
     async def test_clears_all_three_columns(self):
         await _seed_device(_MAC)

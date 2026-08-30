@@ -168,7 +168,7 @@ regardless of which watcher produced the finding:
 
 | Watcher / source | File | Job / method | Alert type | Severity |
 |---|---|---|---|---|
-| `ArpWatcher` | `sentinel/security/arp_watch.py` | `_persist_arp_alert` | `ARP_SPOOF` (untrusted MAC, and the router's own live DHCP leases don't confirm the reassignment either — see `_verify_arp_change_against_dhcp`) / `IP_CONFLICT` (INFO — the new MAC is already trusted, more likely two devices sharing a static IP than an attack) / no alert at all (untrusted MAC, but a live DHCP-leases re-poll confirms it's a legitimate reassignment) | CRITICAL / INFO / — |
+| `ArpWatcher` | `sentinel/security/arp_watch.py` | `_persist_arp_alert` | `ARP_SPOOF` (untrusted MAC, not already identity-linked to the old MAC, and the router's own live DHCP leases don't confirm the reassignment either — see `_verify_arp_change_against_dhcp`) / `IP_CONFLICT` (INFO — the new MAC is already trusted, more likely two devices sharing a static IP than an attack) / no alert at all (either: both MACs already resolve to the same canonical identity via `DeviceRepository.canonical_mac`, confirmed live 2026-08-30 — see below; or an untrusted MAC change a live DHCP-leases re-poll confirms is a legitimate reassignment) | CRITICAL / INFO / — |
 | `DhcpWatcher` | `sentinel/security/dhcp_watch.py` | `_persist_dhcp_alert` | `ROGUE_DHCP_SERVER` | CRITICAL |
 | `PassiveFingerprinter` | `sentinel/security/fingerprint.py` | `_persist_fingerprint` | `FINGERPRINT_MISMATCH` | CRITICAL |
 | `NetworkScanner` (nmap) | `sentinel/security/scanner.py` | `_nmap_scan_job` | `HIGH_RISK_PORT_OPENED`, `OS_FINGERPRINT_CONFLICT`, `VULNERABILITY_DETECTED`, `CREDENTIAL_EXPOSURE_DETECTED` | CRITICAL / WARNING / CRITICAL / CRITICAL |
@@ -181,6 +181,21 @@ regardless of which watcher produced the finding:
 
 `build_mitigation()`'s dispatch table (`sentinel/security/remediation.py`)
 covers exactly this set of alert types plus `COMPROMISE_CHAIN_DETECTED`.
+
+**Why `_persist_arp_alert` also checks `DeviceRepository.canonical_mac`**:
+confirmed live 2026-08-30 — a phone whose rotated MAC had already been
+identity-linked by `DeviceIdentityLinker` (above) could still trip a fresh
+`ARP_SPOOF` hours later. `ArpWatcher` has no idea two MACs were ever linked;
+its in-memory IP→MAC table only knows what it last saw on the wire, and can
+get re-poisoned with the old, rotated-away pairing by a stale ARP cache
+entry elsewhere on the LAN, a gratuitous ARP, or even `_reconcile_arp_table`'s
+own periodic DHCP-lease reseed catching a not-yet-expired old lease. Before
+treating a MAC change as spoofing, `_persist_arp_alert` now resolves both
+`old_mac` and `new_mac` to their canonical identity (one hop, same
+no-multi-hop-chain invariant `DeviceRepository.link()` itself maintains) —
+if they match, this is noise from an identity Heimdall already resolved,
+not a new finding, so it reseeds `ArpWatcher`'s table with the confirmed
+pairing and returns without alerting.
 
 ## The rule engine — `sentinel/detection/rules_engine.py`
 

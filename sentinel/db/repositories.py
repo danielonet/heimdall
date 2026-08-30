@@ -150,6 +150,26 @@ class DeviceRepository:
             await session.refresh(old)
             return old
 
+    async def canonical_mac(self, mac_address: str) -> str:
+        """Resolves mac_address to its canonical identity: itself if unknown
+        or unlinked, otherwise whatever it's linked_to_mac (single hop only —
+        see link()'s no-multi-hop-chain invariant, which guarantees one hop
+        is always enough).
+
+        Used by SentinelScheduler._persist_arp_alert to recognize an ARP
+        MAC change between two rows Heimdall has already identity-linked as
+        the same physical device (e.g. a stale ARP cache entry, or a
+        gratuitous ARP, briefly reintroducing an old rotated-away MAC) —
+        that's not spoofing, just noise from an identity Heimdall already
+        resolved, and must not re-alert every time it happens. See
+        DeviceIdentityLinker for how a link is decided in the first place.
+        """
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            if device is None or device.linked_to_mac is None:
+                return mac_address
+            return device.linked_to_mac
+
     async def unlink(self, mac_address: str) -> bool:
         """Clears linked_to_mac/linked_at/link_reason on this exact row —
         the manual-undo path (see POST /api/devices/<mac>/unlink). Returns

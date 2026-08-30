@@ -1734,6 +1734,31 @@ class SentinelScheduler:
             await self._persist_ip_conflict_alert(event, new_mac)
             return
 
+        # Confirmed live 2026-08-30: a device Heimdall has *already*
+        # identity-linked (see _identity_link_job/DeviceIdentityLinker) can
+        # still trip a fresh ARP_SPOOF hours after linking — the old,
+        # rotated-away MAC briefly reappearing on the wire (a stale ARP
+        # cache entry elsewhere on the LAN, a gratuitous ARP, or
+        # _reconcile_arp_table's own periodic DHCP-lease reseed catching a
+        # not-yet-expired old lease) looks identical to spoofing to
+        # ArpWatcher, which has no idea the two MACs were ever linked. If
+        # both sides of this "change" already resolve to the same canonical
+        # identity, it's exactly that kind of already-resolved noise, not a
+        # new finding — reseed the table with the confirmed-canonical MAC so
+        # ArpWatcher stops flip-flopping between the two, and skip alerting.
+        old_mac = event.get('old_mac')
+        if old_mac and new_mac:
+            device_repo = DeviceRepository()
+            old_canonical = await device_repo.canonical_mac(old_mac)
+            new_canonical = await device_repo.canonical_mac(new_mac)
+            if old_canonical == new_canonical:
+                logger.info(
+                    'ARP change for %s (%s -> %s) is between two MACs already identity-linked '
+                    'as %s — not treating as spoofing', event.get('ip'), old_mac, new_mac, old_canonical,
+                )
+                self._arp_watcher.seed([(event['ip'], new_mac)])
+                return
+
         # Before treating an untrusted MAC change as spoofing: actively
         # re-poll the router's own DHCP leases (see
         # _verify_arp_change_against_dhcp) to check whether this is actually
