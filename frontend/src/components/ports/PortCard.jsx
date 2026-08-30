@@ -5,7 +5,7 @@ import { PortHistorySparkline } from './PortHistorySparkline'
 import { formatBytes } from '../../lib/format'
 
 export function PortCard({ port }) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
   const { data: history } = usePortHistory(port.port_alias, { enabled: expanded })
   const isUp = port.status === 'UP'
 
