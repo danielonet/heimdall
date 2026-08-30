@@ -93,7 +93,7 @@ pursued" below).
 ```python
 class AnomalyEngine:
     def __init__(self, model_store, min_samples, contamination,
-                 magnitude_multiplier=0.5, alert_magnitude_multiplier=1.5):
+                 magnitude_multiplier=0.5, alert_magnitude_multiplier=6.0):
         ...
 
     def score(self, sample) -> float:
@@ -120,7 +120,7 @@ class AnomalyEngine:
 | `min_samples` (`ML_MIN_SAMPLES_TO_TRAIN`) | 100 (~25 min at the default poll interval) | Env var |
 | `contamination` (`ML_CONTAMINATION`) | 0.05 global default | Env var globally; **per-device-type on nightly retrain**, see Layer 3 |
 | `magnitude_multiplier` (`ML_ANOMALY_MAGNITUDE_MULTIPLIER`) | 0.5 | Env var, see Layer 2 |
-| `alert_magnitude_multiplier` (`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`) | 1.5 | Env var, see Layer 4 |
+| `alert_magnitude_multiplier` (`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`) | 6.0 | Env var, see Layer 4 |
 | LOF `n_neighbors` | `min(20, max(len(X)//5, 1))` | No — derived from sample count |
 | `IsolationForest(n_estimators=100, random_state=42)` | fixed | No |
 
@@ -252,7 +252,8 @@ used/tested directly). It applies the *same* two-model-agreement +
 exactly like `is_anomalous() == False`) — a sample that clears it is then
 checked against a second, stricter, self-relative gate:
 `ANOMALY_THRESHOLD - (alert_magnitude_multiplier * score_std)`
-(`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`, default 1.5 — 3x the base 0.5).
+(`ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER`, default 6.0 — 12x the base 0.5;
+raised from an initial 3x that still read as too trigger-happy in practice).
 Clearing the base gate but not this one returns `'INFO'`; clearing both
 returns `'WARNING'`. Both gates use the *same* self-relative `score_std`
 Layer 2 already computes — no new model state, no migration.

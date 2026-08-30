@@ -42,7 +42,7 @@ class AnomalyEngine:
 
     def __init__(
         self, model_store: ModelStore, min_samples: int, contamination: float,
-        magnitude_multiplier: float = 0.5, alert_magnitude_multiplier: float = 1.5,
+        magnitude_multiplier: float = 0.5, alert_magnitude_multiplier: float = 6.0,
     ) -> None:
         self._store = model_store
         self._min_samples = min_samples

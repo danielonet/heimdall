@@ -95,8 +95,12 @@ class Settings(BaseSettings):
     # alerts. A sample has to clear *this* multiplier — further out along
     # the same device's own fitted score spread — before it's escalated
     # from an informational data point to something worth a WARNING. See
-    # AnomalyEngine.anomaly_severity().
-    ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER: float = 1.5
+    # AnomalyEngine.anomaly_severity(). 6.0 = 12x MAGNITUDE_MULTIPLIER
+    # (raised from 3x after the INFO/WARNING split still read as too
+    # trigger-happy in practice) — a sample now has to be a genuinely
+    # extreme outlier for this device, not just a moderately unusual one,
+    # before it escalates past INFO.
+    ML_ANOMALY_ALERT_MAGNITUDE_MULTIPLIER: float = 6.0
     ML_RETRAIN_CRON: str = '0 3 * * *'       # 03:00 daily
     ML_MODEL_DIR: str = '/data/models'       # matches the ml-models Docker volume;
                                               # override in .env for host/console dev
