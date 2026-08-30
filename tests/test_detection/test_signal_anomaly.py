@@ -55,6 +55,16 @@ class _FakeSettingsRepository:
         return self._hours
 
 
+class _FakeTrustedMacRepository:
+    """Test double: no DB, just a fixed set of trusted MACs."""
+
+    def __init__(self, trusted: set[str] | None = None) -> None:
+        self._trusted = trusted or set()
+
+    async def is_trusted(self, mac_address: str) -> bool:
+        return mac_address in self._trusted
+
+
 def _device(rssi: int, interface: str = 'WiFi', mac: str = _MAC) -> DeviceSnapshot:
     return DeviceSnapshot(
         mac_address=mac,
@@ -70,10 +80,12 @@ def _detector(
     first_seen: datetime | None = _LONG_AGO,
     learning_period_hours: int = 72,
     macs: tuple[str, ...] = (_MAC,),
+    trusted: bool = False,
 ) -> SignalAnomalyDetector:
     device_repo = _FakeDeviceRepository({mac: first_seen for mac in macs} if first_seen is not None else {})
     settings_repo = _FakeSettingsRepository(learning_period_hours)
-    return SignalAnomalyDetector(device_repo, settings_repo)
+    trusted_repo = _FakeTrustedMacRepository(set(macs) if trusted else set())
+    return SignalAnomalyDetector(device_repo, settings_repo, trusted_repo)
 
 
 class TestInspectDevice:
@@ -196,6 +208,50 @@ class TestInspectDevice:
         alert_b = await detector.inspect_device(_device(rssi=-42, mac='bb:bb:bb:bb:bb:bb'))
         assert alert_a is not None
         assert alert_b is None
+
+
+class TestTrustedDevices:
+    """Requested directly: a trusted device's RSSI shift (could just mean it
+    physically moved) shouldn't file SIGNAL_ANOMALY at all — but the
+    baseline itself must keep tracking regardless, so an untrusted period
+    later doesn't compare against a stale pre-trust reading."""
+
+    async def test_trusted_device_never_alerts_even_on_a_sustained_shift(self):
+        detector = _detector(trusted=True)
+        await detector.inspect_device(_device(rssi=-45))
+        await detector.inspect_device(_device(rssi=-80))
+        alert = await detector.inspect_device(_device(rssi=-80))  # would confirm, if untrusted
+        assert alert is None
+
+    async def test_baseline_still_tracks_while_trusted(self):
+        detector = _detector(trusted=True)
+        await detector.inspect_device(_device(rssi=-45))
+        await detector.inspect_device(_device(rssi=-80))
+        await detector.inspect_device(_device(rssi=-80))
+        assert detector._baseline_rssi[_MAC] == -80
+
+    async def test_trusted_device_resolves_an_already_open_alert(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='SIGNAL_ANOMALY', severity='WARNING', description='seed',
+        )
+
+        detector = _detector(trusted=True)
+        detector._alert_open[_MAC] = True  # simulates having fired before trust was granted
+        detector._baseline_rssi[_MAC] = -45
+        await detector.inspect_device(_device(rssi=-80))
+        await detector.inspect_device(_device(rssi=-80))  # confirms the sustained shift
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_untrusted_device_still_alerts_normally(self):
+        detector = _detector(trusted=False)
+        await detector.inspect_device(_device(rssi=-45))
+        await detector.inspect_device(_device(rssi=-80))
+        alert = await detector.inspect_device(_device(rssi=-80))
+        assert alert is not None
 
 
 class TestLearningPeriod:

@@ -53,26 +53,40 @@ def _sample(sent: int, recv: int, granularity=TrafficGranularity.PER_DEVICE, mac
     )
 
 
+class _FakeTrustedMacRepository:
+    """Test double: no DB, just a fixed set of trusted MACs."""
+
+    def __init__(self, trusted: set[str] | None = None) -> None:
+        self._trusted = trusted or set()
+
+    async def is_trusted(self, mac_address: str) -> bool:
+        return mac_address in self._trusted
+
+
+def _detector(trusted: bool = False) -> HighUploadDetector:
+    return HighUploadDetector(_FakeTrustedMacRepository({_MAC} if trusted else set()))
+
+
 class TestInspectTraffic:
     async def test_below_min_bytes_never_alerts(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         for _ in range(5):
             alert = await detector.inspect_traffic(_sample(sent=100, recv=10), _SNAPSHOT)
             assert alert is None
 
     async def test_low_ratio_never_alerts(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         for _ in range(5):
             alert = await detector.inspect_traffic(_sample(sent=20_000, recv=20_000), _SNAPSHOT)
             assert alert is None
 
     async def test_single_high_ratio_poll_does_not_alert(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         alert = await detector.inspect_traffic(_sample(sent=100_000, recv=1_000), _SNAPSHOT)
         assert alert is None
 
     async def test_sustained_high_ratio_alerts_on_third_poll(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
         assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
@@ -83,7 +97,7 @@ class TestInspectTraffic:
         assert alert.device_mac == 'aa:bb:cc:dd:ee:ff'
 
     async def test_counter_resets_after_alert_fires(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)
         await detector.inspect_traffic(sample, _SNAPSHOT)
         await detector.inspect_traffic(sample, _SNAPSHOT)
@@ -99,7 +113,7 @@ class TestInspectTraffic:
         device over 4 days. That's now AlertRepository.upsert()'s job (at
         the poll_cycle level) — this detector itself has no cooldown of its
         own, so a second, genuinely fresh 3-poll streak must fire again."""
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)
         await detector.inspect_traffic(sample, _SNAPSHOT)
         await detector.inspect_traffic(sample, _SNAPSHOT)
@@ -116,7 +130,7 @@ class TestInspectTraffic:
             device_mac=_MAC, alert_type='HIGH_UPLOAD', severity='WARNING', description='seed',
         )
 
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)
         await detector.inspect_traffic(sample, _SNAPSHOT)
         await detector.inspect_traffic(sample, _SNAPSHOT)
@@ -140,12 +154,12 @@ class TestInspectTraffic:
             return True
 
         monkeypatch.setattr(AlertRepository, 'resolve', _boom)
-        detector = HighUploadDetector()
+        detector = _detector()
         await detector.inspect_traffic(_sample(sent=100, recv=10), _SNAPSHOT)  # below MIN_BYTES
         assert called is False
 
     async def test_low_ratio_poll_breaks_the_streak(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         high = _sample(sent=100_000, recv=1_000)
         low = _sample(sent=20_000, recv=20_000)
         await detector.inspect_traffic(high, _SNAPSHOT)
@@ -155,14 +169,14 @@ class TestInspectTraffic:
         assert alert is None  # streak restarted, only 1 high poll so far
 
     async def test_per_port_samples_are_skipped(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         port_sample = _sample(sent=500_000, recv=1_000, granularity=TrafficGranularity.PER_PORT, mac='PHY5')
         for _ in range(5):
             alert = await detector.inspect_traffic(port_sample, _SNAPSHOT)
             assert alert is None
 
     async def test_inspect_device_always_returns_none(self):
-        detector = HighUploadDetector()
+        detector = _detector()
         assert await detector.inspect_device(_SNAPSHOT) is None
 
 
@@ -172,7 +186,7 @@ class TestDeviceTypeAwareThreshold:
         (streaming out) — device_profiles.py raises their threshold to 10:1,
         so a 5:1 ratio (well above the 3:1 default) must not alert."""
         camera_snapshot = dataclasses.replace(_SNAPSHOT, device_type='IP Camera')
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=50_000, recv=10_000)  # 5:1 ratio
         for _ in range(5):
             assert await detector.inspect_traffic(sample, camera_snapshot) is None
@@ -186,7 +200,7 @@ class TestDeviceTypeAwareThreshold:
         below for the regression this profile row's *other* field used to
         silently not apply to this detector at all."""
         printer_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Printer')
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=25_000, recv=10_000)  # 2.5:1
         assert await detector.inspect_traffic(sample, printer_snapshot) is None
         alert = await detector.inspect_traffic(sample, printer_snapshot)
@@ -205,7 +219,7 @@ class TestDeviceTypeAwareThreshold:
         5-poll streak (one short of that) does NOT alert, where the old
         hardcoded 3-poll behavior would have fired on poll 3."""
         phone_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Smartphone')
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)  # well above Smartphone's 2.5:1 threshold
         for _ in range(5):
             assert await detector.inspect_traffic(sample, phone_snapshot) is None
@@ -215,9 +229,42 @@ class TestDeviceTypeAwareThreshold:
 
     async def test_unrecognized_device_type_behaves_like_default(self):
         weird_snapshot = dataclasses.replace(_SNAPSHOT, device_type='Some Router String We Have Never Seen')
-        detector = HighUploadDetector()
+        detector = _detector()
         sample = _sample(sent=100_000, recv=1_000)
         assert await detector.inspect_traffic(sample, weird_snapshot) is None
         assert await detector.inspect_traffic(sample, weird_snapshot) is None
         alert = await detector.inspect_traffic(sample, weird_snapshot)
+        assert alert is not None
+
+
+class TestTrustedDevices:
+    """Requested directly: trusted devices sustaining an ordinary elevated
+    upload ratio (backups, a video call) shouldn't file HIGH_UPLOAD at all."""
+
+    async def test_trusted_device_never_alerts_even_when_sustained_high(self):
+        detector = _detector(trusted=True)
+        sample = _sample(sent=100_000, recv=1_000)
+        for _ in range(5):
+            assert await detector.inspect_traffic(sample, _SNAPSHOT) is None
+
+    async def test_trusted_device_resolves_an_already_open_alert(self):
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='HIGH_UPLOAD', severity='WARNING', description='seed',
+        )
+
+        detector = _detector(trusted=True)
+        detector._alert_open[_MAC] = True  # simulates having fired before trust was granted
+        await detector.inspect_traffic(_sample(sent=100_000, recv=1_000), _SNAPSHOT)
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_untrusted_device_still_alerts_normally(self):
+        detector = _detector(trusted=False)
+        sample = _sample(sent=100_000, recv=1_000)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        await detector.inspect_traffic(sample, _SNAPSHOT)
+        alert = await detector.inspect_traffic(sample, _SNAPSHOT)
         assert alert is not None

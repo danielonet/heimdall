@@ -35,7 +35,7 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample
 from sentinel.db.models import Alert
-from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.detection.detectors.base import BaseDetector
 
 RSSI_DELTA_THRESHOLD_DBM = 15
@@ -44,14 +44,30 @@ SUSTAINED_POLLS = 2
 
 class SignalAnomalyDetector(BaseDetector):
     """Fires when a WiFi device's RSSI shifts by more than RSSI_DELTA_THRESHOLD_DBM
-    and holds there for SUSTAINED_POLLS consecutive polls."""
+    and holds there for SUSTAINED_POLLS consecutive polls.
+
+    Suppressed entirely (no alert at all, not even INFO) for any MAC in the
+    persistent trusted_macs registry — TrustedMacRepository, not
+    devices.is_trusted directly, so this survives a devices-table reset the
+    same way NewDeviceDetector's trust check does. Same reasoning/request as
+    AnomalousVolumeDetector's trust gate. Deliberately checked only where
+    the alert would actually fire (alongside the learning-period check
+    below), not at the top of inspect_device: the baseline itself still
+    tracks every poll regardless of trust, so if a device is later
+    untrusted its baseline reflects real recent behaviour instead of
+    whatever was current the moment trust was granted — the same "still
+    tracks, alert withheld" split the learning-period gate already uses.
+    """
 
     severity = 'WARNING'
     _ALERT_TYPE = 'SIGNAL_ANOMALY'
 
-    def __init__(self, device_repo: DeviceRepository, settings_repo: SettingsRepository) -> None:
+    def __init__(
+        self, device_repo: DeviceRepository, settings_repo: SettingsRepository, trusted_repo: TrustedMacRepository,
+    ) -> None:
         self._device_repo = device_repo
         self._settings_repo = settings_repo
+        self._trusted_repo = trusted_repo
         self._baseline_rssi: dict[str, int] = {}
         self._consecutive_shifted: dict[str, int] = {}
         self._alert_open: dict[str, bool] = {}
@@ -94,6 +110,12 @@ class SignalAnomalyDetector(BaseDetector):
         learning_period_hours = await self._settings_repo.get_ml_learning_period_hours()
         if first_seen is None or datetime.now(timezone.utc) - first_seen < timedelta(hours=learning_period_hours):
             return None  # still learning — baseline updated, but alert withheld
+
+        if await self._trusted_repo.is_trusted(mac):
+            if self._alert_open.get(mac):
+                await AlertRepository().resolve(device_mac=mac, alert_type=self._ALERT_TYPE)
+                self._alert_open[mac] = False
+            return None  # trusted — baseline updated, but alert withheld
 
         self._alert_open[mac] = True
 

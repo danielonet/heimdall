@@ -22,7 +22,7 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficSample, TrafficGranularity
 from sentinel.db.models import Alert
-from sentinel.db.repositories import AlertRepository
+from sentinel.db.repositories import AlertRepository, TrustedMacRepository
 from sentinel.detection.detectors.base import BaseDetector
 from sentinel.detection.device_profiles import get_profile
 
@@ -46,12 +46,21 @@ class HighUploadDetector(BaseDetector):
     a hardcoded 3-poll sustain regardless of device type, so tuning a
     type's sustained-polls value from the UI silently did nothing for
     HIGH_UPLOAD even though the same screen implied it would.
+
+    Suppressed entirely (no alert at all) for any MAC in the persistent
+    trusted_macs registry — TrustedMacRepository, not devices.is_trusted
+    directly, so this survives a devices-table reset the same way
+    NewDeviceDetector's trust check does. Same reasoning/request as
+    AnomalousVolumeDetector's trust gate: a household-trusted device
+    sustaining an unusual upload ratio (backups, a video call) is a
+    decision the household has already made isn't worth watching.
     """
 
     severity = 'WARNING'
     _ALERT_TYPE = 'HIGH_UPLOAD'
 
-    def __init__(self) -> None:
+    def __init__(self, trusted_repo: TrustedMacRepository) -> None:
+        self._trusted_repo = trusted_repo
         self._consecutive_high: dict[str, int] = {}
         self._alert_open: dict[str, bool] = {}
 
@@ -68,6 +77,11 @@ class HighUploadDetector(BaseDetector):
             return None  # port aggregates aren't attributable to one device
 
         mac = sample.mac_address
+        if await self._trusted_repo.is_trusted(mac):
+            self._consecutive_high[mac] = 0
+            await self._resolve_if_open(mac)
+            return None
+
         total = sample.bytes_sent_delta + sample.bytes_recv_delta
         if total < MIN_BYTES_TO_EVALUATE:
             self._consecutive_high[mac] = 0

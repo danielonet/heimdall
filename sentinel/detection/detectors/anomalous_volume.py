@@ -11,7 +11,7 @@ from typing import Optional
 
 from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity, TrafficSample
 from sentinel.db.models import Alert
-from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository
+from sentinel.db.repositories import AlertRepository, DeviceRepository, SettingsRepository, TrustedMacRepository
 from sentinel.detection.detectors.base import BaseDetector
 from sentinel.detection.device_profiles import get_profile
 from sentinel.ml.anomaly_engine import AnomalyEngine
@@ -62,6 +62,18 @@ class AnomalousVolumeDetector(BaseDetector):
     Read fresh from SettingsRepository on every sample (not cached at
     construction) so an admin's change in the Settings tab takes effect on
     the very next poll, without restarting the process.
+
+    Requested directly after exactly the family-VoIP/social-video pattern
+    above kept flooding INFO alerts even after the WARNING split shipped —
+    the household had already decided these devices don't need watching by
+    marking them trusted, so an ML behavioral finding on one is treated as
+    noise, not signal. Suppressed entirely (no alert at all, not even INFO)
+    for any MAC in the persistent trusted_macs registry — TrustedMacRepository,
+    not devices.is_trusted directly, so this survives a devices-table reset
+    the same way NewDeviceDetector's trust check does. An untrusted device
+    still gets the full INFO/WARNING treatment regardless of how ordinary
+    its traffic looks — trust is a household decision, not something this
+    detector infers on its own.
     """
 
     severity = 'WARNING'  # the ceiling — see anomaly_severity() for the actual per-alert value (INFO or WARNING)
@@ -72,10 +84,12 @@ class AnomalousVolumeDetector(BaseDetector):
         engine: AnomalyEngine,
         device_repo: DeviceRepository,
         settings_repo: SettingsRepository,
+        trusted_repo: TrustedMacRepository,
     ) -> None:
         self._engine = engine
         self._device_repo = device_repo
         self._settings_repo = settings_repo
+        self._trusted_repo = trusted_repo
         self._consecutive_anomalous: dict[str, int] = {}
         self._alert_open: dict[str, bool] = {}
 
@@ -87,6 +101,13 @@ class AnomalousVolumeDetector(BaseDetector):
             return None  # per docs/router/wired-monitoring-caveat.md — too noisy per-port
 
         mac = sample.mac_address
+        if await self._trusted_repo.is_trusted(mac):
+            self._consecutive_anomalous[mac] = 0
+            if self._alert_open.get(mac):
+                await AlertRepository().resolve(device_mac=mac, alert_type=self._ALERT_TYPE)
+                self._alert_open[mac] = False
+            return None
+
         first_seen = await self._device_repo.get_first_seen(mac)
         learning_period_hours = await self._settings_repo.get_ml_learning_period_hours()
         if first_seen is None or datetime.now(timezone.utc) - first_seen < timedelta(hours=learning_period_hours):

@@ -85,6 +85,16 @@ class _FakeSettingsRepository:
         return self._hours
 
 
+class _FakeTrustedMacRepository:
+    """Test double: no DB, just a fixed set of trusted MACs."""
+
+    def __init__(self, trusted: set[str] | None = None) -> None:
+        self._trusted = trusted or set()
+
+    async def is_trusted(self, mac_address: str) -> bool:
+        return mac_address in self._trusted
+
+
 def _sample(granularity=TrafficGranularity.PER_DEVICE) -> TrafficSample:
     return TrafficSample(
         mac_address='aa:bb:cc:dd:ee:ff',
@@ -100,11 +110,13 @@ def _detector(
     severity: str | None = None,
     first_seen: datetime | None = _LONG_AGO,
     learning_period_hours: int = 72,
+    trusted: bool = False,
 ) -> AnomalousVolumeDetector:
     device_repo = _FakeDeviceRepository({'aa:bb:cc:dd:ee:ff': first_seen} if first_seen is not None else {})
     settings_repo = _FakeSettingsRepository(learning_period_hours)
+    trusted_repo = _FakeTrustedMacRepository({'aa:bb:cc:dd:ee:ff'} if trusted else set())
     engine = _FakeAnomalyEngine(anomalous=anomalous, severity=severity)
-    return AnomalousVolumeDetector(engine, device_repo, settings_repo)
+    return AnomalousVolumeDetector(engine, device_repo, settings_repo, trusted_repo)
 
 
 class TestInspectTraffic:
@@ -229,6 +241,44 @@ class TestInspectTraffic:
     async def test_inspect_device_always_returns_none(self):
         detector = _detector(anomalous=True)
         assert await detector.inspect_device(_SNAPSHOT) is None
+
+
+class TestTrustedDevices:
+    """Requested directly after the INFO/WARNING split still flooded alerts
+    for family devices already marked trusted — a trusted MAC gets no
+    ANOMALOUS_VOLUME alert at all, regardless of how anomalous the sample is."""
+
+    async def test_trusted_device_never_alerts_even_when_sustained_anomalous(self):
+        detector = _detector(anomalous=True, trusted=True)
+        for _ in range(_SUSTAINED_POLLS + 2):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+
+    async def test_trusted_device_resolves_an_already_open_alert(self):
+        """A device trusted after an alert already fired must have that
+        alert cleared on the very next poll, not linger open forever."""
+        from sentinel.db.repositories import AlertRepository
+
+        alert, _ = await AlertRepository().upsert(
+            device_mac=_MAC, alert_type='ANOMALOUS_VOLUME', severity='WARNING', description='seed',
+        )
+
+        detector = _detector(anomalous=True, trusted=True)
+        detector._alert_open[_MAC] = True  # simulates having fired before trust was granted
+        await detector.inspect_traffic(_sample(), _SNAPSHOT)
+
+        async with get_session() as session:
+            refreshed = await session.get(Alert, alert.id)
+            assert refreshed.resolved is True
+        assert detector._alert_open[_MAC] is False
+
+    async def test_untrusted_device_still_alerts_normally(self):
+        """Sanity check the trust gate doesn't swallow real findings for a
+        device that was never trusted."""
+        detector = _detector(anomalous=True, trusted=False)
+        for _ in range(_SUSTAINED_POLLS - 1):
+            assert await detector.inspect_traffic(_sample(), _SNAPSHOT) is None
+        alert = await detector.inspect_traffic(_sample(), _SNAPSHOT)
+        assert alert is not None
 
 
 class TestLearningPeriod:

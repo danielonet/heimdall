@@ -41,6 +41,18 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
 
     Port/WAN-level detectors are intentionally left out for now — see
     docs/architecture/04-detection-pipeline.md.
+
+    HighUploadDetector/SignalAnomalyDetector/AnomalousVolumeDetector — the
+    three purely behavioral/statistical detectors, as opposed to the
+    identity/security-relevant ones below — are wired with the same shared
+    TrustedMacRepository and suppress their alerts entirely for a trusted
+    MAC (confirmed live 2026-08-30: family devices doing ordinary heavy use
+    kept flooding INFO/WARNING alerts even after prior tuning). NewDeviceDetector
+    already had its own trust check; VendorMismatchDetector/
+    AccessPointCrossingDetector deliberately keep firing regardless of
+    trust — an OUI mismatch or an unauthorized guest->private jump on an
+    already-trusted MAC is arguably more suspicious (a spoofed device
+    hiding behind an established identity), not less.
     """
     from sentinel.db.repositories import DeviceRepository, SettingsRepository, TrustedMacRepository
     from sentinel.detection.detectors.anomalous_volume import AnomalousVolumeDetector
@@ -53,9 +65,9 @@ def create_default_pipeline(anomaly_engine: AnomalyEngine) -> DetectionPipeline:
 
     return DetectionPipeline([
         NewDeviceDetector(DeviceRepository(), TrustedMacRepository()),
-        HighUploadDetector(),
+        HighUploadDetector(TrustedMacRepository()),
         VendorMismatchDetector(),
-        SignalAnomalyDetector(DeviceRepository(), SettingsRepository()),
-        AnomalousVolumeDetector(anomaly_engine, DeviceRepository(), SettingsRepository()),
+        SignalAnomalyDetector(DeviceRepository(), SettingsRepository(), TrustedMacRepository()),
+        AnomalousVolumeDetector(anomaly_engine, DeviceRepository(), SettingsRepository(), TrustedMacRepository()),
         AccessPointCrossingDetector(DeviceRepository()),
     ])

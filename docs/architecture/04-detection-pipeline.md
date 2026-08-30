@@ -89,11 +89,32 @@ buffers/models and never fire.
 | Class | File | Alert type(s) | Severity | Trigger |
 |-------|------|---------------|----------|---------|
 | `NewDeviceDetector` | `new_device.py` | `NEW_DEVICE` | CRITICAL | A device actually connects (`is_online=True`) for the first time ever (`has_connected_before` is false) and isn't in the persistent `trusted_macs` registry. Deliberately ignores devices the router's Hosts/AssociatedDevices tables merely *mention* without a real connection. |
-| `HighUploadDetector` | `high_upload.py` | `HIGH_UPLOAD` | WARNING | Upload/download ratio exceeds a device-type-aware threshold (`device_profiles.get_profile()`, default 3.0×) for `volume_sustained_polls` consecutive polls (default 3). Ignores samples under `MIN_BYTES_TO_EVALUATE` (10 000 bytes) as idle noise. |
-| `VendorMismatchDetector` | `vendor_mismatch.py` | `VENDOR_MISMATCH` (WARNING) / `VENDOR_UNVERIFIED` (INFO) | WARNING / INFO | Hostname strongly implies a vendor (`_HOSTNAME_VENDOR_HINTS`, e.g. `iphone`→apple) the router's OUI lookup either contradicts (`VENDOR_MISMATCH`) or can't resolve at all (`VENDOR_UNVERIFIED` — also the case for a legitimately randomized MAC, so treated as a weaker signal). |
-| `SignalAnomalyDetector` | `signal_anomaly.py` | `SIGNAL_ANOMALY` | WARNING | A WiFi device's RSSI shifts more than `RSSI_DELTA_THRESHOLD_DBM` (15 dBm) from its tracked baseline and holds for `SUSTAINED_POLLS` (2) consecutive polls. Suppressed during the learning window (no baseline yet to judge against). |
-| `AnomalousVolumeDetector` | `anomalous_volume.py` | `ANOMALOUS_VOLUME` | WARNING | Both the per-device IsolationForest *and* LOF models agree a PER_DEVICE traffic sample is an outlier, sustained for `volume_sustained_polls` consecutive samples (device-type-aware, same profile row `HighUploadDetector` reads). Suppressed during `ml_learning_period_hours` after a device's `first_seen`. See `docs/architecture/05-ml-anomaly-engine.md`. |
+| `HighUploadDetector` | `high_upload.py` | `HIGH_UPLOAD` | WARNING | Upload/download ratio exceeds a device-type-aware threshold (`device_profiles.get_profile()`, default 3.0×) for `volume_sustained_polls` consecutive polls (default 3). Ignores samples under `MIN_BYTES_TO_EVALUATE` (10 000 bytes) as idle noise. Suppressed entirely for a trusted MAC — see the note below the table. |
+| `VendorMismatchDetector` | `vendor_mismatch.py` | `VENDOR_MISMATCH` (WARNING) / `VENDOR_UNVERIFIED` (INFO) | WARNING / INFO | Hostname strongly implies a vendor (`_HOSTNAME_VENDOR_HINTS`, e.g. `iphone`→apple) the router's OUI lookup either contradicts (`VENDOR_MISMATCH`) or can't resolve at all (`VENDOR_UNVERIFIED` — also the case for a legitimately randomized MAC, so treated as a weaker signal). Fires regardless of trust — see the note below the table. |
+| `SignalAnomalyDetector` | `signal_anomaly.py` | `SIGNAL_ANOMALY` | WARNING | A WiFi device's RSSI shifts more than `RSSI_DELTA_THRESHOLD_DBM` (15 dBm) from its tracked baseline and holds for `SUSTAINED_POLLS` (2) consecutive polls. Suppressed during the learning window (no baseline yet to judge against) and, once past that, entirely for a trusted MAC — see the note below the table. |
+| `AnomalousVolumeDetector` | `anomalous_volume.py` | `ANOMALOUS_VOLUME` | WARNING | Both the per-device IsolationForest *and* LOF models agree a PER_DEVICE traffic sample is an outlier, sustained for `volume_sustained_polls` consecutive samples (device-type-aware, same profile row `HighUploadDetector` reads). Suppressed during `ml_learning_period_hours` after a device's `first_seen`, and entirely for a trusted MAC — see the note below the table and `docs/architecture/05-ml-anomaly-engine.md`. |
 | `AccessPointCrossingDetector` | `ap_crossing.py` | `AP_TRUST_CROSSING` | WARNING (private→guest) / CRITICAL (guest→private) | A WiFi device's AP association crosses the guest/private trust boundary since its last persisted poll. Plain band-hopping within the same tier (`PRIV0`↔`VID1`, `GUEST2G`↔`GUEST5G`) does **not** fire — only a tier crossing does, since the guest→private direction implies unexplained access escalation. |
+
+**Trust and the three behavioral/statistical detectors** — confirmed live
+2026-08-30: family devices (phones on heavy VoIP/video) kept flooding
+`HIGH_UPLOAD`/`SIGNAL_ANOMALY`/`ANOMALOUS_VOLUME` alerts even after the
+ANOMALOUS_VOLUME INFO/WARNING split (below) shipped — the household had
+already decided these devices don't need watching by marking them trusted
+in the Devices tab, so a purely behavioral finding on one is noise, not
+signal. `HighUploadDetector`, `SignalAnomalyDetector`, and
+`AnomalousVolumeDetector` are each constructed with the shared
+`TrustedMacRepository` and suppress their alert entirely (not even INFO)
+for any MAC in the persistent `trusted_macs` registry — the same registry
+`NewDeviceDetector` already checked, not `devices.is_trusted` directly, so
+it survives a devices-table reset. If an alert is already open when a
+device becomes trusted, the next poll resolves it immediately rather than
+leaving it to linger. `VendorMismatchDetector` and
+`AccessPointCrossingDetector` deliberately do **not** check trust — an OUI
+mismatch or an unauthorized guest→private jump on an already-trusted MAC
+reads as more suspicious, not less (a spoofed device hiding behind an
+established identity), and `NewDeviceDetector`'s own trust check is about
+suppressing a *first-connection* alert for an already-known device, a
+different concern from behavioral noise.
 
 All six are wired into `create_default_pipeline()`
 (`sentinel/detection/pipeline.py`) in that order. `HighUploadDetector` and
