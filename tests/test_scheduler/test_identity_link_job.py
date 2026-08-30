@@ -61,11 +61,16 @@ async def _add_device(mac: str, hostname: str, **overrides) -> None:
 
 class _FakeLivenessProbe:
     """reachable: dict mapping ip -> bool, or a plain bool for every ip.
-    raises_for: set of ips that raise LivenessProbeError instead."""
+    raises_for: set of ips that raise LivenessProbeError instead.
+    resolved_macs: dict mapping ip -> the MAC resolve_mac should report as
+    currently answering there, for the IP-continuity fallback path."""
 
-    def __init__(self, reachable=False, raises_for: set[str] | None = None) -> None:
+    def __init__(
+        self, reachable=False, raises_for: set[str] | None = None, resolved_macs: dict[str, str] | None = None,
+    ) -> None:
         self._reachable = reachable
         self._raises_for = raises_for or set()
+        self._resolved_macs = resolved_macs or {}
 
     async def is_reachable(self, ip: str) -> bool:
         if ip in self._raises_for:
@@ -73,6 +78,11 @@ class _FakeLivenessProbe:
         if isinstance(self._reachable, dict):
             return self._reachable.get(ip, False)
         return self._reachable
+
+    async def resolve_mac(self, ip: str) -> str | None:
+        if ip in self._raises_for:
+            raise LivenessProbeError(f'probe failed for {ip}')
+        return self._resolved_macs.get(ip)
 
 
 @pytest.fixture
@@ -273,3 +283,80 @@ class TestBlockPropagationOnLink:
         scheduler._adapter.block_device.assert_not_awaited()
         alert = await _open_alert(_MAC_B)
         assert 'propagat' not in alert.description.lower()
+
+
+class TestIpContinuityLink:
+    """The fallback path for a rotated MAC that never reported a hostname —
+    see _identity_link_job's docstring for the live incident this closes."""
+
+    async def test_links_when_arp_confirms_the_new_mac_holds_the_ip(self, scheduler):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', is_online=False)
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', is_online=True)
+        scheduler._liveness_probe = _FakeLivenessProbe(resolved_macs={'10.0.0.18': _MAC_B})
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            a = await session.get(Device, _MAC_A)
+        assert a.linked_to_mac == _MAC_B
+        alert = await _open_alert(_MAC_B)
+        assert alert is not None
+        assert alert.raw_data['match'] == 'ip_continuity'
+
+    async def test_does_not_link_when_arp_resolves_a_different_mac(self, scheduler):
+        """Something else is answering at that IP right now — not (yet)
+        confirmed as new_mac, so no link."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', is_online=False)
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', is_online=True)
+        scheduler._liveness_probe = _FakeLivenessProbe(resolved_macs={'10.0.0.18': 'ee:11:00:00:00:99'})
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            a = await session.get(Device, _MAC_A)
+        assert a.linked_to_mac is None
+
+    async def test_does_not_link_when_nothing_answers(self, scheduler):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', is_online=False)
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', is_online=True)
+        scheduler._liveness_probe = _FakeLivenessProbe(resolved_macs={})  # nothing resolves
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            a = await session.get(Device, _MAC_A)
+        assert a.linked_to_mac is None
+
+    async def test_probe_failure_excludes_the_candidate_without_aborting(self, scheduler):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', is_online=False)
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', is_online=True)
+        scheduler._liveness_probe = _FakeLivenessProbe(raises_for={'10.0.0.18'})
+
+        await scheduler._identity_link_job()  # must not raise
+
+        async with get_session() as session:
+            a = await session.get(Device, _MAC_A)
+        assert a.linked_to_mac is None
+
+    async def test_resolves_the_new_macs_open_arp_spoof_alert(self, scheduler):
+        """The exact case this fallback exists for: the rotation already
+        tripped ARP_SPOOF (DHCP verification couldn't confirm it in time),
+        and identity-linking explaining it after the fact should close
+        that alert instead of leaving it open forever."""
+        from sentinel.db.repositories import AlertRepository
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', is_online=False)
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', is_online=True)
+        await AlertRepository().upsert(
+            device_mac=_MAC_B, alert_type='ARP_SPOOF', severity='CRITICAL',
+            description='ARP spoofing suspected: 10.0.0.18 changed',
+        )
+        scheduler._liveness_probe = _FakeLivenessProbe(resolved_macs={'10.0.0.18': _MAC_B})
+
+        await scheduler._identity_link_job()
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Alert).where(Alert.device_mac == _MAC_B, Alert.alert_type == 'ARP_SPOOF')
+            )
+            arp_spoof_alert = result.scalars().first()
+        assert arp_spoof_alert.resolved is True

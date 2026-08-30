@@ -3,6 +3,7 @@ without a real network/CAP_NET_RAW, same reasoning as test_scanner.py
 stubbing out nmap.PortScanner.
 """
 import pytest
+from scapy.all import ARP
 
 from sentinel.security.liveness import ArpLivenessProbe, LivenessProbeError
 
@@ -90,3 +91,53 @@ class TestIsReachable:
 
         assert captured['iface'] == 'wlan0'
         assert captured['timeout'] == 0.5
+
+
+class TestResolveMac:
+    """resolve_mac exists specifically for device_identity.py's IP-
+    continuity fallback, where two candidate identities share the same
+    on-file IP and 'is anything alive here' (is_reachable) is ambiguous —
+    the caller needs to know *which* MAC currently answers."""
+
+    async def test_answered_packet_returns_the_replying_mac_lowercased(self, monkeypatch):
+        reply = ARP(hwsrc='AA:BB:CC:DD:EE:FF')
+        monkeypatch.setattr('sentinel.security.liveness.srp', lambda *a, **k: ([(None, reply)], []))
+        probe = ArpLivenessProbe(iface='eth0')
+
+        assert await probe.resolve_mac('10.0.0.5') == 'aa:bb:cc:dd:ee:ff'
+
+    async def test_no_reply_after_retries_returns_none(self, monkeypatch):
+        monkeypatch.setattr('sentinel.security.liveness.srp', lambda *a, **k: ([], ['unanswered']))
+        probe = ArpLivenessProbe(iface='eth0', retries=2)
+
+        assert await probe.resolve_mac('10.0.0.5') is None
+
+    async def test_stops_probing_after_the_first_reply(self, monkeypatch):
+        calls = []
+
+        def _fake_srp(*args, **kwargs):
+            calls.append(1)
+            return ([(None, ARP(hwsrc='aa:bb:cc:dd:ee:ff'))], [])
+
+        monkeypatch.setattr('sentinel.security.liveness.srp', _fake_srp)
+        probe = ArpLivenessProbe(iface='eth0', retries=5)
+
+        await probe.resolve_mac('10.0.0.5')
+
+        assert len(calls) == 1
+
+    async def test_blank_ip_raises_liveness_probe_error(self):
+        probe = ArpLivenessProbe(iface='eth0')
+
+        with pytest.raises(LivenessProbeError):
+            await probe.resolve_mac('')
+
+    async def test_permission_error_raises_liveness_probe_error_not_none(self, monkeypatch):
+        def _raise(*args, **kwargs):
+            raise PermissionError('Operation not permitted')
+
+        monkeypatch.setattr('sentinel.security.liveness.srp', _raise)
+        probe = ArpLivenessProbe(iface='eth0')
+
+        with pytest.raises(LivenessProbeError):
+            await probe.resolve_mac('10.0.0.5')

@@ -41,6 +41,13 @@ from sentinel.security.mac_vendor import is_locally_administered
 # correlation.py's _LOOKBACK_HOURS.
 _LOOKBACK_HOURS = 24
 
+# Window for find_ip_continuity_candidates' fallback match — tighter than
+# _LOOKBACK_HOURS since a genuine MAC-rotation handoff shows up within one
+# lease renewal/reconnect, not up to a full day later; a shared IP that far
+# apart is more likely coincidental reuse of a freed address than the same
+# device reconnecting.
+_IP_CONTINUITY_WINDOW_HOURS = 4
+
 
 class DeviceGroupMember(TypedDict):
     mac_address: str
@@ -50,6 +57,13 @@ class DeviceGroupMember(TypedDict):
 class DeviceGroup(TypedDict):
     hostname: str
     members: list[DeviceGroupMember]
+
+
+class IpContinuityCandidate(TypedDict):
+    old_mac: str
+    new_mac: str
+    ip_address: str
+    hostname: str  # the OLD device's hostname — carried forward on a successful link
 
 
 class DeviceIdentityLinker:
@@ -90,3 +104,68 @@ class DeviceIdentityLinker:
             for hostname, group in by_hostname.items()
             if len(group) >= 2
         ]
+
+    async def find_ip_continuity_candidates(self, session: AsyncSession) -> list[IpContinuityCandidate]:
+        """Fallback for a device find_candidate_groups can never catch: a
+        rotated MAC whose Host entry has no hostname at all — some devices
+        just don't reliably send DHCP option 12, so the router never
+        captures one, and a device with a permanently blank hostname can
+        never match anything by the hostname rule no matter how many times
+        it reconnects. Confirmed live 2026-08-30: exactly this case, on a
+        phone Heimdall had already linked once by hostname under a
+        different, earlier rotation — the *next* rotation had no hostname
+        and kept tripping ARP_SPOOF instead.
+
+        "Vendor OUI" was considered and dropped as a signal here:
+        is_locally_administered MACs (the only ones either side of a
+        rotation ever are — see find_candidate_groups) have no real OUI by
+        definition, so vendor_name is always blank on both sides and adds
+        no discriminating power. IP continuity does the real work instead:
+        proposes (old_mac, new_mac) pairs where a hostname-having device's
+        on-file IP is also the on-file IP of a fresh, hostname-less,
+        locally-administered MAC that appeared shortly after — the same
+        "old device disappeared, new randomized MAC appeared" shape the
+        primary path looks for, anchored on IP continuity instead of a
+        shared hostname since there isn't one to share.
+
+        Only a proposal, exactly like find_candidate_groups: the caller
+        (_identity_link_job) still has to directly ARP-confirm new_mac is
+        the one actually answering for that IP right now before linking
+        anything (see ArpLivenessProbe.resolve_mac) — necessary here
+        specifically because both rows share the *same* on-file IP, so
+        "is this IP reachable" alone can't tell the two apart.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=_IP_CONTINUITY_WINDOW_HOURS)
+
+        new_rows = (await session.execute(
+            select(Device).where(
+                Device.linked_to_mac.is_(None),
+                (Device.hostname.is_(None)) | (Device.hostname == ''),
+                Device.first_seen >= cutoff,
+            )
+        )).scalars().all()
+
+        candidates: list[IpContinuityCandidate] = []
+        for new_row in new_rows:
+            if not new_row.ip_address or not is_locally_administered(new_row.mac_address):
+                continue
+
+            old_row = (await session.execute(
+                select(Device).where(
+                    Device.mac_address != new_row.mac_address,
+                    Device.linked_to_mac.is_(None),
+                    Device.hostname.isnot(None),
+                    Device.hostname != '',
+                    Device.ip_address == new_row.ip_address,
+                    Device.last_seen >= cutoff,
+                    Device.last_seen <= new_row.first_seen,
+                ).order_by(Device.last_seen.desc())
+            )).scalars().first()
+            if old_row is None or not is_locally_administered(old_row.mac_address):
+                continue
+
+            candidates.append(IpContinuityCandidate(
+                old_mac=old_row.mac_address, new_mac=new_row.mac_address,
+                ip_address=new_row.ip_address, hostname=old_row.hostname,
+            ))
+        return candidates

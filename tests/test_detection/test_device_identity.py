@@ -148,3 +148,106 @@ class TestFindCandidateGroups:
         matches = [g for g in groups if g['hostname'] == 'phone']
         ips = {m['mac_address']: m['ip_address'] for m in matches[0]['members']}
         assert ips == {_MAC_A: '10.0.0.9', _MAC_B: '10.0.0.10'}
+
+
+class TestFindIpContinuityCandidates:
+    """The fallback for a rotated MAC that never reported a hostname at
+    all, so find_candidate_groups' hostname rule can never match it — see
+    that method's docstring for the live incident this closes."""
+
+    async def test_matches_a_hostnameless_mac_claiming_the_old_devices_ip(self, linker):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert len(candidates) == 1
+        assert candidates[0]['old_mac'] == _MAC_A
+        assert candidates[0]['new_mac'] == _MAC_B
+        assert candidates[0]['ip_address'] == '10.0.0.18'
+        assert candidates[0]['hostname'] == 'phone'
+
+    async def test_new_mac_with_a_real_manufacturer_oui_is_excluded(self, linker):
+        """A device with a genuine hardware MAC claiming a freed IP is just
+        an ordinary new device on the network, not a rotation of anything."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MANUFACTURER_MAC, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_old_mac_with_a_real_manufacturer_oui_is_excluded(self, linker):
+        await _add_device(_MANUFACTURER_MAC, 'printer', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_new_mac_with_a_hostname_is_excluded(self, linker):
+        """Has a hostname of its own — find_candidate_groups is the right
+        (stronger) path for this one, not the fallback."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, 'phone-2', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_old_device_with_no_hostname_is_excluded(self, linker):
+        """Nothing to carry forward — the whole point is anchoring on the
+        old device's hostname."""
+        await _add_device(_MAC_A, '', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_different_ips_do_not_match(self, linker):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.19', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_old_device_outside_the_continuity_window_is_excluded(self, linker):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=8))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_new_device_outside_the_continuity_window_is_excluded(self, linker):
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(
+            _MAC_B, '', ip_address='10.0.0.18',
+            first_seen=_NOW - timedelta(hours=8), last_seen=_NOW - timedelta(hours=8),
+        )
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []
+
+    async def test_already_linked_devices_are_excluded_from_either_side(self, linker):
+        await _add_device(
+            _MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1),
+            linked_to_mac=_MAC_C,
+        )
+        await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert candidates == []

@@ -76,3 +76,39 @@ class ArpLivenessProbe:
             if answered:
                 return True
         return False
+
+    async def resolve_mac(self, ip: str) -> str | None:
+        """Same probe as is_reachable, but returns the MAC that actually
+        answered (lowercased) instead of just whether anything did.
+
+        Needed when two candidate identities share the same *on-file* IP —
+        see device_identity.py's IP-continuity fallback, used when a
+        rotated MAC never reported a hostname so there's nothing to match
+        it to its predecessor by. There, "is this IP reachable" is
+        ambiguous (both the old and new DB rows show the same stale IP);
+        the caller needs to know *which* MAC currently answers for it.
+
+        scapy's srp() is a blocking call — bridged via asyncio.to_thread,
+        the same convention NetworkScanner already uses for nmap (see
+        sentinel/security/scanner.py).
+        """
+        if not ip:
+            raise LivenessProbeError('No IP address to probe')
+        try:
+            return await asyncio.to_thread(self._resolve_mac_sync, ip)
+        except LivenessProbeError:
+            raise
+        except Exception as exc:
+            # PermissionError (no CAP_NET_RAW), OSError (no such interface),
+            # or any other libpcap-level failure — never let this surface as
+            # a plain None, which a caller could mistake for "confirmed
+            # unreachable".
+            raise LivenessProbeError(f'ARP probe of {ip} on {self._iface} failed: {exc}') from exc
+
+    def _resolve_mac_sync(self, ip: str) -> str | None:
+        request = Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=ip)
+        for attempt in range(self._retries):
+            answered, _ = srp(request, timeout=self._timeout_s, iface=self._iface, verbose=False)
+            if answered:
+                return answered[0][1][ARP].hwsrc.lower()
+        return None

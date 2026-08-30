@@ -1095,21 +1095,32 @@ class SentinelScheduler:
         page — and its UNLINK button, for when this gets it wrong — is
         discoverable.
 
-        Also resolves any still-open NEW_DEVICE alert on the old MAC —
-        NewDeviceDetector fires within one poll of any first-seen MAC,
-        including a phone's own address rotating under WiFi MAC
-        randomization, with no awareness of this job at all. Confirmed
-        live: a CRITICAL NEW_DEVICE alert stayed open indefinitely even
-        after the exact same phone was later successfully linked here.
-        This doesn't stop NEW_DEVICE from firing in the first place (that
-        detector runs 15s after a rotation; this job runs on its own
-        5-minute schedule, so some lag between the two is unavoidable) —
-        it just makes sure a since-explained alert doesn't sit open
-        forever once the explanation exists.
+        Also resolves any still-open NEW_DEVICE alert on the old MAC, and
+        any still-open ARP_SPOOF alert on the new one —
+        NewDeviceDetector/ArpWatcher both fire within one poll of any
+        first-seen MAC or unconfirmed rotation, including a phone's own
+        address rotating under WiFi MAC randomization, with no awareness of
+        this job at all. Confirmed live: a CRITICAL NEW_DEVICE alert stayed
+        open indefinitely even after the exact same phone was later
+        successfully linked here. This doesn't stop either alert from
+        firing in the first place (those run within a poll cycle; this job
+        runs on its own 5-minute schedule, so some lag is unavoidable) — it
+        just makes sure a since-explained alert doesn't sit open forever
+        once the explanation exists.
+
+        Two independent ways to propose a link, both requiring direct ARP
+        confirmation before anything is actually linked (see
+        device_identity.py):
+        - find_candidate_groups: devices sharing a hostname.
+        - find_ip_continuity_candidates: a fallback for a rotated MAC whose
+          Host entry never got a hostname at all, so it can never match the
+          hostname rule no matter how many times it reconnects. Confirmed
+          live 2026-08-30 this is a real, recurring case, not theoretical.
         """
         try:
             async with get_session() as session:
                 groups = await self._identity_linker.find_candidate_groups(session)
+                ip_candidates = await self._identity_linker.find_ip_continuity_candidates(session)
 
             for group in groups:
                 reachable: list[str] = []
@@ -1134,38 +1145,73 @@ class SentinelScheduler:
                         f'{old_mac} is unreachable while {new_mac} is confirmed alive — likely the same '
                         f'device reconnecting under a rotated WiFi MAC.'
                     )
-                    linked = await DeviceRepository().link(old_mac=old_mac, new_mac=new_mac, reason=reason)
-                    if linked is None:
-                        continue
+                    await self._complete_identity_link(old_mac, new_mac, group['hostname'], reason, 'hostname')
 
-                    await AlertRepository().resolve(device_mac=old_mac, alert_type='NEW_DEVICE')
+            for candidate in ip_candidates:
+                old_mac, new_mac, ip = candidate['old_mac'], candidate['new_mac'], candidate['ip_address']
+                try:
+                    # Both DB rows share this same on-file IP (that's the
+                    # whole premise of the fallback) — is_reachable can't
+                    # tell them apart, so this needs to know *which* MAC is
+                    # actually answering, not just whether anything is.
+                    resolved_mac = await self._liveness_probe.resolve_mac(ip)
+                except LivenessProbeError:
+                    logger.warning('Identity-link IP-continuity ARP probe failed for %s — excluding it', ip)
+                    continue
+                if resolved_mac != new_mac:
+                    continue  # not (yet) confirmed as the one actually holding this IP
 
-                    description = f"{group['hostname']} ({old_mac}) linked to {new_mac} — {reason}"
-                    # Confirmed real bypass, not theoretical: block_device()
-                    # blacklists old_mac's own Host entry at the router —
-                    # new_mac gets a completely fresh, unblocked Host entry
-                    # the moment it appears, and link() above only ever
-                    # touches linked_to_mac/linked_at/link_reason. Without
-                    # this, blocking a device and then having its MAC
-                    # rotate (which this whole job exists to recognize)
-                    # would silently un-block it in every way that matters,
-                    # while the dashboard kept showing the old MAC as
-                    # blocked. `linked` is the refreshed old-mac row link()
-                    # returns, so linked.is_blocked reflects its state at
-                    # the moment of linking.
-                    if linked.is_blocked:
-                        description += await self._propagate_block_after_link(old_mac, new_mac)
-
-                    async with get_session() as session:
-                        alert = Alert(
-                            device_mac=new_mac, alert_type='DEVICE_IDENTITY_LINKED', severity='INFO',
-                            description=description,
-                            raw_data={'old_mac': old_mac, 'new_mac': new_mac, 'reason': reason},
-                        )
-                        session.add(alert)
-                    emit_alert(alert_to_dict(alert))
+                reason = (
+                    f'{new_mac} has no hostname reported yet, but direct ARP confirms it is the device '
+                    f'currently answering at {ip} — the same IP {old_mac} ("{candidate["hostname"]}") was '
+                    f'last seen on before going quiet. Likely the same device reconnecting under a '
+                    f'rotated WiFi MAC.'
+                )
+                await self._complete_identity_link(
+                    old_mac, new_mac, candidate['hostname'], reason, 'ip_continuity',
+                )
         except Exception:
             logger.exception('Device identity-link scan failed')
+
+    async def _complete_identity_link(
+        self, old_mac: str, new_mac: str, hostname: str, reason: str, match: str,
+    ) -> None:
+        """Shared finish for both _identity_link_job proposal paths once a
+        link is ARP-confirmed: writes the link, resolves whichever alerts
+        the rotation already caused, propagates a block if the old MAC had
+        one, and raises the DEVICE_IDENTITY_LINKED alert. `match`
+        ('hostname' | 'ip_continuity') is stamped onto raw_data purely so
+        the two paths stay distinguishable in the Alerts history.
+        """
+        linked = await DeviceRepository().link(old_mac=old_mac, new_mac=new_mac, reason=reason)
+        if linked is None:
+            return
+
+        await AlertRepository().resolve(device_mac=old_mac, alert_type='NEW_DEVICE')
+        await AlertRepository().resolve(device_mac=new_mac, alert_type='ARP_SPOOF')
+
+        description = f'{hostname} ({old_mac}) linked to {new_mac} — {reason}'
+        # Confirmed real bypass, not theoretical: block_device() blacklists
+        # old_mac's own Host entry at the router — new_mac gets a
+        # completely fresh, unblocked Host entry the moment it appears, and
+        # link() above only ever touches linked_to_mac/linked_at/
+        # link_reason. Without this, blocking a device and then having its
+        # MAC rotate (which this whole job exists to recognize) would
+        # silently un-block it in every way that matters, while the
+        # dashboard kept showing the old MAC as blocked. `linked` is the
+        # refreshed old-mac row link() returns, so linked.is_blocked
+        # reflects its state at the moment of linking.
+        if linked.is_blocked:
+            description += await self._propagate_block_after_link(old_mac, new_mac)
+
+        async with get_session() as session:
+            alert = Alert(
+                device_mac=new_mac, alert_type='DEVICE_IDENTITY_LINKED', severity='INFO',
+                description=description,
+                raw_data={'old_mac': old_mac, 'new_mac': new_mac, 'reason': reason, 'match': match},
+            )
+            session.add(alert)
+        emit_alert(alert_to_dict(alert))
 
     async def _propagate_block_after_link(self, old_mac: str, new_mac: str) -> str:
         """old_mac was blocked before being recognized as the same physical
