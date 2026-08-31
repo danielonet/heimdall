@@ -7,7 +7,6 @@ import { Badge } from '../components/Badge'
 import { AlertAutoResolveSection } from '../components/settings/AlertAutoResolveSection'
 import { AlertStalenessSection } from '../components/settings/AlertStalenessSection'
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
-import { ClearAlertsSection } from '../components/settings/ClearAlertsSection'
 import { DatabaseSection } from '../components/settings/DatabaseSection'
 import { DeviceArchiveSection } from '../components/settings/DeviceArchiveSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
@@ -42,10 +41,12 @@ export function SettingsPage() {
 
   // Keyed off layout mode, not viewport — see PortsPage/ThreatsPage.
   const gridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-4 gap-3'
-  // items-stretch (the grid default) so paired tiles match each other's
-  // height instead of each hugging its own content.
-  const threeUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-3 gap-3'
-  const fourUpClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-4 gap-3'
+  // Every settings tile lives in this one 4-wide grid (items-stretch, the
+  // grid default, matches each row's tiles to the tallest one in it) —
+  // previously split across a mismatched 3-up/4-up pair of groups for no
+  // real reason; one consistent column count reads as a single set of
+  // options, not two unrelated groupings.
+  const tilesClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-4 gap-3'
 
   async function handleLogout() {
     await logout()
@@ -96,18 +97,14 @@ export function SettingsPage() {
         <RouterCredentialsForm />
       </div>
 
-      <div className={threeUpClass}>
+      <div className={tilesClass}>
         <LearningStatusSection />
         <DatabaseSection />
         <NetworkInterfaceSection />
-      </div>
-
-      <div className={fourUpClass}>
         <AutoBlockSection />
         <AlertStalenessSection />
         <AlertAutoResolveSection />
         <DeviceArchiveSection />
-        <ClearAlertsSection />
         <PurgeDatabaseSection />
       </div>
 
