@@ -74,6 +74,7 @@ function placeInBucket(items, sectorStart, sectorSpan, baseRadius) {
       placed.push({
         mac: item.device.mac_address,
         hostname: item.device.hostname,
+        nickname: item.device.nickname,
         ip_address: item.device.ip_address,
         sector: item.sector,
         tier: item.tier,

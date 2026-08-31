@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { deviceDisplayName } from '../../lib/deviceDisplay'
 import { MAP_CENTER, TIER_RADIUS, OUTER_RADIUS } from '../../lib/networkMapLayout'
 
 const { x: CX, y: CY } = MAP_CENTER
@@ -67,7 +68,10 @@ function Node({ node, onSelect, isHovered, onHover }) {
   const baseR = nodeRadius(node.status)
   const r = isHovered ? baseR + 2 : baseR
   const dim = node.status === 'offline' && !isHovered
-  const label = node.hostname || node.mac
+  // nickname beats hostname beats bare MAC — same precedence as everywhere
+  // else in the app (deviceDisplayName), not just a "no hostname" fallback:
+  // a user-given name should win even when a router-reported hostname exists.
+  const label = deviceDisplayName({ nickname: node.nickname, hostname: node.hostname, mac_address: node.mac })
   return (
     <g
       className="cursor-pointer"
@@ -109,7 +113,8 @@ function Node({ node, onSelect, isHovered, onHover }) {
 
 // Callout badge that appears above (or below, near the top edge) a hovered
 // node, making its MAC address legible even when the node's own label shows
-// a hostname instead — and even at high node density where labels overlap.
+// a nickname or hostname instead — and even at high node density where
+// labels overlap.
 function MacHighlight({ node }) {
   if (!node) return null
   const width = node.mac.length * 5.3 + 16
