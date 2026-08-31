@@ -213,6 +213,12 @@ class AppSettings(Base):
     # a device. Deliberately separate from data_retention_days — see the
     # d2b6c94a1f83_app_settings_device_archive_after_days migration docstring.
     device_archive_after_days: Mapped[int] = mapped_column(Integer, server_default='90')
+    # Days an already-archived device may sit archived before the same
+    # sweep job permanently deletes it (row, alerts, DNS/traffic history,
+    # persisted ML model) — see DeviceRepository.purge_archived() and the
+    # f2c8b53e947a_app_settings_device_purge_after_days migration docstring.
+    # Measured from archived_at, additive on top of device_archive_after_days.
+    device_purge_after_days: Mapped[int] = mapped_column(Integer, server_default='90')
 
 
 class TrustedMac(Base):

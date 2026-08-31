@@ -28,6 +28,15 @@ class ModelStore:
     def _path_for(self, mac: str) -> Path:
         return self._model_dir / f'{mac.replace(":", "-")}.joblib'
 
+    def delete(self, mac: str) -> None:
+        """Remove one device's persisted model file, if any — used when a
+        device is permanently purged (see DeviceRepository.purge_archived)
+        so a deleted device doesn't leave an orphaned model file behind
+        forever. Safe to call for a MAC that was never trained (no-op)."""
+        path = self._path_for(mac)
+        if path.exists():
+            path.unlink()
+
     def clear_all(self) -> None:
         """Delete every persisted model file — used when purging the database
         so every device restarts its learning period from scratch instead of

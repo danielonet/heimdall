@@ -279,6 +279,55 @@ class TestDeviceArchiveAfterDays:
         assert resp.status_code == 401
 
 
+class TestDevicePurgeAfterDays:
+    def test_default_is_90(self, client):
+        resp = client.get('/api/settings')
+        assert resp.get_json()['device_purge_after_days'] == 90
+
+    def test_updates_the_threshold(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': 30}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['device_purge_after_days'] == 30
+
+        resp = client.get('/api/settings')
+        assert resp.get_json()['device_purge_after_days'] == 30
+
+    def test_rejects_zero(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': 0}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_negative(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': -1}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_absurdly_large_values(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': 999999}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_non_integer(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': 'a lot'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_boolean(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': True}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_requires_auth(self, client):
+        resp = client.patch('/api/settings', json={'device_purge_after_days': 30})
+        assert resp.status_code == 401
+
+    def test_independent_from_device_archive_after_days(self, client, auth_headers):
+        """Setting one must not clobber the other — they're separate columns
+        despite the shared 'device_' prefix and identical validation shape."""
+        client.patch('/api/settings', json={'device_archive_after_days': 45}, headers=auth_headers)
+        client.patch('/api/settings', json={'device_purge_after_days': 60}, headers=auth_headers)
+
+        resp = client.get('/api/settings')
+        data = resp.get_json()
+        assert data['device_archive_after_days'] == 45
+        assert data['device_purge_after_days'] == 60
+
+
 class TestPurge:
     def test_requires_auth(self, client):
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD})

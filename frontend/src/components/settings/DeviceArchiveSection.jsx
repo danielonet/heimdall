@@ -8,6 +8,8 @@ import { SettingNumberField } from './SettingNumberField'
 
 const MIN_DAYS = 7
 const MAX_DAYS = 730 // 2 years — must match sentinel/api/routes/settings.py
+const MIN_PURGE_DAYS = 7
+const MAX_PURGE_DAYS = 730 // 2 years — must match sentinel/api/routes/settings.py
 
 export function DeviceArchiveSection() {
   const { data, isLoading } = useSettings()
@@ -28,7 +30,7 @@ export function DeviceArchiveSection() {
       <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
         A device with no activity for this many days is automatically hidden from device counts/lists
         as stale — a guest's phone, a discarded gadget. Trusted, blocked, and quarantined devices are
-        never touched. Nothing is deleted — restore any device below.
+        never touched. Nothing is deleted yet — restore any device below.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}
@@ -42,6 +44,25 @@ export function DeviceArchiveSection() {
           max={MAX_DAYS}
           pending={mutation.isPending}
           onSave={(days) => mutation.mutate({ device_archive_after_days: days })}
+        />
+      )}
+
+      <p className="mb-2 mt-3 text-[10px] leading-relaxed text-text-secondary">
+        An already-archived device that stays archived for this many <strong>more</strong> days is{' '}
+        <strong>permanently deleted</strong> — its record, alerts, DNS/traffic history, and learned
+        traffic model, all removed. Same trusted/blocked/quarantined exemptions as above.{' '}
+        <strong>Cannot be undone.</strong>
+      </p>
+
+      {!isLoading && data && (
+        <SettingNumberField
+          label="THEN DELETE AFTER"
+          unit="more days"
+          value={data.device_purge_after_days}
+          min={MIN_PURGE_DAYS}
+          max={MAX_PURGE_DAYS}
+          pending={mutation.isPending}
+          onSave={(days) => mutation.mutate({ device_purge_after_days: days })}
         />
       )}
 

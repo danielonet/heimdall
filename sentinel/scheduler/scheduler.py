@@ -1287,19 +1287,28 @@ class SentinelScheduler:
             logger.exception('Stale-device reap sweep failed')
 
     async def _device_archive_sweep_job(self) -> None:
-        """Soft-archives devices with no activity in AppSettings.
-        device_archive_after_days (default 90) — see DeviceRepository.
-        archive_stale(). Read fresh from SettingsRepository every run, same
-        reasoning as every other admin-tunable sweep in this file. Not the
-        same job as _stale_device_reap_job above — that one ARP-probes
-        currently-"online" devices to correct is_online faster than the
-        router's own slow view; this one is a much longer-horizon sweep for
-        devices that simply haven't been active in a long time.
+        """Two stages of one devices lifecycle, both admin-tunable from the
+        Settings tab and both read fresh from SettingsRepository every run
+        (same reasoning as every other tunable sweep in this file):
 
-        No alert raised per archive (unlike DEVICE_IDENTITY_LINKED) — this
-        is routine, low-stakes, reversible housekeeping, same posture as
+          1. Soft-archives devices with no activity in AppSettings.
+             device_archive_after_days (default 90) — see DeviceRepository.
+             archive_stale(). Reversible, nothing deleted.
+          2. Permanently deletes devices that have themselves been archived
+             for AppSettings.device_purge_after_days (default 90, on top of
+             stage 1's window) — see DeviceRepository.purge_archived().
+             Requested directly: archived-forever isn't real cleanup, it
+             just relocates the clutter. NOT reversible.
+
+        Not the same job as _stale_device_reap_job above — that one
+        ARP-probes currently-"online" devices to correct is_online faster
+        than the router's own slow view; this one is a much longer-horizon
+        sweep for devices that simply haven't been active in a long time.
+
+        No alert raised for either stage (unlike DEVICE_IDENTITY_LINKED) —
+        both are routine, low-stakes housekeeping, same posture as
         _data_retention_job's INFO-log-only precedent, not a decision that
-        needs prompt human review. Discovery and undo instead happen via
+        needs prompt human review. Discovery and undo (stage 1 only) happen via
         the Settings tab's device archive section.
         """
         try:
@@ -1311,6 +1320,24 @@ class SentinelScheduler:
                 )
         except Exception:
             logger.exception('Device archive sweep failed')
+
+        # Second, later stage of the same lifecycle — isolated in its own
+        # try/except so a purge failure can never suppress the archive
+        # step above (or vice versa) having already succeeded this run.
+        # See DeviceRepository.purge_archived's own docstring for why this
+        # exists: archiving alone never actually deletes anything.
+        try:
+            purge_days = await SettingsRepository().get_device_purge_after_days()
+            purged = await DeviceRepository().purge_archived(timedelta(days=purge_days))
+            if purged:
+                for mac in purged:
+                    self._anomaly_engine.forget(mac)
+                logger.info(
+                    'Device archive sweep: permanently deleted %d device(s) archived for %d+ days: %s',
+                    len(purged), purge_days, ', '.join(purged),
+                )
+        except Exception:
+            logger.exception('Device purge sweep failed')
 
     async def _security_digest_job(self) -> None:
         """Periodic 'here's what happened' summary. Unlike live per-alert

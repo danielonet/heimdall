@@ -85,3 +85,93 @@ class TestDeviceArchiveSweepJob:
 
         monkeypatch.setattr(DeviceRepository, 'archive_stale', _boom)
         await scheduler._device_archive_sweep_job()  # must not raise
+
+
+class _FakeAnomalyEngine:
+    """Test double: no ML state, just records which MACs got forgotten."""
+
+    def __init__(self) -> None:
+        self.forgotten: list[str] = []
+
+    def forget(self, mac: str) -> None:
+        self.forgotten.append(mac)
+
+
+async def _seed_archived_device(days_since_archived: float, **overrides) -> None:
+    archived_at = datetime.now(timezone.utc) - timedelta(days=days_since_archived)
+    defaults = dict(
+        mac_address=_MAC, hostname='test-device', last_seen=archived_at,
+        is_archived=True, archived_at=archived_at, archive_reason='test setup',
+    )
+    defaults.update(overrides)
+    async with get_session() as session:
+        session.add(Device(**defaults))
+
+
+class TestDevicePurgeSweep:
+    """The second, later stage of the same sweep — see
+    DeviceRepository.purge_archived. archive_stale's own exemption tests
+    (TestArchiveStale in test_db/test_repositories.py) already cover the
+    same is_trusted/is_blocked/is_quarantined/linked_to_mac exemptions at
+    the repository level; these focus on the scheduler-level wiring:
+    reading the configured days, forgetting purged MACs' ML state, and
+    isolating failures from the archive step above."""
+
+    @pytest.fixture
+    def scheduler_with_engine(self):
+        sched = object.__new__(SentinelScheduler)
+        sched._anomaly_engine = _FakeAnomalyEngine()
+        return sched
+
+    async def test_purges_a_device_archived_past_the_configured_days(self, scheduler_with_engine):
+        await _seed_archived_device(days_since_archived=100)
+        await SettingsRepository().set_device_purge_after_days(90)
+
+        await scheduler_with_engine._device_archive_sweep_job()
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device is None
+
+    async def test_leaves_a_recently_archived_device_alone(self, scheduler_with_engine):
+        await _seed_archived_device(days_since_archived=1)
+        await SettingsRepository().set_device_purge_after_days(90)
+
+        await scheduler_with_engine._device_archive_sweep_job()
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device is not None
+
+    async def test_forgets_the_purged_macs_ml_state(self, scheduler_with_engine):
+        await _seed_archived_device(days_since_archived=100)
+        await SettingsRepository().set_device_purge_after_days(90)
+
+        await scheduler_with_engine._device_archive_sweep_job()
+
+        assert scheduler_with_engine._anomaly_engine.forgotten == [_MAC]
+
+    async def test_trusted_archived_device_is_never_purged(self, scheduler_with_engine):
+        await _seed_archived_device(days_since_archived=100, is_trusted=True)
+        await SettingsRepository().set_device_purge_after_days(90)
+
+        await scheduler_with_engine._device_archive_sweep_job()
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device is not None
+        assert scheduler_with_engine._anomaly_engine.forgotten == []
+
+    async def test_a_failed_purge_does_not_raise_and_does_not_block_archiving(self, scheduler_with_engine, monkeypatch):
+        async def _boom(*args, **kwargs):
+            raise RuntimeError('DB hiccup')
+
+        monkeypatch.setattr(DeviceRepository, 'purge_archived', _boom)
+        await SettingsRepository().set_device_archive_after_days(90)
+        await _seed_device(days_since_last_seen=100)
+
+        await scheduler_with_engine._device_archive_sweep_job()  # must not raise
+
+        async with get_session() as session:
+            device = await session.get(Device, _MAC)
+        assert device.is_archived is True  # the archive step still ran and succeeded

@@ -8,12 +8,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
 from sentinel.db.models import (
-    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, PortAllowlistEntry, TrustedMac,
+    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, TrafficSample,
+    TrustedMac,
 )
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
@@ -233,6 +234,69 @@ class DeviceRepository:
                 row.archived_at = now
                 row.archive_reason = f'No activity for over {older_than.days} days'
             return len(rows)
+
+    async def purge_archived(self, older_than: timedelta) -> list[str]:
+        """Permanently deletes every device that has been *archived* (see
+        archive_stale above) for longer than `older_than` — the more
+        aggressive second stage of the same lifecycle. archive_stale()
+        only ever hides a device; nothing about it is removed. This
+        actually deletes the device row and its history — alerts, DNS
+        query log, traffic samples — a device that's genuinely never
+        coming back shouldn't sit in the database forever just because
+        "archived" happens to be permanent in practice.
+
+        Deliberately does NOT touch alert_snoozes or port_allowlist,
+        unlike history tables — both are explicitly documented (see their
+        own model docstrings) to survive even a full devices-table
+        purge/reset, same reasoning as trusted_macs: a user-set preference
+        for a MAC, meant to still apply if that MAC ever reappears. This
+        purge only reaches devices that were never trusted in the first
+        place (see the exemption below), but the preference-vs-history
+        distinction those two tables were built on applies here just the
+        same, so they're left alone.
+
+        Measured from archived_at, not last_seen — this is a second,
+        additive countdown that only starts once a device has actually
+        been archived, so device_purge_after_days doesn't overlap or
+        shorten device_archive_after_days's own window.
+
+        Same exemption set as archive_stale, checked again here as
+        defense-in-depth: none of is_trusted/is_blocked/is_quarantined/
+        linked_to_mac IS NOT NULL should ever reach this stage (archive_
+        stale never archives them in the first place), but a device could
+        in principle be manually re-trusted, blocked, or linked *after*
+        being archived — this must not delete it out from under that
+        later decision.
+
+        Returns the list of purged MAC addresses — the caller (see
+        SentinelScheduler._device_archive_sweep_job) uses it to also drop
+        each device's in-memory ML state and persisted model file
+        (AnomalyEngine.forget()), which this repository has no access to.
+
+        traffic_samples is a TimescaleDB hypertable; a plain scoped DELETE
+        (rather than drop_chunks, which is time-range-only and can't
+        target specific devices) is fine here — the row count per purged
+        device is small next to what _data_retention_job's chunk-level
+        drops handle.
+        """
+        cutoff = datetime.now(timezone.utc) - older_than
+        async with get_session() as session:
+            stmt = select(Device.mac_address).where(
+                Device.is_archived.is_(True),
+                Device.is_trusted.is_(False),
+                Device.is_blocked.is_(False),
+                Device.is_quarantined.is_(False),
+                Device.linked_to_mac.is_(None),
+                Device.archived_at < cutoff,
+            )
+            macs = list((await session.execute(stmt)).scalars().all())
+            if not macs:
+                return []
+            await session.execute(delete(Alert).where(Alert.device_mac.in_(macs)))
+            await session.execute(delete(DnsQuery).where(DnsQuery.device_mac.in_(macs)))
+            await session.execute(delete(TrafficSample).where(TrafficSample.mac_address.in_(macs)))
+            await session.execute(delete(Device).where(Device.mac_address.in_(macs)))
+            return macs
 
     async def unarchive(self, mac_address: str) -> bool:
         """Manual undo for archive_stale() — clears is_archived/archived_at/
@@ -667,6 +731,7 @@ class SettingsRepository:
                 'alert_stale_hours': row.alert_stale_hours if row else 24,
                 'alert_auto_resolve_hours': row.alert_auto_resolve_hours if row else 72,
                 'device_archive_after_days': row.device_archive_after_days if row else 90,
+                'device_purge_after_days': row.device_purge_after_days if row else 90,
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -783,6 +848,14 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.device_archive_after_days = days
+
+    async def get_device_purge_after_days(self) -> int:
+        return (await self.get_all())['device_purge_after_days']
+
+    async def set_device_purge_after_days(self, days: int) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.device_purge_after_days = days
 
     async def set_baseline_established_at(self, ts: datetime | None) -> None:
         """ts=None marks "no baseline yet" — used by POST /api/settings/purge

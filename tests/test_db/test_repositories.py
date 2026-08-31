@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from flask import Flask
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from sentinel.config import settings
-from sentinel.db.models import AppSettings, Device, DeviceTypeProfile, TrustedMac
+from sentinel.db.models import Alert, AppSettings, Device, DeviceTypeProfile, DnsQuery, TrafficSample, TrustedMac
 from sentinel.db.repositories import (
     DeviceRepository, DeviceTypeProfileRepository, SettingsRepository, TrustedMacRepository,
 )
@@ -38,8 +38,15 @@ async def _init_db():
     init_db(app)
     yield
     async with get_session() as session:
-        await session.execute(delete(Device).where(Device.mac_address.in_([_MAC, _MAC_2, _MAC_3])))
-        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_([_MAC, _MAC_2, _MAC_3])))
+        macs = [_MAC, _MAC_2, _MAC_3]
+        await session.execute(delete(Device).where(Device.mac_address.in_(macs)))
+        await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(macs)))
+        # TestPurgeArchived seeds per-device rows in these tables to confirm
+        # purge_archived() cleans them up — leftovers from an assertion
+        # failure mid-test would otherwise leak into the shared dev DB.
+        await session.execute(delete(Alert).where(Alert.device_mac.in_(macs)))
+        await session.execute(delete(DnsQuery).where(DnsQuery.device_mac.in_(macs)))
+        await session.execute(delete(TrafficSample).where(TrafficSample.mac_address.in_(macs)))
         await session.execute(delete(AppSettings))
         await session.execute(delete(DeviceTypeProfile).where(DeviceTypeProfile.device_type == _TEST_DEVICE_TYPE))
     await get_engine().dispose()
@@ -395,6 +402,104 @@ class TestArchiveStale:
         assert second == 0
 
 
+class TestPurgeArchived:
+    async def _seed_archived(self, mac: str, days_since_archived: float, **overrides) -> None:
+        archived_at = datetime.now(timezone.utc) - timedelta(days=days_since_archived)
+        defaults = dict(is_archived=True, archived_at=archived_at, archive_reason='test setup')
+        defaults.update(overrides)
+        await _seed_device(mac, last_seen=archived_at, **defaults)
+
+    async def test_purges_a_device_archived_past_the_cutoff(self):
+        await self._seed_archived(_MAC, days_since_archived=100)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == [_MAC]
+        async with get_session() as session:
+            assert await session.get(Device, _MAC) is None
+
+    async def test_leaves_a_recently_archived_device_alone(self):
+        await self._seed_archived(_MAC, days_since_archived=1)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == []
+        async with get_session() as session:
+            assert await session.get(Device, _MAC) is not None
+
+    async def test_leaves_an_unarchived_device_alone_regardless_of_age(self):
+        very_old = datetime.now(timezone.utc) - timedelta(days=1000)
+        await _seed_device(_MAC, last_seen=very_old, is_archived=False)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == []
+
+    async def test_exempts_a_trusted_device(self):
+        await self._seed_archived(_MAC, days_since_archived=100, is_trusted=True)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == []
+
+    async def test_exempts_a_blocked_device(self):
+        await self._seed_archived(_MAC, days_since_archived=100, is_blocked=True)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == []
+
+    async def test_exempts_a_quarantined_device(self):
+        await self._seed_archived(_MAC, days_since_archived=100, is_quarantined=True)
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == []
+
+    async def test_exempts_a_linked_away_device(self):
+        await self._seed_archived(_MAC_2, days_since_archived=100)  # the survivor — a genuine candidate
+        old = datetime.now(timezone.utc) - timedelta(days=100)
+        await self._seed_archived(_MAC, days_since_archived=100, linked_to_mac=_MAC_2, linked_at=old, link_reason='x')
+
+        purged = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert purged == [_MAC_2]
+
+    async def test_deletes_scoped_alerts_and_history(self):
+        """The real point of this method over archive_stale: history
+        actually gets removed, not just the device row — alerts and DNS
+        query log confirmed here; traffic_samples is exercised the same
+        way but via a direct row count (TimescaleDB hypertable, no simple
+        session.get())."""
+        await self._seed_archived(_MAC, days_since_archived=100)
+        now = datetime.now(timezone.utc)
+        async with get_session() as session:
+            session.add(Alert(device_mac=_MAC, alert_type='ANOMALOUS_VOLUME', severity='INFO'))
+            session.add(DnsQuery(time=now, device_mac=_MAC, query='example.com', blocked=False))
+            session.add(TrafficSample(time=now, mac_address=_MAC, bytes_sent_delta=100, bytes_recv_delta=200))
+
+        await DeviceRepository().purge_archived(timedelta(days=90))
+
+        async with get_session() as session:
+            alert_count = len((await session.execute(select(Alert).where(Alert.device_mac == _MAC))).scalars().all())
+            dns_count = len((await session.execute(select(DnsQuery).where(DnsQuery.device_mac == _MAC))).scalars().all())
+            traffic_count = len(
+                (await session.execute(select(TrafficSample).where(TrafficSample.mac_address == _MAC))).scalars().all()
+            )
+        assert alert_count == 0
+        assert dns_count == 0
+        assert traffic_count == 0
+
+    async def test_idempotent_on_repeat_sweep(self):
+        await self._seed_archived(_MAC, days_since_archived=100)
+
+        first = await DeviceRepository().purge_archived(timedelta(days=90))
+        second = await DeviceRepository().purge_archived(timedelta(days=90))
+
+        assert first == [_MAC]
+        assert second == []
+
+
 class TestUnarchive:
     async def test_clears_all_three_columns(self):
         old = datetime.now(timezone.utc) - timedelta(days=100)
@@ -472,6 +577,7 @@ class TestSettingsRepository:
             'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
             'auto_block_on_threat', 'auto_block_expiry_hours', 'last_digest_sent_at',
             'alert_stale_hours', 'alert_auto_resolve_hours', 'device_archive_after_days',
+            'device_purge_after_days',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):

@@ -31,3 +31,26 @@ class TestModelStore:
         store.save('bb:bb:bb:bb:bb:bb', {'iso': 'B'})
         assert store.load('aa:aa:aa:aa:aa:aa') == {'iso': 'A'}
         assert store.load('bb:bb:bb:bb:bb:bb') == {'iso': 'B'}
+
+    def test_delete_removes_the_persisted_file(self, tmp_path):
+        store = ModelStore(str(tmp_path))
+        store.save('aa:bb:cc:dd:ee:ff', {'iso': 1, 'lof': 2})
+
+        store.delete('aa:bb:cc:dd:ee:ff')
+
+        assert store.load('aa:bb:cc:dd:ee:ff') is None
+        assert not (tmp_path / 'aa-bb-cc-dd-ee-ff.joblib').exists()
+
+    def test_delete_never_trained_mac_is_a_no_op(self, tmp_path):
+        store = ModelStore(str(tmp_path))
+        store.delete('aa:bb:cc:dd:ee:ff')  # must not raise
+
+    def test_delete_leaves_other_devices_alone(self, tmp_path):
+        store = ModelStore(str(tmp_path))
+        store.save('aa:aa:aa:aa:aa:aa', {'iso': 'A'})
+        store.save('bb:bb:bb:bb:bb:bb', {'iso': 'B'})
+
+        store.delete('aa:aa:aa:aa:aa:aa')
+
+        assert store.load('aa:aa:aa:aa:aa:aa') is None
+        assert store.load('bb:bb:bb:bb:bb:bb') == {'iso': 'B'}

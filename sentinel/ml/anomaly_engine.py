@@ -207,6 +207,17 @@ class AnomalyEngine:
         effective_contamination = contamination if contamination is not None else self._contamination
         self._fit_and_save(mac, np.vstack(feature_vectors), effective_contamination)
 
+    def forget(self, mac: str) -> None:
+        """Drops one device's bootstrap buffer, cached model, and persisted
+        model file — used when a device is permanently purged (see
+        DeviceRepository.purge_archived) so nothing keeps a purged MAC's
+        model in memory or on disk. Same per-MAC teardown reset() does for
+        every device at once. Safe to call for a MAC with no buffered/
+        trained state (each step is independently a no-op)."""
+        self._buffers.pop(mac, None)
+        self._model_cache.pop(mac, None)
+        self._store.delete(mac)
+
     def reset(self) -> None:
         """Clear all in-memory state — bootstrap buffers and the loaded-model
         cache. Used after an external purge of the devices/traffic_samples

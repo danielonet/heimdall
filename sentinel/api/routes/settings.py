@@ -35,6 +35,8 @@ MIN_ALERT_AUTO_RESOLVE_HOURS = 1
 MAX_ALERT_AUTO_RESOLVE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertAutoResolveSection.jsx
 MIN_DEVICE_ARCHIVE_AFTER_DAYS = 7
 MAX_DEVICE_ARCHIVE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DeviceArchiveSection.jsx
+MIN_DEVICE_PURGE_AFTER_DAYS = 7
+MAX_DEVICE_PURGE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DeviceArchiveSection.jsx
 
 
 async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:
@@ -66,6 +68,7 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         alert_stale_hours=data['alert_stale_hours'],
         alert_auto_resolve_hours=data['alert_auto_resolve_hours'],
         device_archive_after_days=data['device_archive_after_days'],
+        device_purge_after_days=data['device_purge_after_days'],
     )
     if include_db_size:
         payload['db_size_mb'] = await _get_db_size_mb()
@@ -200,6 +203,16 @@ async def update_settings():
                   f'{MIN_DEVICE_ARCHIVE_AFTER_DAYS} and {MAX_DEVICE_ARCHIVE_AFTER_DAYS}'
         ), 400
 
+    device_purge_after_days = body.get('device_purge_after_days')
+    if 'device_purge_after_days' in body and (
+        not isinstance(device_purge_after_days, int) or isinstance(device_purge_after_days, bool)
+        or not (MIN_DEVICE_PURGE_AFTER_DAYS <= device_purge_after_days <= MAX_DEVICE_PURGE_AFTER_DAYS)
+    ):
+        return jsonify(
+            error=f'device_purge_after_days must be an integer between '
+                  f'{MIN_DEVICE_PURGE_AFTER_DAYS} and {MAX_DEVICE_PURGE_AFTER_DAYS}'
+        ), 400
+
     # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
@@ -267,6 +280,8 @@ async def update_settings():
         await repo.set_alert_auto_resolve_hours(alert_auto_resolve_hours)
     if 'device_archive_after_days' in body:
         await repo.set_device_archive_after_days(device_archive_after_days)
+    if 'device_purge_after_days' in body:
+        await repo.set_device_purge_after_days(device_purge_after_days)
 
     return jsonify(await _serialize(repo))
 

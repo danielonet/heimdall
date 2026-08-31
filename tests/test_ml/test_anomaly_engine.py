@@ -275,3 +275,52 @@ class TestAnomalySeverity:
         engine._alert_magnitude_multiplier = 1.5
         engine._model_cache[self._MAC] = {'iso': _FakeIso(-0.01), 'lof': _FakeLof(), 'score_std': 0.0}
         assert engine.anomaly_severity(_sample(self._MAC)) == 'WARNING'
+
+
+class TestForget:
+    """AnomalyEngine.forget() — used when a device is permanently purged
+    (see DeviceRepository.purge_archived) so nothing keeps referencing a
+    MAC that no longer exists."""
+
+    def _train(self, engine, mac='aa:bb:cc:dd:ee:ff'):
+        for i in range(MIN_SAMPLES):
+            engine.score(_varying_sample(mac, offset_s=i))
+        return mac
+
+    def test_drops_the_cached_model(self, engine):
+        mac = self._train(engine)
+        assert mac in engine._model_cache
+
+        engine.forget(mac)
+
+        assert mac not in engine._model_cache
+
+    def test_deletes_the_persisted_model_file(self, engine, tmp_path):
+        mac = self._train(engine)
+        assert (tmp_path / 'aa-bb-cc-dd-ee-ff.joblib').exists()
+
+        engine.forget(mac)
+
+        assert not (tmp_path / 'aa-bb-cc-dd-ee-ff.joblib').exists()
+
+    def test_drops_an_in_progress_bootstrap_buffer(self, engine):
+        mac = 'aa:bb:cc:dd:ee:ff'
+        for i in range(MIN_SAMPLES - 1):
+            engine.score(_sample(mac, offset_s=i))
+        assert mac in engine._buffers
+
+        engine.forget(mac)
+
+        assert mac not in engine._buffers
+
+    def test_forgetting_a_mac_with_no_state_is_a_no_op(self, engine):
+        engine.forget('never:seen:mac:00:00:00')  # must not raise
+
+    def test_leaves_other_devices_alone(self, engine):
+        trained_mac = self._train(engine, mac='aa:bb:cc:dd:ee:ff')
+        for i in range(MIN_SAMPLES - 1):
+            engine.score(_sample('bb:bb:bb:bb:bb:bb', offset_s=i))
+
+        engine.forget(trained_mac)
+
+        assert 'bb:bb:bb:bb:bb:bb' in engine._buffers
