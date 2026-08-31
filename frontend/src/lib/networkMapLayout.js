@@ -1,7 +1,7 @@
 // Positions devices on the Network Map's radial layout: angle encodes AP
 // segment (reusing apGroups.js — the same grouping the Devices page's
 // "GROUP BY AP" toggle uses), distance from center encodes urgency.
-import { apGroupKey, groupByAp } from './apGroups'
+import { apGroupKey, groupByAp, UNASSOCIATED_AP_GROUP } from './apGroups'
 import { isDeviceOnline } from './deviceFilters'
 
 export const MAP_CENTER = { x: 500, y: 380 }
@@ -55,6 +55,23 @@ function hashMac(mac) {
   return h
 }
 
+// Shared shape every placed node gets, regardless of which placement
+// strategy computed its angle/radius.
+function nodeAt(item, angle, r) {
+  return {
+    mac: item.device.mac_address,
+    hostname: item.device.hostname,
+    nickname: item.device.nickname,
+    ip_address: item.device.ip_address,
+    sector: item.sector,
+    tier: item.tier,
+    status: item.status,
+    angle,
+    x: MAP_CENTER.x + Math.cos(angle) * r,
+    y: MAP_CENTER.y + Math.sin(angle) * r,
+  }
+}
+
 function placeInBucket(items, sectorStart, sectorSpan, baseRadius) {
   const dense = items.length > DENSE_BUCKET_THRESHOLD
   const rings = dense
@@ -70,22 +87,62 @@ function placeInBucket(items, sectorStart, sectorSpan, baseRadius) {
       const slot = (i + 0.5) / list.length
       const angle = sectorStart + slot * sectorSpan
       const jitter = (hashMac(item.device.mac_address) % 17) - 8 // -8..8px, stable per device
-      const r = radius + jitter
-      placed.push({
-        mac: item.device.mac_address,
-        hostname: item.device.hostname,
-        nickname: item.device.nickname,
-        ip_address: item.device.ip_address,
-        sector: item.sector,
-        tier: item.tier,
-        status: item.status,
-        angle,
-        x: MAP_CENTER.x + Math.cos(angle) * r,
-        y: MAP_CENTER.y + Math.sin(angle) * r,
-      })
+      placed.push(nodeAt(item, angle, radius + jitter))
     })
   }
   return placed
+}
+
+// Typical consumer WiFi RSSI range used to normalize signal_strength_dbm —
+// -30 dBm is about as strong as a real client reading gets (adjacent to the
+// AP), -90 dBm is the weak/edge-of-range end. Clamped, not just referenced,
+// so an out-of-range reading still lands at one end of the spread rather
+// than overshooting it.
+const SIGNAL_MIN_DBM = -90
+const SIGNAL_MAX_DBM = -30
+
+// Inner/outer radius each tier's devices spread across in the unassociated
+// sector — unlike placeInBucket's other sectors (which hug a single ring
+// line at TIER_RADIUS[tier] ± a few px of jitter), these bounds cover the
+// *whole* band between adjacent tier rings, since signal strength — not
+// even angular spacing — is what should visibly separate devices here.
+// CALM's outer bound is OUTER_RADIUS itself, the map's true outer edge.
+// THREAT's inner bound stops short of 0: the HEIMDALL core circle (r=70,
+// drawn on top of every node) would otherwise hide a strong-signal CRITICAL
+// device sitting dead center — CORE_CLEARANCE keeps every node visibly
+// outside it, closer=stronger still holds within the remaining band.
+const CORE_CLEARANCE = 85
+const UNASSOCIATED_TIER_INNER = { THREAT: CORE_CLEARANCE, WATCH: TIER_RADIUS.THREAT, CALM: TIER_RADIUS.WATCH }
+const UNASSOCIATED_TIER_OUTER = { THREAT: TIER_RADIUS.THREAT, WATCH: TIER_RADIUS.WATCH, CALM: OUTER_RADIUS }
+
+// Requested directly: a device Heimdall has no live AP association for has
+// no meaningful sector-neighbor structure worth an even angular spread —
+// signal strength is the more informative axis. Threat still decides which
+// tier's band a device falls into (same tierFor() as every other sector,
+// unchanged); within that band, a stronger signal (closer to 0 dBm) sits
+// nearer the tier's inner edge and a weaker one nearer its outer edge — for
+// CALM that outer edge is the map's actual outer ring, so a weak-or-unknown-
+// signal, otherwise-uninteresting device visibly drifts out toward the edge.
+function signalRadius(device, tier) {
+  const inner = UNASSOCIATED_TIER_INNER[tier]
+  const outer = UNASSOCIATED_TIER_OUTER[tier]
+  const raw = device.signal_strength_dbm
+  // Missing/0 is what a device Heimdall has no real reading for reports
+  // (see SignalAnomalyDetector's own "wired devices report 0, not
+  // meaningful" caveat) — treated as the weakest possible signal so a
+  // device with no data drifts to the outer edge rather than skewing
+  // toward the center.
+  const dbm = raw ? Math.min(SIGNAL_MAX_DBM, Math.max(SIGNAL_MIN_DBM, raw)) : SIGNAL_MIN_DBM
+  const strength = (dbm - SIGNAL_MIN_DBM) / (SIGNAL_MAX_DBM - SIGNAL_MIN_DBM) // 0 weak..1 strong
+  return outer - strength * (outer - inner)
+}
+
+function placeUnassociatedBucket(items, sectorStart, sectorSpan, tier) {
+  return items.map((item, i) => {
+    const slot = (i + 0.5) / items.length
+    const angle = sectorStart + slot * sectorSpan
+    return nodeAt(item, angle, signalRadius(item.device, tier))
+  })
 }
 
 /**
@@ -116,7 +173,11 @@ export function computeNodeLayout(devices, alertGroups) {
     for (const tier of TIER_ORDER) {
       const bucket = byTier.get(tier)
       if (bucket.length === 0) continue
-      nodes.push(...placeInBucket(bucket, sectorStart, sectorSpan, TIER_RADIUS[tier]))
+      nodes.push(
+        ...(label === UNASSOCIATED_AP_GROUP
+          ? placeUnassociatedBucket(bucket, sectorStart, sectorSpan, tier)
+          : placeInBucket(bucket, sectorStart, sectorSpan, TIER_RADIUS[tier])),
+      )
     }
   })
 
