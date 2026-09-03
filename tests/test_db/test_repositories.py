@@ -233,6 +233,36 @@ class TestLink:
 
         assert first.linked_to_mac == second.linked_to_mac == _MAC_2
 
+    async def test_carries_the_nickname_forward_onto_a_blank_target(self):
+        await _seed_device(_MAC, nickname="Dad's Phone")
+        await _seed_device(_MAC_2)
+
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='test reason')
+
+        async with get_session() as session:
+            target = await session.get(Device, _MAC_2)
+        assert target.nickname == "Dad's Phone"
+
+    async def test_never_overwrites_a_nickname_already_set_on_the_target(self):
+        await _seed_device(_MAC, nickname='Old Name')
+        await _seed_device(_MAC_2, nickname='Deliberately Renamed')
+
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='test reason')
+
+        async with get_session() as session:
+            target = await session.get(Device, _MAC_2)
+        assert target.nickname == 'Deliberately Renamed'
+
+    async def test_old_mac_with_no_nickname_is_a_no_op_for_the_target(self):
+        await _seed_device(_MAC)
+        await _seed_device(_MAC_2)
+
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='test reason')
+
+        async with get_session() as session:
+            target = await session.get(Device, _MAC_2)
+        assert target.nickname is None
+
     async def test_repoints_when_new_mac_is_itself_already_linked(self):
         """A -> B already exists; linking C -> B must resolve onto B's own
         target, not create a dangling C -> B -> (something) chain."""
@@ -244,6 +274,21 @@ class TestLink:
         linked = await DeviceRepository().link(old_mac=_MAC_3, new_mac=_MAC, reason='C->A, but A is linked to B')
 
         assert linked.linked_to_mac == _MAC_2
+
+    async def test_nickname_carries_to_the_resolved_target_not_the_intermediate(self):
+        """Same A->B, C->A(resolves to B) shape as the test above — C's
+        nickname must land on B (the real canonical target), not get
+        dropped or attached to A (the intermediate old_mac)."""
+        await _seed_device(_MAC)                          # A
+        await _seed_device(_MAC_2)                        # B
+        await _seed_device(_MAC_3, nickname="Kid's Tablet")  # C
+        await DeviceRepository().link(old_mac=_MAC, new_mac=_MAC_2, reason='A->B')
+
+        await DeviceRepository().link(old_mac=_MAC_3, new_mac=_MAC, reason='C->A, but A is linked to B')
+
+        async with get_session() as session:
+            b = await session.get(Device, _MAC_2)
+        assert b.nickname == "Kid's Tablet"
 
     async def test_repoints_existing_chain_on_supersession(self):
         """A already links to B; B itself gets superseded by C — A must be

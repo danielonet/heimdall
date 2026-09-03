@@ -124,6 +124,16 @@ class DeviceRepository:
 
         Idempotent: re-confirming an already-correct link is a no-op write
         (still returns the row). Returns None if old_mac has no row at all.
+
+        Also carries old_mac's nickname forward onto the canonical target,
+        if old_mac has one and the target doesn't already — confirmed live
+        2026-09-03 this was a real gap: nickname is deliberately durable
+        against everything else the poll loop overwrites (see Device.
+        nickname's docstring), but link() itself never touched it, so a
+        renamed device silently lost its name the moment its MAC rotated
+        and got auto-linked. Never overwrites a nickname already set
+        directly on the target — a deliberate rename on the current
+        identity wins over one inherited from a stale old MAC.
         """
         async with get_session() as session:
             old = await session.get(Device, old_mac)
@@ -146,6 +156,11 @@ class DeviceRepository:
                 old.linked_to_mac = target
                 old.linked_at = now
                 old.link_reason = reason
+
+            if old.nickname and target != old_mac:
+                target_device = await session.get(Device, target)
+                if target_device is not None and not target_device.nickname:
+                    target_device.nickname = old.nickname
 
             await session.flush()
             await session.refresh(old)
