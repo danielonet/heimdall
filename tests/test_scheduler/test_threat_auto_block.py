@@ -603,6 +603,59 @@ class TestPersistArpAlertIdentityLink:
         assert device.is_blocked is True
 
 
+class TestPersistArpAlertLateTrustGrant:
+    """Regression coverage for a real incident: a laptop's wired NIC
+    (already-trusted machine, brand-new MAC) got auto-trusted 9s *after*
+    the ARP_SPOOF-triggering alert would have fired, since trust-during-
+    learning depends on the next poll cycle noticing the device online —
+    a different clock than ArpWatcher's real-time packet detection. With
+    auto-block armed this would have blocked the user's own device.
+    _persist_arp_alert now re-checks trust once more, after the DHCP-verify
+    wait, right before the final block decision."""
+
+    async def test_trust_granted_during_the_dhcp_verify_wait_downgrades_to_ip_conflict(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+        # First call (the early check) sees not-yet-trusted; by the second
+        # call (right before the block decision) trust has landed — same
+        # shape as the real incident's 9-second gap.
+        is_trusted_calls = iter([False, True])
+
+        async def _is_trusted(self, mac_address):
+            return next(is_trusted_calls)
+
+        monkeypatch.setattr(TrustedMacRepository, 'is_trusted', _is_trusted)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        alert = await _latest_alert()
+        assert alert.alert_type == 'IP_CONFLICT'
+        assert alert.severity == 'INFO'
+        device = await _get_device()
+        assert device.is_blocked is False
+
+    async def test_still_untrusted_after_the_wait_gets_full_treatment(self, scheduler):
+        """Sanity check: if trust never lands, this second check changes
+        nothing — same full CRITICAL/auto-block path as before."""
+        await _seed_device(is_blocked=False)
+        await SettingsRepository().set_auto_block_on_threat(True)
+
+        await scheduler._persist_arp_alert({
+            'type': 'ARP_SPOOF', 'severity': 'CRITICAL', 'ip': _IP,
+            'old_mac': 'de:ad:be:ef:00:01', 'new_mac': _MAC,
+            'description': f'ARP spoofing suspected: {_IP} changed',
+        })
+
+        alert = await _latest_alert()
+        assert alert.alert_type == 'ARP_SPOOF'
+        device = await _get_device()
+        assert device.is_blocked is True
+
+
 class TestPersistDhcpAlert:
     async def test_rogue_dhcp_offer_attributes_the_alert_to_the_servers_mac_and_blocks_it(self, scheduler):
         await _seed_device(is_blocked=False)

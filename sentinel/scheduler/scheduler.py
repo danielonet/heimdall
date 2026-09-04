@@ -1802,6 +1802,25 @@ class SentinelScheduler:
                 self._arp_watcher.seed([(event['ip'], new_mac)])
             return
 
+        # Confirmed live 2026-09-04: the trust check above runs once, before
+        # the DHCP-verify retry loop's own wait (up to ARP_VERIFICATION_MAX_
+        # ATTEMPTS x ARP_VERIFICATION_RETRY_INTERVAL_S = 45s). A device that
+        # arrives during the learning period only gets auto-trusted once the
+        # next poll cycle notices it's online (_auto_trust_new_connections_
+        # during_learning, jobs.py) — a completely different clock than
+        # ArpWatcher's real-time packet detection, with no guarantee the two
+        # line up before this point. A second laptop NIC (already-trusted
+        # machine, brand-new MAC) plugging in mid-poll-cycle tripped exactly
+        # this: trust landed 9s after this alert would have fired, which
+        # would have auto-blocked the user's own already-trusted device.
+        # Re-checking here catches a trust grant that arrived during the
+        # verify wait — narrows the race, doesn't eliminate it (a grant that
+        # lands after this point still isn't caught), but costs nothing to
+        # add and directly matches an incident that already happened.
+        if new_mac and await TrustedMacRepository().is_trusted(new_mac):
+            await self._persist_ip_conflict_alert(event, new_mac)
+            return
+
         await self._raise_threat_alert(
             new_mac, event['type'], event['severity'], event['description'], raw_data=event,
         )
