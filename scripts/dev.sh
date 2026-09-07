@@ -92,6 +92,7 @@ JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
 ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
+SMTP_PASSWORD_FILE="${REPO_ROOT}/secrets/smtp_password.txt"
 
 if [ -f "${REPO_ROOT}/.env" ]; then
     # shellcheck disable=SC1090
@@ -106,6 +107,7 @@ export ROUTER_PASSWORD_FILE
 export JWT_SECRET_FILE
 export OTX_API_KEY_FILE
 export ADMIN_PASSWORD_FILE
+export SMTP_PASSWORD_FILE
 
 # --no-auto-block always wins over whatever .env sets, regardless of
 # argument/file order — exported after sourcing .env above, not before.
@@ -236,6 +238,7 @@ if $NO_BACKEND; then
     echo "      \"ROUTER_PASSWORD_FILE\": \"${ROUTER_PASSWORD_FILE}\","
     echo "      \"JWT_SECRET_FILE\": \"${JWT_SECRET_FILE}\","
     echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\","
+    echo "      \"SMTP_PASSWORD_FILE\": \"${SMTP_PASSWORD_FILE}\","
     if [ "${DISABLE_AUTO_BLOCK:-}" = "true" ]; then
         echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\","
         echo "      \"DISABLE_AUTO_BLOCK\": \"true\""
