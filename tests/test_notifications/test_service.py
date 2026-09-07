@@ -187,6 +187,51 @@ class TestEmailNotification:
         ))
         await notifier.notify('t', 'm')  # must not raise
 
+    async def test_no_html_message_sends_plain_text_only(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+        await notifier.notify('t', 'm')  # no html_message given, same as every test above
+
+        msg = _FakeSMTP.sent_messages[0]
+        assert msg.is_multipart() is False
+
+    async def test_html_message_sends_a_multipart_alternative_with_embedded_logo(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify('t', 'plain body', html_message='<html><body>rich body</body></html>')
+
+        msg = _FakeSMTP.sent_messages[0]
+        assert msg.get_body(preferencelist=('plain',)).get_content().strip() == 'plain body'
+        html_part = msg.get_body(preferencelist=('html',))
+        assert 'rich body' in html_part.get_content()
+        # The logo must be embedded (Content-ID) inside the html alternative
+        # specifically, matching cid:heimdall-logo referenced in digest.py's
+        # HTML — a plain-text client has no use for the image at all.
+        related = [p for p in msg.walk() if p.get_content_type() == 'image/png']
+        assert len(related) == 1
+        assert related[0]['Content-ID'] == '<heimdall-logo>'
+
+    async def test_missing_logo_file_still_sends_the_html_email(self, monkeypatch, tmp_path):
+        """A missing logo must degrade gracefully — never block the whole
+        digest email over one missing asset."""
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        monkeypatch.setattr(service_module, '_LOGO_PATH', tmp_path / 'does-not-exist.png')
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify('t', 'plain body', html_message='<html><body>rich body</body></html>')
+
+        assert len(_FakeSMTP.sent_messages) == 1
+        msg = _FakeSMTP.sent_messages[0]
+        assert 'rich body' in msg.get_body(preferencelist=('html',)).get_content()
+        assert [p for p in msg.walk() if p.get_content_type() == 'image/png'] == []
+
 
 class TestNotifyNewCriticalAlert:
     """The real-time channel a genuinely new CRITICAL alert goes through —

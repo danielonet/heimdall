@@ -19,7 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import Flask
 from redis.asyncio import Redis, from_url
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import case, delete, func, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
@@ -43,6 +43,9 @@ from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
+from sentinel.notifications.digest import (
+    MAX_ALERT_ROWS, DigestAlertRow, render_digest_html, render_digest_text,
+)
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
@@ -1349,6 +1352,20 @@ class SentinelScheduler:
         calmer "all clear" framing when the window is empty — a periodic
         "still watching, nothing to report" is itself reassurance for a
         home security tool, not noise.
+
+        Requested directly 2026-09-07: the original version only ever
+        showed aggregate counts ("N alerts — X CRITICAL, Y WARNING"), no
+        actual description of what happened, no device names, plain text
+        only. Now queries the individual alert rows too (device hostname/
+        nickname joined in, same precedence deviceDisplayName uses on the
+        frontend) and renders both a plain-text body (see
+        sentinel.notifications.digest.render_digest_text — also what ntfy
+        gets, unchanged) and a branded, tabular HTML body for the email
+        channel (render_digest_html) via NotificationService's html_message
+        param. severity_counts comes from a separate aggregate query, not
+        derived from the (capped) detail rows — see render_digest_text's
+        own docstring for why that distinction matters once a day exceeds
+        MAX_ALERT_ROWS.
         """
         try:
             settings_repo = SettingsRepository()
@@ -1357,35 +1374,46 @@ class SentinelScheduler:
             cutoff = last_sent or (now - timedelta(days=1))
 
             async with get_session() as session:
-                rows = (await session.execute(
-                    select(Alert.severity, Alert.alert_type, func.count().label('count'))
+                severity_rows = (await session.execute(
+                    select(Alert.severity, func.count().label('count'))
                     .where(Alert.created_at >= cutoff)
-                    .group_by(Alert.severity, Alert.alert_type)
-                    .order_by(func.count().desc())
+                    .group_by(Alert.severity)
                 )).all()
+                severity_counts = {r.severity: r.count for r in severity_rows}
+                total = sum(severity_counts.values())
 
-            total = sum(r.count for r in rows)
-            if total == 0:
-                message = f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.'
-                severity = 'INFO'
-            else:
-                severity_counts: dict[str, int] = {}
-                for r in rows:
-                    severity_counts[r.severity] = severity_counts.get(r.severity, 0) + r.count
-                severity_line = ', '.join(
-                    f'{count} {sev}' for sev, count in
-                    sorted(severity_counts.items(), key=lambda kv: -kv[1])
-                )
-                top_types = ', '.join(f'{r.alert_type} ({r.count})' for r in rows[:5])
-                message = (
-                    f'{total} alert(s) since {cutoff:%Y-%m-%d %H:%M} UTC — {severity_line}.\n'
-                    f'Top types: {top_types}'
-                )
-                severity = (
-                    'CRITICAL' if severity_counts.get('CRITICAL')
-                    else 'WARNING' if severity_counts.get('WARNING')
-                    else 'INFO'
-                )
+                digest_rows: list[DigestAlertRow] = []
+                if total > 0:
+                    detail_rows = (await session.execute(
+                        select(
+                            Alert.severity, Alert.alert_type, Alert.description, Alert.created_at,
+                            Alert.device_mac, Device.hostname, Device.nickname,
+                        )
+                        .outerjoin(Device, Device.mac_address == Alert.device_mac)
+                        .where(Alert.created_at >= cutoff)
+                        .order_by(
+                            case((Alert.severity == 'CRITICAL', 0), (Alert.severity == 'WARNING', 1), else_=2),
+                            Alert.created_at.desc(),
+                        )
+                        .limit(MAX_ALERT_ROWS)
+                    )).all()
+                    digest_rows = [
+                        DigestAlertRow(
+                            severity=r.severity, alert_type=r.alert_type, description=r.description,
+                            device_mac=r.device_mac, hostname=r.hostname, nickname=r.nickname,
+                            created_at=r.created_at,
+                        )
+                        for r in detail_rows
+                    ]
+
+            truncated = total > len(digest_rows)
+            message = render_digest_text(digest_rows, total, severity_counts, cutoff, truncated)
+            html_message = render_digest_html(digest_rows, total, severity_counts, cutoff, now, truncated)
+            severity = (
+                'CRITICAL' if severity_counts.get('CRITICAL')
+                else 'WARNING' if severity_counts.get('WARNING')
+                else 'INFO'
+            )
 
             if self._notifier is not None:
                 # 'Security Digest', not 'Heimdall security digest' —
@@ -1393,7 +1421,9 @@ class SentinelScheduler:
                 # subject with 'Heimdall: ', so the old title doubled up
                 # to 'Heimdall: Heimdall security digest'. ntfy's title
                 # gets no such prefix, so this reads cleanly there too.
-                await self._notifier.notify(title='Security Digest', message=message, severity=severity)
+                await self._notifier.notify(
+                    title='Security Digest', message=message, severity=severity, html_message=html_message,
+                )
             await settings_repo.set_last_digest_sent_at(now)
         except Exception:
             logger.exception('Security digest job failed')

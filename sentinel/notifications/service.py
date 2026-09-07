@@ -11,12 +11,23 @@ import logging
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
+from pathlib import Path
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _NTFY_PRIORITY = {'CRITICAL': 'urgent', 'WARNING': 'high', 'INFO': 'default'}
+
+# Same PNG as frontend/src/assets/heimdall-icon.png — copied rather than
+# referenced across the frontend/backend boundary so the backend package
+# stays self-contained (no dependency on the frontend source tree existing
+# at runtime). Keep both in sync if the logo ever changes. Embedded via
+# Content-ID (see _send_email) rather than linked, since most email
+# clients (Gmail included) block remote images by default but show
+# inline/embedded ones automatically.
+_LOGO_PATH = Path(__file__).parent / 'assets' / 'heimdall-icon.png'
+_LOGO_CID = 'heimdall-logo'
 
 
 @dataclass
@@ -44,12 +55,22 @@ class NotificationService:
         self._smtp_password = config.smtp_password
         self._smtp_use_tls = config.smtp_use_tls
 
-    async def notify(self, title: str, message: str, severity: str = 'WARNING') -> None:
-        """Send to every configured channel. Never raises."""
+    async def notify(
+        self, title: str, message: str, severity: str = 'WARNING', html_message: str | None = None,
+    ) -> None:
+        """Send to every configured channel. Never raises.
+
+        html_message, if given, is used as an HTML alternative for the
+        email channel only — ntfy has no HTML story (a phone push
+        notification has no room for one), so it always gets `message`
+        as plain text regardless. A client that can't render HTML falls
+        back to `message` too, via EmailMessage's own multipart/alternative
+        handling in _send_email.
+        """
         if self._ntfy_url:
             await self._send_ntfy(title, message, severity)
         if self._smtp_host and self._smtp_from:
-            await asyncio.to_thread(self._send_email, title, message)
+            await asyncio.to_thread(self._send_email, title, message, html_message)
 
     async def _send_ntfy(self, title: str, message: str, severity: str) -> None:
         try:
@@ -90,13 +111,34 @@ class NotificationService:
             return
         await self.notify(title=alert.alert_type, message=alert.description or alert.alert_type, severity='CRITICAL')
 
-    def _send_email(self, subject: str, body: str) -> None:
+    def _send_email(self, subject: str, body: str, html_body: str | None = None) -> None:
         try:
             msg = EmailMessage()
             msg['Subject'] = f'Heimdall: {subject}'
             msg['From'] = self._smtp_from
             msg['To'] = self._smtp_to
             msg.set_content(body)
+
+            if html_body:
+                msg.add_alternative(html_body, subtype='html')
+                # add_alternative() makes msg multipart/alternative with
+                # [plain_part, html_part] — embed the logo inside the html
+                # part specifically (add_related() wraps *that* part in its
+                # own multipart/related), not the plain-text one, since a
+                # plain-text client has no use for an image at all.
+                if _LOGO_PATH.exists():
+                    html_part = msg.get_payload()[1]
+                    # RFC 2392/2045: a Content-ID header is conventionally
+                    # angle-bracketed; add_related() doesn't add the
+                    # brackets itself, so this does it explicitly for
+                    # maximum client compatibility. The `cid:` URI in the
+                    # HTML (digest.py's <img src="cid:heimdall-logo">) is
+                    # the bare form — brackets are a header-only convention.
+                    html_part.add_related(
+                        _LOGO_PATH.read_bytes(), maintype='image', subtype='png', cid=f'<{_LOGO_CID}>',
+                    )
+                else:
+                    logger.warning('Heimdall logo not found at %s — sending digest email without it', _LOGO_PATH)
 
             with smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=10) as server:
                 if self._smtp_use_tls:
