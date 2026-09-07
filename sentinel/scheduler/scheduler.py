@@ -1388,7 +1388,12 @@ class SentinelScheduler:
                 )
 
             if self._notifier is not None:
-                await self._notifier.notify(title='Heimdall security digest', message=message, severity=severity)
+                # 'Security Digest', not 'Heimdall security digest' —
+                # NotificationService._send_email already prefixes every
+                # subject with 'Heimdall: ', so the old title doubled up
+                # to 'Heimdall: Heimdall security digest'. ntfy's title
+                # gets no such prefix, so this reads cleanly there too.
+                await self._notifier.notify(title='Security Digest', message=message, severity=severity)
             await settings_repo.set_last_digest_sent_at(now)
         except Exception:
             logger.exception('Security digest job failed')

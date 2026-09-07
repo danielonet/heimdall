@@ -63,7 +63,7 @@ class TestSecurityDigestJob:
 
         assert len(scheduler._notifier.calls) == 1
         call = scheduler._notifier.calls[0]
-        assert call['title'] == 'Heimdall security digest'
+        assert call['title'] == 'Security Digest'
         assert 'all clear' in call['message']
         assert call['severity'] == 'INFO'
 
