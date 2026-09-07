@@ -63,6 +63,33 @@ class NotificationService:
         except Exception as exc:
             logger.warning('ntfy notification failed: %s', exc)
 
+    async def notify_new_critical_alert(self, alert) -> None:
+        """Immediate notification for a genuinely new CRITICAL alert — the
+        real-time channel, distinct from SentinelScheduler._security_digest_job's
+        once-a-day summary of everything regardless of severity.
+
+        Requested directly: the Notifications page's own copy already
+        claimed "Email alerts for CRITICAL/WARNING events" before this
+        existed — confirmed live 2026-09-07 that nothing backed that
+        claim, only the daily digest and one narrow AUTO_BLOCK_EXPIRED
+        case ever called notify() at all. Scoped to CRITICAL only (not
+        WARNING too, despite the old copy) — a deliberate choice to avoid
+        flooding the inbox with the same WARNING-level noise (vendor
+        mismatches, AP-tier crossings) trust-based suppression and the
+        INFO/WARNING magnitude split were built earlier this project to
+        cut down on.
+
+        `alert` must be a just-persisted, genuinely NEW row (the "fire"
+        transition) — never call this for a touch on an already-open
+        alert; an ongoing CRITICAL condition already accumulates its own
+        occurrence_count, and emailing on every poll it's still true would
+        flood the inbox rather than inform it. Callers already have this
+        distinction from AlertRepository.upsert()'s own is_new return.
+        """
+        if alert.severity != 'CRITICAL':
+            return
+        await self.notify(title=alert.alert_type, message=alert.description or alert.alert_type, severity='CRITICAL')
+
     def _send_email(self, subject: str, body: str) -> None:
         try:
             msg = EmailMessage()

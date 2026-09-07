@@ -533,7 +533,7 @@ class SentinelScheduler:
                 self._rule_engine = RuleEngine(adapter, self._notifier)
             await poll_cycle(
                 adapter, self._redis_client, self._pipeline, self._anomaly_engine, self._rule_engine,
-                self._wan_bandwidth_detector,
+                self._wan_bandwidth_detector, self._notifier,
             )
             await self._reconcile_arp_table(adapter)
             await self._reconcile_block_enforcement(adapter)
@@ -2016,6 +2016,13 @@ class SentinelScheduler:
         )
         if is_new:
             emit_alert(alert_to_dict(alert))
+            # getattr, not a plain attribute read — same reasoning as
+            # _is_own_host's self._local_ips: a test double built via
+            # object.__new__(SentinelScheduler) never runs __init__, so
+            # self._notifier may not exist at all.
+            notifier = getattr(self, '_notifier', None)
+            if notifier is not None:
+                await notifier.notify_new_critical_alert(alert)
 
     async def _is_own_host(self, mac: str) -> bool:
         """True if `mac` currently resolves to one of this Heimdall

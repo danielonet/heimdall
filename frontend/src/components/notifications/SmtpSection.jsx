@@ -58,7 +58,10 @@ export function SmtpSection() {
     <div className="border border-border bg-surface p-4">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">EMAIL — SMTP</div>
       <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        Email alerts for CRITICAL/WARNING events. Applies immediately, no restart needed.
+        Sends an immediate email the moment a CRITICAL alert fires (confirmed attacks, new
+        devices, unauthorized network access), plus a daily 7am digest summarizing everything
+        regardless of severity. WARNING/INFO findings only ever appear in the digest — deliberately,
+        to avoid flooding your inbox. Applies immediately, no restart needed.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}

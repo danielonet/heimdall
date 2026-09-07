@@ -150,6 +150,21 @@ async def established_baseline():
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address == _ANCHOR_MAC))
 
 
+class _FakeNotifier:
+    """Test double: mirrors NotificationService.notify_new_critical_alert's
+    own severity gate (see tests/test_notifications/test_service.py for
+    that gate's dedicated unit coverage), so records only CRITICAL calls —
+    poll_cycle's notifier arg is optional and defaults to None for every
+    other test in this file; only the tests that actually care attach one."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    async def notify_new_critical_alert(self, alert) -> None:
+        if alert.severity == 'CRITICAL':
+            self.calls.append(alert)
+
+
 class TestPollCycle:
     async def test_persists_devices(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)
@@ -308,6 +323,30 @@ class TestDetectionIntegration:
             alerts = result.scalars().all()
             assert {a.device_mac for a in alerts} == set(_MOCK_ONLINE_MACS)
             assert all(a.severity == 'CRITICAL' for a in alerts)
+
+    async def test_new_critical_alerts_reach_the_notifier(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector, established_baseline,
+    ):
+        """The real-time email/ntfy path for the regular DetectionPipeline
+        (as opposed to SentinelScheduler._raise_threat_alert's confirmed-
+        attack path, covered separately in test_threat_auto_block.py) —
+        every online mock device's CRITICAL NEW_DEVICE alert this poll
+        raises must reach a configured notifier."""
+        notifier = _FakeNotifier()
+
+        await poll_cycle(
+            adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector, notifier,
+        )
+
+        assert {a.device_mac for a in notifier.calls} == set(_MOCK_ONLINE_MACS)
+        assert all(a.alert_type == 'NEW_DEVICE' for a in notifier.calls)
+
+    async def test_no_notifier_is_a_no_op(
+        self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector, established_baseline,
+    ):
+        """notifier defaults to None — must not raise, same as every other
+        test in this file that doesn't pass one."""
+        await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)  # must not raise
 
     async def test_offline_mock_device_never_raises_new_device_alert(self, redis_client, pipeline, anomaly_engine, adapter, rule_engine, wan_bandwidth_detector):
         await poll_cycle(adapter, redis_client, pipeline, anomaly_engine, rule_engine, wan_bandwidth_detector)

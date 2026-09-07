@@ -1,9 +1,18 @@
+from types import SimpleNamespace
+
 import pytest
 
 from sentinel.notifications import service as service_module
 from sentinel.notifications.service import NotificationConfig, NotificationService
 
 pytestmark = pytest.mark.asyncio
+
+
+def _alert(severity='CRITICAL', alert_type='ARP_SPOOF', description='something happened'):
+    """A plain stand-in for a persisted Alert row — notify_new_critical_alert
+    only ever reads .severity/.alert_type/.description, so a real DB row
+    isn't needed here."""
+    return SimpleNamespace(severity=severity, alert_type=alert_type, description=description)
 
 
 class _FakeResponse:
@@ -177,3 +186,76 @@ class TestEmailNotification:
             smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
         ))
         await notifier.notify('t', 'm')  # must not raise
+
+
+class TestNotifyNewCriticalAlert:
+    """The real-time channel a genuinely new CRITICAL alert goes through —
+    distinct from the daily digest's notify() call, which fires regardless
+    of severity once a day. Requested directly after the Notifications
+    page's own copy claimed this already happened and it didn't."""
+
+    async def test_critical_alert_sends_over_both_channels(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', _FakeAsyncClient)
+        notifier = NotificationService(NotificationConfig(
+            ntfy_url='https://ntfy.sh/test-topic',
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(severity='CRITICAL', alert_type='ARP_SPOOF'))
+
+        assert len(_FakeSMTP.sent_messages) == 1
+        assert _FakeSMTP.sent_messages[0]['Subject'] == 'Heimdall: ARP_SPOOF'
+        assert len(_FakeAsyncClient.calls) == 1
+        assert _FakeAsyncClient.calls[0]['headers']['Priority'] == 'urgent'
+
+    async def test_warning_alert_sends_nothing(self, monkeypatch):
+        """Deliberately scoped to CRITICAL only — WARNING/INFO stay
+        digest-only, so family devices' routine WARNING findings don't
+        flood the inbox the same way trust-based suppression and the
+        INFO/WARNING magnitude split were built to cut down on."""
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', _FakeAsyncClient)
+        notifier = NotificationService(NotificationConfig(
+            ntfy_url='https://ntfy.sh/test-topic',
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(severity='WARNING'))
+
+        assert _FakeSMTP.sent_messages == []
+        assert _FakeAsyncClient.calls == []
+
+    async def test_info_alert_sends_nothing(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(severity='INFO'))
+
+        assert _FakeSMTP.sent_messages == []
+
+    async def test_uses_the_alert_type_as_the_title_and_description_as_the_body(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(
+            _alert(severity='CRITICAL', alert_type='MALWARE_DETECTED', description='eicar.txt quarantined')
+        )
+
+        msg = _FakeSMTP.sent_messages[0]
+        assert msg['Subject'] == 'Heimdall: MALWARE_DETECTED'
+        assert msg.get_content().strip() == 'eicar.txt quarantined'
+
+    async def test_falls_back_to_alert_type_when_description_is_blank(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(severity='CRITICAL', alert_type='NEW_DEVICE', description=None))
+
+        assert _FakeSMTP.sent_messages[0].get_content().strip() == 'NEW_DEVICE'

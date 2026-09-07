@@ -224,6 +224,65 @@ class TestRaiseThreatAlert:
         assert len(alerts) == 2
 
 
+class _FakeNotifier:
+    """Test double: records CRITICAL calls, no real network/SMTP I/O.
+    Mirrors NotificationService.notify_new_critical_alert's own severity
+    gate (see tests/test_notifications/test_service.py for that gate's
+    dedicated unit coverage) so these scheduler-level tests confirm the
+    real end-to-end shape — _raise_threat_alert calls this for every new
+    alert regardless of severity, and it's this method's job to filter."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    async def notify_new_critical_alert(self, alert) -> None:
+        if alert.severity == 'CRITICAL':
+            self.calls.append(alert)
+
+
+class TestRaiseThreatAlertNotification:
+    """The real-time email/ntfy channel — see NotificationService.
+    notify_new_critical_alert. self._notifier is read via getattr, so a
+    scheduler test double with no _notifier set at all (every other test
+    in this file) must keep working exactly as before — only these tests
+    actually attach one."""
+
+    async def test_new_critical_alert_notifies(self, scheduler):
+        scheduler._notifier = _FakeNotifier()
+        await _seed_device(is_blocked=False)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+
+        assert len(scheduler._notifier.calls) == 1
+        assert scheduler._notifier.calls[0].alert_type == 'ARP_SPOOF'
+
+    async def test_warning_alert_does_not_notify(self, scheduler):
+        scheduler._notifier = _FakeNotifier()
+        await _seed_device(is_blocked=False)
+
+        await scheduler._raise_threat_alert(_MAC, 'VULNERABILITY_DETECTED', 'WARNING', 'CVE found')
+
+        assert scheduler._notifier.calls == []
+
+    async def test_a_touch_on_an_already_open_alert_does_not_notify_again(self, scheduler):
+        """Only the fire transition notifies — a still-true CRITICAL
+        condition already accumulates occurrence_count; notifying on every
+        poll it's still open would flood the inbox, not inform it."""
+        scheduler._notifier = _FakeNotifier()
+        await _seed_device(is_blocked=False)
+
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected again')
+
+        assert len(scheduler._notifier.calls) == 1
+
+    async def test_no_notifier_configured_is_a_no_op(self, scheduler):
+        """scheduler._notifier defaults to unset on the object.__new__ test
+        double (same as every other test in this file) — must not raise."""
+        await _seed_device(is_blocked=False)
+        await scheduler._raise_threat_alert(_MAC, 'ARP_SPOOF', 'CRITICAL', 'spoofing suspected')  # must not raise
+
+
 class TestSelfHostSafeguard:
     """Regression coverage for the incident this safeguard exists to
     prevent: ZeekConnBeaconDetector misread Heimdall's own nmap scan as C2

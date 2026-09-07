@@ -38,6 +38,7 @@ from sentinel.detection.rules_engine import RuleEngine
 from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.trainer import ModelTrainer
+from sentinel.notifications.service import NotificationService
 from sentinel.security.mac_vendor import lookup_vendor
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ async def poll_cycle(
     anomaly_engine: AnomalyEngine,
     rule_engine: RuleEngine,
     wan_bandwidth_detector: WanBandwidthDetector,
+    notifier: NotificationService | None = None,
 ) -> None:
     """Run one full poll cycle: fetch, detect, score, persist, publish, broadcast.
 
@@ -62,6 +64,16 @@ async def poll_cycle(
     anomaly_engine already has; scoring (which can trigger bootstrap training)
     happens right after, so this poll's own samples never train against
     themselves before being evaluated by the pipeline.
+
+    notifier is optional (defaults to None, e.g. for tests/callers that
+    don't care about email) — when given, every genuinely new alert this
+    poll persists also goes through NotificationService.notify_new_
+    critical_alert(), which itself only actually sends anything for
+    CRITICAL severity. See SentinelScheduler._raise_threat_alert for the
+    other, confirmed-attack half of this same real-time notification path
+    — that one routes through AlertRepository.upsert() directly rather
+    than through this function, since ArpWatcher/DhcpWatcher/etc. don't go
+    through the DetectionPipeline this poll cycle runs.
     """
     devices = await adapter.get_connected_devices()
     _enrich_vendor_names(devices)
@@ -101,6 +113,8 @@ async def poll_cycle(
     _broadcast_updates(devices, newly_seen_macs, port_stats)
     for alert in persisted_new_alerts:
         emit_alert(alert_to_dict(alert))
+        if notifier is not None:
+            await notifier.notify_new_critical_alert(alert)
     if wan_changed:
         emit_wan_status(router_info.wan_status)
 
