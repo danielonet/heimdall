@@ -28,46 +28,58 @@ _ACCENT = '#ffb02d'
 
 _SEVERITY_COLOR = {'CRITICAL': '#ff5a3a', 'WARNING': '#ffd23a', 'INFO': '#a3854d'}
 
-# A table this long stops being a scannable digest and starts being the
-# Alerts page — cap it and point at the real thing for the rest. See
-# render_digest_html/_text's `truncated` handling.
-MAX_ALERT_ROWS = 20
+# Requested directly: grouped by alert_type rather than one row per raw
+# alert — during a genuine burst (a real attack, or a flaky device rapid-
+# cycling), a flat per-alert list gets dominated by one repeating type and
+# pushes everything else out of the MAX_ALERT_ROWS cap. Grouping guarantees
+# *diversity* of information instead: a type that fired 200 times still
+# only ever costs one row, so distinct issues stay visible. Ten groups
+# (not the old top-5-types line, and not raw MAX_ALERT_ROWS=20 individual
+# alerts) — enough to see everything that actually happened on a normal
+# day without turning into the Alerts page.
+MAX_ALERT_TYPES = 10
 
 _MONO_STACK = "'JetBrains Mono','Courier New',Courier,monospace"
 
+# Public (not a leading-underscore module-private constant): SentinelScheduler
+# ._security_digest_job builds its worst-severity-per-type query with the
+# same numeric ranks, then maps the result back through this exact dict —
+# shared across the module boundary deliberately, not an internal detail.
+SEVERITY_RANK_TO_NAME = {3: 'CRITICAL', 2: 'WARNING', 1: 'INFO'}
+
 
 @dataclass
-class DigestAlertRow:
-    severity: str
+class DigestTypeGroup:
+    """One alert_type's worth of activity in the digest window.
+
+    severity is the WORST severity seen for this type in the window (not
+    just whichever alert happened to be latest) — a type that spiked to
+    CRITICAL once and has since calmed to WARNING must still read as
+    CRITICAL here, or the one moment that mattered gets buried.
+    """
     alert_type: str
-    description: str | None
-    device_mac: str | None
-    hostname: str | None
-    nickname: str | None
-    created_at: datetime
+    severity: str
+    count: int
+    device_count: int
+    latest_description: str | None
+    latest_created_at: datetime
 
 
-def device_label(row: DigestAlertRow) -> str:
-    """Mirrors frontend/src/lib/deviceDisplay.js:deviceDisplayName's
-    nickname > hostname > bare-MAC precedence. No device_mac at all (e.g.
-    WAN_BANDWIDTH_SPIKE, a household-wide finding with no single device to
-    attribute it to) reads as 'Household' rather than a blank cell."""
-    if not row.device_mac:
-        return 'Household'
-    return row.nickname or row.hostname or row.device_mac
+def _plural(n: int, word: str) -> str:
+    return f'{n} {word}' if n == 1 else f'{n} {word}s'
 
 
 def render_digest_text(
-    rows: list[DigestAlertRow], total: int, severity_counts: dict[str, int], cutoff: datetime, truncated: bool,
+    groups: list[DigestTypeGroup], total: int, severity_counts: dict[str, int],
+    cutoff: datetime, truncated: bool, total_types: int,
 ) -> str:
     """Plain-text fallback — shown by clients that don't render HTML, and
     always what ntfy pushes (a phone notification has no room for a table).
 
     severity_counts is the TRUE breakdown across the whole window (from a
     separate aggregate query — see SentinelScheduler._security_digest_job),
-    not derived from `rows`: rows is capped at MAX_ALERT_ROWS, so counting
-    severities from it alone would silently under-report once a day
-    exceeds that cap.
+    not derived from `groups`: a group's own .severity is its *worst* alert,
+    which would double-count towards the wrong bucket if summed naively.
     """
     if total == 0:
         return f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.'
@@ -75,14 +87,17 @@ def render_digest_text(
     lines = [f'HEIMDALL SECURITY DIGEST — {total} alert(s) since {cutoff:%Y-%m-%d %H:%M} UTC', '']
     lines.append(', '.join(f'{c} {s}' for s, c in sorted(severity_counts.items(), key=lambda kv: -kv[1])))
     lines.append('')
-    for r in rows:
+    for g in groups:
+        devices = _plural(g.device_count, 'device')
         lines.append(
-            f'[{r.severity}] {device_label(r)} — {r.alert_type}: '
-            f'{r.description or r.alert_type} ({r.created_at:%Y-%m-%d %H:%M} UTC)'
+            f'[{g.severity}] {g.alert_type} — {_plural(g.count, "occurrence")} across {devices}: '
+            f'{g.latest_description or g.alert_type} (latest: {g.latest_created_at:%Y-%m-%d %H:%M} UTC)'
         )
     if truncated:
         lines.append('')
-        lines.append(f'...and {total - len(rows)} more. See the Alerts tab in Heimdall for the full list.')
+        lines.append(
+            f'...and {total_types - len(groups)} more alert type(s). See the Alerts tab in Heimdall for the full list.'
+        )
     return '\n'.join(lines)
 
 
@@ -96,8 +111,8 @@ def _severity_pill(severity: str) -> str:
 
 
 def render_digest_html(
-    rows: list[DigestAlertRow], total: int, severity_counts: dict[str, int],
-    cutoff: datetime, now: datetime, truncated: bool,
+    groups: list[DigestTypeGroup], total: int, severity_counts: dict[str, int],
+    cutoff: datetime, now: datetime, truncated: bool, total_types: int,
 ) -> str:
     """Table-based, fully inline-styled HTML — no <style> block, no CSS
     variables, no flex/grid: email clients (Gmail's web/app clients
@@ -106,7 +121,7 @@ def render_digest_html(
     bytes under that Content-ID when it sends this.
 
     severity_counts is the TRUE breakdown across the whole window — see
-    render_digest_text's docstring for why this isn't derived from `rows`.
+    render_digest_text's docstring for why this isn't derived from `groups`.
     """
     if total > 0:
         badges = ''.join(
@@ -127,30 +142,32 @@ def render_digest_html(
         headline = 'ALL CLEAR'
     else:
         row_html = []
-        for r in rows:
-            color = _SEVERITY_COLOR.get(r.severity, _TEXT_MUTED)
+        for g in groups:
+            color = _SEVERITY_COLOR.get(g.severity, _TEXT_MUTED)
             row_html.append(
                 '<tr>'
-                f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;">{_severity_pill(r.severity)}</td>'
-                f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;'
-                f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">'
-                f'{escape(device_label(r))}</td>'
+                f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;">{_severity_pill(g.severity)}</td>'
                 f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;'
                 f'color:{color};font-family:{_MONO_STACK};font-size:11px;letter-spacing:0.5px;white-space:nowrap;">'
-                f'{escape(r.alert_type)}</td>'
+                f'{escape(g.alert_type)}</td>'
+                f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;white-space:nowrap;">'
+                f'<div style="color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:13px;font-weight:600;">{g.count}</div>'
+                f'<div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;">{escape(_plural(g.device_count, "device"))}</div>'
+                '</td>'
                 f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;'
                 f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;line-height:1.5;">'
-                f'{escape(r.description or r.alert_type)}</td>'
+                f'{escape(g.latest_description or g.alert_type)}</td>'
                 f'<td style="padding:8px 10px;border-top:1px solid {_BORDER};vertical-align:top;'
                 f'color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:10px;white-space:nowrap;text-align:right;">'
-                f'{r.created_at:%m-%d %H:%M}</td>'
+                f'{g.latest_created_at:%m-%d %H:%M}</td>'
                 '</tr>'
             )
         if truncated:
             row_html.append(
                 f'<tr><td colspan="5" style="padding:10px;border-top:1px solid {_BORDER};text-align:center;'
                 f'color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:11px;">'
-                f'...and {total - len(rows)} more — see the Alerts tab in Heimdall for the full list.</td></tr>'
+                f'...and {total_types - len(groups)} more alert type(s) — see the Alerts tab in Heimdall for the full list.'
+                '</td></tr>'
             )
         body_rows = ''.join(row_html)
         headline = f'{total} ALERT{"S" if total != 1 else ""}'
@@ -162,7 +179,7 @@ def render_digest_html(
             + ''.join(
                 f'<th style="padding:6px 10px;text-align:left;color:{_TEXT_MUTED};'
                 f'font-family:{_MONO_STACK};font-size:9px;letter-spacing:2px;font-weight:600;">{label}</th>'
-                for label in ('SEVERITY', 'DEVICE', 'TYPE', 'DESCRIPTION', 'TIME (UTC)')
+                for label in ('SEVERITY', 'TYPE', 'COUNT', 'LATEST DESCRIPTION', 'LATEST (UTC)')
             )
             + '</tr>'
         )
@@ -202,7 +219,7 @@ def render_digest_html(
 
 <tr><td style="padding:14px 24px;background-color:{_SURFACE_ELEVATED};">
 <div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:1px;">
-Heimdall — self-hosted home network security monitor. This digest summarizes every alert regardless of severity, once a day.
+Heimdall — self-hosted home network security monitor. This digest summarizes every alert regardless of severity, once a day, grouped by type.
 </div>
 </td></tr>
 

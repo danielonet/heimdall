@@ -79,20 +79,23 @@ class TestSecurityDigestJob:
         """Counts/totals aren't asserted exactly — this runs against the
         shared dev DB, which may have its own real alerts in the same
         window (see e.g. test_data_retention.py's module docstring for the
-        same caveat elsewhere in this suite). Only this test's own MAC-
-        scoped content is checked."""
+        same caveat elsewhere in this suite). Uses synthetic alert_types
+        (ZZZ_TEST_* — never used by any real detector) rather than real
+        ones like ARP_SPOOF, since the digest now groups by type globally,
+        not per-device — a real household alert of the same type would
+        make a same-type assertion pass/fail for the wrong reason."""
         now = datetime.now(timezone.utc)
         await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
-        await _add_alert('ARP_SPOOF', 'CRITICAL', now - timedelta(hours=3))
-        await _add_alert('HIGH_UPLOAD', 'WARNING', now - timedelta(hours=2))
-        await _add_alert('NEW_DEVICE', 'INFO', now - timedelta(hours=1))
+        await _add_alert('ZZZ_TEST_CRITICAL', 'CRITICAL', now - timedelta(hours=3))
+        await _add_alert('ZZZ_TEST_WARNING', 'WARNING', now - timedelta(hours=2))
+        await _add_alert('ZZZ_TEST_INFO', 'INFO', now - timedelta(hours=1))
 
         await scheduler._security_digest_job()
 
         call = scheduler._notifier.calls[0]
-        assert f'[CRITICAL] {_MAC} — ARP_SPOOF' in call['message']
-        assert f'[WARNING] {_MAC} — HIGH_UPLOAD' in call['message']
-        assert f'[INFO] {_MAC} — NEW_DEVICE' in call['message']
+        assert '[CRITICAL] ZZZ_TEST_CRITICAL — 1 occurrence across 1 device' in call['message']
+        assert '[WARNING] ZZZ_TEST_WARNING — 1 occurrence across 1 device' in call['message']
+        assert '[INFO] ZZZ_TEST_INFO — 1 occurrence across 1 device' in call['message']
         assert call['severity'] == 'CRITICAL'  # worst severity present wins
 
     async def test_severity_picks_warning_when_no_critical_present(self, scheduler):
@@ -117,21 +120,20 @@ class TestSecurityDigestJob:
 
     async def test_no_last_sent_defaults_to_a_24h_lookback(self, scheduler):
         """Counts aren't asserted exactly — see test_summarizes_alerts_
-        since_cutoff_with_severity_breakdown's docstring. What matters here
-        is the 23h-old alert makes it into the digest and the 25h-old one
-        (just outside the 24h fallback window) doesn't — MAX_ALERT_ROWS is
-        well above 1, so both would appear individually if the cutoff
-        logic were wrong."""
+        since_cutoff_with_severity_breakdown's docstring, same reasoning
+        for the synthetic ZZZ_TEST_* types (grouping is global by type now,
+        not per-device, so a real alert_type would make the "excluded"
+        assertion unreliable against the shared dev DB)."""
         await SettingsRepository().set_last_digest_sent_at(None)
         now = datetime.now(timezone.utc)
-        await _add_alert('ARP_SPOOF', 'CRITICAL', now - timedelta(hours=23))
-        await _add_alert('SIGNAL_ANOMALY', 'WARNING', now - timedelta(hours=25))  # just outside 24h
+        await _add_alert('ZZZ_TEST_INSIDE_WINDOW', 'CRITICAL', now - timedelta(hours=23))
+        await _add_alert('ZZZ_TEST_OUTSIDE_WINDOW', 'WARNING', now - timedelta(hours=25))  # just outside 24h
 
         await scheduler._security_digest_job()
 
         call = scheduler._notifier.calls[0]
-        assert f'[CRITICAL] {_MAC} — ARP_SPOOF' in call['message']
-        assert f'{_MAC} — SIGNAL_ANOMALY' not in call['message']
+        assert 'ZZZ_TEST_INSIDE_WINDOW' in call['message']
+        assert 'ZZZ_TEST_OUTSIDE_WINDOW' not in call['message']
 
     async def test_advances_last_digest_sent_at(self, scheduler):
         before = datetime.now(timezone.utc)
@@ -142,22 +144,39 @@ class TestSecurityDigestJob:
         last_sent = await SettingsRepository().get_last_digest_sent_at()
         assert last_sent >= before
 
-    async def test_more_than_max_alert_rows_gets_truncated_with_a_pointer_to_the_alerts_tab(self, scheduler):
-        """Replaces the old "top 5 types" cap (aggregate-counts era) — the
-        digest now lists individual alerts (see DigestAlertRow), capped at
-        MAX_ALERT_ROWS with a '...and N more' pointer, not a top-5-types
-        summary line. Seeding well more than MAX_ALERT_ROWS of this test's
-        own alerts guarantees truncation regardless of whatever else is in
-        the shared dev DB's own window."""
-        from sentinel.notifications.digest import MAX_ALERT_ROWS
+    async def test_a_burst_of_one_type_never_triggers_truncation(self, scheduler):
+        """The actual point of grouping: however many times the *same*
+        type fires, it's still exactly one group — MAX_ALERT_TYPES caps
+        distinct types, not raw alert volume."""
+        from sentinel.notifications.digest import MAX_ALERT_TYPES
 
         now = datetime.now(timezone.utc)
         await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
-        extra = 5
-        for i in range(MAX_ALERT_ROWS + extra):
-            await _add_alert('ARP_SPOOF', 'WARNING', now - timedelta(minutes=i))
+        for i in range(MAX_ALERT_TYPES + 10):
+            await _add_alert('ZZZ_TEST_BURST', 'WARNING', now - timedelta(minutes=i))
 
         await scheduler._security_digest_job()
 
         call = scheduler._notifier.calls[0]
-        assert 'more. See the Alerts tab in Heimdall for the full list.' in call['message']
+        # Checks the group *header* appears exactly once, not the bare word
+        # "ZZZ_TEST_BURST" — these seeded alerts have no description, so it
+        # also appears a second time as the (correct, separately tested —
+        # see test_digest.py) description fallback later in the same line.
+        assert call['message'].count('] ZZZ_TEST_BURST —') == 1
+        assert f'{MAX_ALERT_TYPES + 10} occurrences' in call['message']
+
+    async def test_more_than_max_alert_types_gets_truncated_with_a_pointer_to_the_alerts_tab(self, scheduler):
+        """Unlike the burst case above, genuinely *distinct* types beyond
+        MAX_ALERT_TYPES do get truncated, with a pointer to the full list."""
+        from sentinel.notifications.digest import MAX_ALERT_TYPES
+
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
+        extra = 5
+        for i in range(MAX_ALERT_TYPES + extra):
+            await _add_alert(f'ZZZ_TEST_TYPE_{i}', 'WARNING', now - timedelta(minutes=i))
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert 'more alert type(s). See the Alerts tab in Heimdall for the full list.' in call['message']
