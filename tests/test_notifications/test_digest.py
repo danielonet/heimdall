@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sentinel.notifications.digest import (
-    MAX_ALERT_TYPES, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic, DigestTypeGroup,
-    render_digest_html, render_digest_text, resolve_device_label,
+    MAX_ALERT_TYPES, MAX_BANDWIDTH_HOURS, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic,
+    DigestHourlyBandwidth, DigestTypeGroup, render_digest_html, render_digest_text, resolve_device_label,
 )
+from sentinel.notifications.digest import _sparkline
 
 _NOW = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
 _CUTOFF = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
@@ -22,6 +23,10 @@ def _traffic(**overrides) -> DigestDeviceTraffic:
     defaults = dict(device_label='laptop', upload_bytes=1024 * 1024, download_bytes=1024 * 1024 * 4)
     defaults.update(overrides)
     return DigestDeviceTraffic(**defaults)
+
+
+def _hours(*total_bytes: int, start: datetime = _CUTOFF) -> list[DigestHourlyBandwidth]:
+    return [DigestHourlyBandwidth(hour=start + timedelta(hours=i), total_bytes=b) for i, b in enumerate(total_bytes)]
 
 
 class TestSeverityRankToName:
@@ -290,3 +295,145 @@ class TestRenderDigestHtmlTraffic:
         # substring either side of it rather than the raw contraction.
         assert 'Wired devices sharing a physical port' in html
         assert "broken out individually" in html
+
+
+def test_max_bandwidth_hours_is_a_sane_positive_bound():
+    assert 0 < MAX_BANDWIDTH_HOURS <= 96
+
+
+class TestSparkline:
+    def test_scales_relative_to_the_peak_value(self):
+        # peak (100) must map to the top block, 0 to a blank column, and
+        # everything else somewhere in between in the same order.
+        line = _sparkline([0, 25, 50, 100])
+        assert line[0] == ' '
+        assert line[-1] == '█'
+        assert line[0] < line[1] < line[2] < line[3]  # block chars sort by codepoint = by height
+
+    def test_all_zero_values_is_a_blank_line_not_a_crash(self):
+        assert _sparkline([0, 0, 0]) == '   '
+
+    def test_empty_input_is_a_sane_empty_string(self):
+        assert _sparkline([]) == ''
+
+    def test_output_length_matches_input_length(self):
+        assert len(_sparkline([1, 2, 3, 4, 5])) == 5
+
+
+class TestRenderDigestTextBandwidth:
+    def test_no_bandwidth_section_when_hourly_bandwidth_is_none_or_empty(self):
+        text = render_digest_text([], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0)
+        assert 'BANDWIDTH BY HOUR' not in text
+
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, hourly_bandwidth=[],
+        )
+        assert 'BANDWIDTH BY HOUR' not in text
+
+    def test_shows_even_on_an_all_clear_day(self):
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0,
+            hourly_bandwidth=_hours(100, 200, 300),
+        )
+        assert 'all clear' in text
+        assert 'BANDWIDTH BY HOUR' in text
+
+    def test_header_reports_the_time_range_and_the_peak_hour(self):
+        hours = _hours(10, 20, 500, 30, start=datetime(2026, 9, 6, 6, 0, tzinfo=timezone.utc))
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, hourly_bandwidth=hours,
+        )
+        assert '06:00-09:00 UTC' in text
+        assert 'peak 08:00' in text  # index 2 (10, 20, 500, 30) is the largest
+
+    def test_includes_a_sparkline_line_the_same_length_as_the_hours_given(self):
+        hours = _hours(1, 2, 3, 4, 5)
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, hourly_bandwidth=hours,
+        )
+        lines = text.splitlines()
+        sparkline_line = lines[-1]
+        assert len(sparkline_line) == 5
+
+
+class TestRenderDigestHtmlBandwidth:
+    def test_no_bandwidth_section_when_hourly_bandwidth_is_none_or_empty(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+        )
+        assert 'BANDWIDTH BY HOUR' not in html
+
+    def test_shows_even_on_an_all_clear_day(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=_hours(100, 200, 300),
+        )
+        assert 'ALL CLEAR' in html
+        assert 'BANDWIDTH BY HOUR' in html
+
+    def test_renders_one_bar_cell_per_hour(self):
+        hours = _hours(10, 20, 30, 40, 50)
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert html.count('bgcolor=') == len(hours)
+
+    def test_peak_bar_is_accented_and_others_are_muted(self):
+        hours = _hours(10, 999, 10)
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert html.count('bgcolor="#ffb02d"') == 1  # exactly one accented (peak) bar
+        assert html.count('bgcolor="#a3854d"') == 2  # the other two are muted
+
+    def test_a_true_zero_hour_still_gets_a_visible_minimum_height_bar(self):
+        """A missing/blank column would read as "no data", not "zero
+        traffic" — every hour, including a genuine zero, must draw
+        something."""
+        hours = _hours(0, 500)
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert 'height="2"' in html  # MIN_BAR_PX for the zero hour
+
+    def test_all_zero_hours_does_not_crash_on_division_by_the_peak(self):
+        hours = _hours(0, 0, 0)
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert html.count('bgcolor="#a3854d"') == 3  # no peak when everything is tied at zero
+
+    def test_labels_every_hour_when_24_or_fewer(self):
+        hours = _hours(*range(24))
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        for h in hours:
+            assert f'>{h.hour:%H}<' in html
+
+    def test_thins_labels_when_more_than_24_hours(self):
+        """A missed-digest window spanning multiple days would otherwise
+        crowd the label axis unreadably."""
+        hours = _hours(*range(30))
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert f'>{hours[0].hour:%H}<' in html
+        assert f'>{hours[1].hour:%H}<' not in html  # thinned out (every-2nd labeling)
+
+    def test_footnote_reports_the_time_range_and_peak(self):
+        mb = 1024 * 1024
+        hours = _hours(10 * mb, 500 * mb, 30 * mb, start=datetime(2026, 9, 6, 6, 0, tzinfo=timezone.utc))
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            hourly_bandwidth=hours,
+        )
+        assert '2026-09-06 06:00' in html
+        assert 'peak 07:00' in html
+        assert '500.00' in html.split('peak 07:00')[1][:40]  # MB figure follows the peak label closely

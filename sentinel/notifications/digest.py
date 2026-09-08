@@ -53,6 +53,19 @@ SEVERITY_RANK_TO_NAME = {3: 'CRITICAL', 2: 'WARNING', 1: 'INFO'}
 # heaviest users, not an arbitrary/alphabetical slice.
 MAX_TRAFFIC_DEVICES = 20
 
+# A digest window is usually ~24h (one bar per hour), but last_digest_sent_at
+# can be arbitrarily old if a send was ever missed — cap how many hourly
+# bars get drawn so that doesn't turn into an unreadably wide chart. Unlike
+# MAX_ALERT_TYPES/MAX_TRAFFIC_DEVICES this keeps the MOST RECENT hours (see
+# SentinelScheduler._security_digest_job), not the largest — a timeline
+# reads chronologically, not ranked.
+MAX_BANDWIDTH_HOURS = 48
+
+# 9 levels (index 0 = a blank column for a true zero hour, not just a short
+# bar) — used to draw a crude bar chart out of plain text for
+# render_digest_text/ntfy, which can't render an actual <table> chart.
+_SPARKLINE_BLOCKS = ' ▁▂▃▄▅▆▇█'
+
 
 @dataclass
 class DigestTypeGroup:
@@ -85,6 +98,19 @@ class DigestDeviceTraffic:
     download_bytes: int
 
 
+@dataclass
+class DigestHourlyBandwidth:
+    """Total household WAN bandwidth (upload + download) for one hour
+    bucket. Built from WanStats — the router's own WAN-interface counter,
+    with no device or port dimension at all — so unlike DigestDeviceTraffic
+    this has no CLAUDE.md rule 5 concern to filter for: it's a single
+    honest household-wide total, wired and wireless traffic alike, not
+    attributed to anything.
+    """
+    hour: datetime  # bucket start (UTC, on the hour)
+    total_bytes: int
+
+
 def resolve_device_label(hostname: str | None, nickname: str | None, mac: str) -> str:
     """Mirrors frontend/src/lib/deviceDisplay.js:deviceDisplayName's
     nickname > hostname > bare-MAC precedence, for building
@@ -105,11 +131,29 @@ def _format_mb(n_bytes: int) -> str:
     return f'{n_bytes / 1024 / 1024:.2f} MB'
 
 
+def _sparkline(values: list[int]) -> str:
+    """One block character per value, height-scaled to the largest value in
+    `values` — a crude bar chart for plain text (ntfy, and any email client
+    that renders text/plain instead of the HTML part). A genuinely-zero
+    hour draws as a blank column (index 0), not just the shortest visible
+    bar, so a quiet stretch of the night doesn't look like low-but-nonzero
+    activity."""
+    peak = max(values, default=0)
+    if peak == 0:
+        return ' ' * len(values)
+    levels = len(_SPARKLINE_BLOCKS) - 1
+    return ''.join(
+        _SPARKLINE_BLOCKS[0] if v == 0 else _SPARKLINE_BLOCKS[max(1, round(v / peak * levels))]
+        for v in values
+    )
+
+
 def render_digest_text(
     groups: list[DigestTypeGroup], total: int, severity_counts: dict[str, int],
     cutoff: datetime, truncated: bool, total_types: int,
     traffic: list[DigestDeviceTraffic] | None = None, traffic_truncated: bool = False,
     total_traffic_devices: int = 0,
+    hourly_bandwidth: list[DigestHourlyBandwidth] | None = None,
 ) -> str:
     """Plain-text fallback — shown by clients that don't render HTML, and
     always what ntfy pushes (a phone notification has no room for a table).
@@ -119,9 +163,9 @@ def render_digest_text(
     not derived from `groups`: a group's own .severity is its *worst* alert,
     which would double-count towards the wrong bucket if summed naively.
 
-    The traffic section (if `traffic` is given) is appended even on an
-    otherwise "all clear" day — no alerts doesn't mean no activity worth
-    reporting, and the two are independent questions.
+    The traffic and hourly-bandwidth sections (if given) are appended even
+    on an otherwise "all clear" day — no alerts doesn't mean no activity
+    worth reporting, and these are independent questions.
     """
     if total == 0:
         lines = [f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.']
@@ -141,6 +185,15 @@ def render_digest_text(
                 f'...and {total_types - len(groups)} more alert type(s). '
                 'See the Alerts tab in Heimdall for the full list.'
             )
+
+    if hourly_bandwidth:
+        lines.append('')
+        peak = max(hourly_bandwidth, key=lambda h: h.total_bytes)
+        lines.append(
+            f'BANDWIDTH BY HOUR ({hourly_bandwidth[0].hour:%H:%M}'
+            f'-{hourly_bandwidth[-1].hour:%H:%M} UTC, peak {peak.hour:%H:%M} — {_format_mb(peak.total_bytes)})'
+        )
+        lines.append(_sparkline([h.total_bytes for h in hourly_bandwidth]))
 
     if traffic:
         lines.append('')
@@ -171,6 +224,7 @@ def render_digest_html(
     cutoff: datetime, now: datetime, truncated: bool, total_types: int,
     traffic: list[DigestDeviceTraffic] | None = None, traffic_truncated: bool = False,
     total_traffic_devices: int = 0,
+    hourly_bandwidth: list[DigestHourlyBandwidth] | None = None,
 ) -> str:
     """Table-based, fully inline-styled HTML — no <style> block, no CSS
     variables, no flex/grid: email clients (Gmail's web/app clients
@@ -181,9 +235,15 @@ def render_digest_html(
     severity_counts is the TRUE breakdown across the whole window — see
     render_digest_text's docstring for why this isn't derived from `groups`.
 
-    The traffic section (if `traffic` is given) renders as its own card
-    section below the alerts table, even on an otherwise "all clear" day —
-    see render_digest_text's docstring for why those are independent.
+    The traffic and hourly-bandwidth sections (if given) each render as
+    their own card section below the alerts table, even on an otherwise
+    "all clear" day — see render_digest_text's docstring for why those are
+    independent. The bar chart itself is a plain <table> with per-hour
+    <td height="..."> cells (both the HTML height attribute and an inline
+    CSS height, for maximum client compatibility) rather than an actual
+    <img>/SVG/canvas chart — email clients don't render any of those
+    reliably, but a table of colored cells is about as compatible as HTML
+    email gets.
     """
     if total > 0:
         badges = ''.join(
@@ -245,6 +305,51 @@ def render_digest_html(
             )
             + '</tr>'
         )
+
+    bandwidth_section = ''
+    if hourly_bandwidth:
+        # Peak bar fixed at MAX_BAR_PX, every other bar scaled relative to
+        # it — a real zero hour still gets MIN_BAR_PX so it reads as "zero",
+        # not "missing column".
+        MAX_BAR_PX, MIN_BAR_PX = 60, 2
+        peak_bytes = max(h.total_bytes for h in hourly_bandwidth)
+        peak_hour = max(hourly_bandwidth, key=lambda h: h.total_bytes)
+        # >24 bars (a missed-digest window spanning more than a day) would
+        # crowd an "every hour" label axis — thin it to every other hour.
+        label_every = 1 if len(hourly_bandwidth) <= 24 else 2
+        bar_cells = []
+        for i, h in enumerate(hourly_bandwidth):
+            bar_px = (
+                MIN_BAR_PX if peak_bytes == 0
+                else max(MIN_BAR_PX, round(h.total_bytes / peak_bytes * MAX_BAR_PX))
+            )
+            # The peak hour's bar gets the full accent color; every other
+            # bar is the dimmer muted tone — draws the eye to the peak the
+            # way a real chart's tooltip/highlight would.
+            color = _ACCENT if peak_bytes > 0 and h.total_bytes == peak_bytes else _TEXT_MUTED
+            label = f'{h.hour:%H}' if i % label_every == 0 else '&nbsp;'
+            bar_cells.append(
+                '<td align="center" valign="bottom" style="padding:0 1px;">'
+                '<table cellpadding="0" cellspacing="0" border="0"><tr>'
+                f'<td width="10" height="{bar_px}" bgcolor="{color}" '
+                f'style="width:10px;height:{bar_px}px;background-color:{color};font-size:0;line-height:0;">&nbsp;</td>'
+                '</tr></table>'
+                f'<div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:8px;margin-top:3px;">{label}</div>'
+                '</td>'
+            )
+        bandwidth_footnote = (
+            f'{hourly_bandwidth[0].hour:%Y-%m-%d %H:%M}–{hourly_bandwidth[-1].hour:%H:%M} UTC — '
+            f'peak {peak_hour.hour:%H:%M}: {_format_mb(peak_bytes)}'
+        )
+        bandwidth_section = f"""
+<tr><td style="padding:4px 24px 20px 24px;border-top:1px solid {_BORDER};">
+<div style="color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:13px;letter-spacing:1px;font-weight:600;margin:16px 0 10px 0;">BANDWIDTH BY HOUR</div>
+<table cellpadding="0" cellspacing="0" border="0"><tr>
+{''.join(bar_cells)}
+</tr></table>
+<div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:0.5px;margin-top:10px;">{escape(bandwidth_footnote)}</div>
+</td></tr>
+"""
 
     traffic_section = ''
     if traffic:
@@ -316,6 +421,7 @@ def render_digest_html(
 {body_rows}
 </table>
 </td></tr>
+{bandwidth_section}
 {traffic_section}
 <tr><td style="padding:14px 24px;background-color:{_SURFACE_ELEVATED};">
 <div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:1px;">

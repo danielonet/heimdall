@@ -111,7 +111,13 @@ def wan_bandwidth_detector():
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _cleanup_mock_rows():
+async def _cleanup_mock_rows(_init_db):
+    # Explicit dependency on _init_db (unlike before this fixture did any
+    # DB access of its own in its setup phase) — pytest does NOT guarantee
+    # declaration order between two independent same-scope autouse
+    # fixtures, only that a fixture's dependencies run first. Without this,
+    # the snapshot reads below can run before init_db(app) has created the
+    # engine at all, raising "Database engine not initialised".
     # Several tests below (TestAutoTrustDuringLearning etc.) need a truly
     # empty AppSettings row to exercise the LEARNING/ARMED baseline logic
     # from a clean slate. `delete(AppSettings)` used to be the teardown for
@@ -123,12 +129,21 @@ async def _cleanup_mock_rows():
     # disabled it) whenever this suite happened to run — see 2026-09-08
     # incident. Snapshot the row that was actually there before this test
     # and restore it verbatim afterwards instead of leaving it deleted.
+    # WanStats (poll_cycle()'s household-total WAN row) has no MAC/port
+    # column at all to scope a delete by — `delete(WanStats)` used to just
+    # wipe the *entire* table on every test's teardown, real live WAN
+    # history included (caught live on 2026-09-08: a few hours of a real
+    # household's WAN history vanished mid-session when this suite ran).
+    # Snapshot which timestamps already existed before this test and only
+    # delete whatever's new afterwards, the same "restore, don't blindly
+    # wipe" principle as the AppSettings snapshot below.
     async with get_session() as session:
         original = await session.get(AppSettings, 1)
         original_values = (
             {c.name: getattr(original, c.name) for c in AppSettings.__table__.columns}
             if original is not None else None
         )
+        original_wan_stats_times = set((await session.execute(select(WanStats.time))).scalars().all())
 
     yield
 
@@ -137,7 +152,10 @@ async def _cleanup_mock_rows():
             delete(TrafficSample).where(TrafficSample.mac_address.in_(_MOCK_MACS + _MOCK_PORTS))
         )
         await session.execute(delete(PortStats).where(PortStats.port_alias.in_(_MOCK_PORTS)))
-        await session.execute(delete(WanStats))
+        current_wan_stats_times = set((await session.execute(select(WanStats.time))).scalars().all())
+        new_wan_stats_times = current_wan_stats_times - original_wan_stats_times
+        if new_wan_stats_times:
+            await session.execute(delete(WanStats).where(WanStats.time.in_(new_wan_stats_times)))
         await session.execute(delete(Alert).where(Alert.device_mac.in_(_MOCK_MACS)))
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))

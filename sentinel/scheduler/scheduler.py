@@ -28,7 +28,7 @@ from sentinel.adapter.models import RouterInfo, TrafficGranularity
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
-from sentinel.db.models import Alert, Device, DnsQuery, TrafficSample, WanStatusHistory
+from sentinel.db.models import Alert, Device, DnsQuery, TrafficSample, WanStats, WanStatusHistory
 from sentinel.db.repositories import (
     AlertRepository, DeviceRepository, PortAllowlistRepository, SettingsRepository, TrustedMacRepository,
 )
@@ -44,8 +44,8 @@ from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
 from sentinel.notifications.digest import (
-    MAX_ALERT_TYPES, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic, DigestTypeGroup,
-    render_digest_html, render_digest_text, resolve_device_label,
+    MAX_ALERT_TYPES, MAX_BANDWIDTH_HOURS, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic,
+    DigestHourlyBandwidth, DigestTypeGroup, render_digest_html, render_digest_text, resolve_device_label,
 )
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
@@ -1383,6 +1383,13 @@ class SentinelScheduler:
         port (TrafficGranularity.PER_PORT) has no real per-device figure to
         report, only a port aggregate — CLAUDE.md rule 5, never displayed
         as if it were measured per device.
+
+        Requested directly 2026-09-08: also appends an hourly household
+        bandwidth bar chart (DigestHourlyBandwidth, capped at
+        MAX_BANDWIDTH_HOURS), built from WanStats — the router's own WAN-
+        interface counter, which carries no device/port dimension at all,
+        so it needs none of the PER_DEVICE/PER_PORT filtering the traffic
+        section above does.
         """
         try:
             settings_repo = SettingsRepository()
@@ -1470,15 +1477,45 @@ class SentinelScheduler:
                     for r in traffic_type_rows[:MAX_TRAFFIC_DEVICES]
                 ]
 
+                # Household-total WAN bandwidth by hour — WanStats has no
+                # device/port dimension at all (see DigestHourlyBandwidth's
+                # own docstring), so unlike traffic_type_rows above this
+                # needs no PER_DEVICE/PER_PORT filter. date_trunc('hour', …)
+                # buckets on the DB side; bytes_*_delta are nullable (a
+                # missed poll leaves no delta), coalesced to 0 so one gap
+                # doesn't null out its whole hour's sum.
+                hour_bucket = func.date_trunc('hour', WanStats.time)
+                hourly_rows = (await session.execute(
+                    select(
+                        hour_bucket.label('hour'),
+                        (
+                            func.coalesce(func.sum(WanStats.bytes_sent_delta), 0)
+                            + func.coalesce(func.sum(WanStats.bytes_recv_delta), 0)
+                        ).label('total_bytes'),
+                    )
+                    .where(WanStats.time >= cutoff)
+                    .group_by(hour_bucket)
+                    .order_by(hour_bucket)
+                )).all()
+                # Chronological, not ranked — a timeline reads left-to-right,
+                # so a too-long (missed-digest) window keeps its most RECENT
+                # MAX_BANDWIDTH_HOURS hours, not its largest.
+                hourly_bandwidth = [
+                    DigestHourlyBandwidth(hour=r.hour, total_bytes=r.total_bytes)
+                    for r in hourly_rows[-MAX_BANDWIDTH_HOURS:]
+                ]
+
             truncated = total_types > len(digest_groups)
             traffic_truncated = total_traffic_devices > len(traffic)
             message = render_digest_text(
                 digest_groups, total, severity_counts, cutoff, truncated, total_types,
                 traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
+                hourly_bandwidth=hourly_bandwidth,
             )
             html_message = render_digest_html(
                 digest_groups, total, severity_counts, cutoff, now, truncated, total_types,
                 traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
+                hourly_bandwidth=hourly_bandwidth,
             )
             severity = (
                 'CRITICAL' if severity_counts.get('CRITICAL')

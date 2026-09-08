@@ -12,7 +12,7 @@ from flask import Flask
 from sqlalchemy import delete
 
 from sentinel.adapter.models import TrafficGranularity
-from sentinel.db.models import Alert, Device, TrafficSample
+from sentinel.db.models import Alert, Device, TrafficSample, WanStats
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
@@ -296,3 +296,44 @@ class TestSecurityDigestJob:
 
         call = scheduler._notifier.calls[0]
         assert _TRAFFIC_MAC_2 in call['message']
+
+    async def test_bandwidth_by_hour_section_appears_with_real_polling_data(self, scheduler):
+        """Requested directly 2026-09-08: an hourly household bandwidth bar
+        chart. The live scheduler polls WanStats every ~15s regardless of
+        this test, so the section should always have something to show —
+        same 'regardless of alert content' reasoning as the device-traffic
+        tests above. Doesn't assert on specific figures here (that's
+        test_digest.py's own unit-level coverage) since real household
+        values can't be controlled from this test."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert 'BANDWIDTH BY HOUR' in call['message']
+
+    async def test_bandwidth_by_hour_sums_wan_stats_into_the_right_bucket(self, scheduler):
+        """WanStats has no MAC column to scope a synthetic row by (see its
+        own docstring — a single household-wide time series), so isolation
+        here comes from magnitude rather than identity: 1TB in an hour is
+        far beyond anything a real household would ever produce, so this
+        seeded row dominates its bucket and becomes the reported peak
+        regardless of whatever real live traffic also landed in it.
+        Cleanup targets this exact seeded timestamp only — never a blanket
+        delete, since this table also holds live real WAN history."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=2))
+        seed_time = (now - timedelta(hours=1)).replace(minute=17, second=3, microsecond=424242)
+        async with get_session() as session:
+            session.add(WanStats(time=seed_time, bytes_sent_delta=1024**4, bytes_recv_delta=1024**4))
+
+        try:
+            await scheduler._security_digest_job()
+
+            call = scheduler._notifier.calls[0]
+            assert 'BANDWIDTH BY HOUR' in call['message']
+            assert f'peak {seed_time:%H}:00' in call['message']
+        finally:
+            async with get_session() as session:
+                await session.execute(delete(WanStats).where(WanStats.time == seed_time))
