@@ -112,7 +112,26 @@ def wan_bandwidth_detector():
 
 @pytest_asyncio.fixture(autouse=True)
 async def _cleanup_mock_rows():
+    # Several tests below (TestAutoTrustDuringLearning etc.) need a truly
+    # empty AppSettings row to exercise the LEARNING/ARMED baseline logic
+    # from a clean slate. `delete(AppSettings)` used to be the teardown for
+    # that, but it reset the *entire* singleton row — SMTP config,
+    # auto_block_on_threat, baseline_established_at, everything — back to
+    # schema defaults, including on the shared dev DB a live instance is
+    # also using. That silently wiped a real user's settings (auto_block_
+    # on_threat flipping back to its True default while they'd deliberately
+    # disabled it) whenever this suite happened to run — see 2026-09-08
+    # incident. Snapshot the row that was actually there before this test
+    # and restore it verbatim afterwards instead of leaving it deleted.
+    async with get_session() as session:
+        original = await session.get(AppSettings, 1)
+        original_values = (
+            {c.name: getattr(original, c.name) for c in AppSettings.__table__.columns}
+            if original is not None else None
+        )
+
     yield
+
     async with get_session() as session:
         await session.execute(
             delete(TrafficSample).where(TrafficSample.mac_address.in_(_MOCK_MACS + _MOCK_PORTS))
@@ -123,6 +142,8 @@ async def _cleanup_mock_rows():
         await session.execute(delete(Device).where(Device.mac_address.in_(_MOCK_MACS)))
         await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(_MOCK_MACS)))
         await session.execute(delete(AppSettings))
+        if original_values is not None:
+            session.add(AppSettings(**original_values))
 
 
 _ANCHOR_MAC = '00:00:00:00:00:01'

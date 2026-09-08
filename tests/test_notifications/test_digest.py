@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
 from sentinel.notifications.digest import (
-    MAX_ALERT_TYPES, SEVERITY_RANK_TO_NAME, DigestTypeGroup, render_digest_html, render_digest_text,
+    MAX_ALERT_TYPES, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic, DigestTypeGroup,
+    render_digest_html, render_digest_text, resolve_device_label,
 )
 
 _NOW = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
@@ -15,6 +16,12 @@ def _group(**overrides) -> DigestTypeGroup:
     )
     defaults.update(overrides)
     return DigestTypeGroup(**defaults)
+
+
+def _traffic(**overrides) -> DigestDeviceTraffic:
+    defaults = dict(device_label='laptop', upload_bytes=1024 * 1024, download_bytes=1024 * 1024 * 4)
+    defaults.update(overrides)
+    return DigestDeviceTraffic(**defaults)
 
 
 class TestSeverityRankToName:
@@ -161,3 +168,125 @@ class TestRenderDigestHtml:
 
 def test_max_alert_types_is_a_sane_positive_bound():
     assert 0 < MAX_ALERT_TYPES <= 30
+
+
+def test_max_traffic_devices_is_a_sane_positive_bound():
+    assert 0 < MAX_TRAFFIC_DEVICES <= 50
+
+
+class TestResolveDeviceLabel:
+    def test_prefers_nickname_over_hostname_and_mac(self):
+        assert resolve_device_label('laptop-hostname', 'My Laptop', 'aa:bb:cc:dd:ee:ff') == 'My Laptop'
+
+    def test_falls_back_to_hostname_when_no_nickname(self):
+        assert resolve_device_label('laptop-hostname', None, 'aa:bb:cc:dd:ee:ff') == 'laptop-hostname'
+
+    def test_falls_back_to_mac_when_neither_set(self):
+        assert resolve_device_label(None, None, 'aa:bb:cc:dd:ee:ff') == 'aa:bb:cc:dd:ee:ff'
+
+
+class TestRenderDigestTextTraffic:
+    def test_no_traffic_section_when_traffic_is_none_or_empty(self):
+        text = render_digest_text([], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0)
+        assert 'DEVICE TRAFFIC' not in text
+
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, traffic=[],
+        )
+        assert 'DEVICE TRAFFIC' not in text
+
+    def test_traffic_section_shows_even_on_an_all_clear_day(self):
+        """The whole reason traffic is a separate, independent question from
+        alert totals — see render_digest_text's own docstring."""
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0,
+            traffic=[_traffic()],
+        )
+        assert 'all clear' in text
+        assert 'DEVICE TRAFFIC' in text
+
+    def test_lists_each_device_with_mb_formatted_upload_and_download(self):
+        rows = [
+            _traffic(device_label='laptop', upload_bytes=1024 * 1024 * 500, download_bytes=1024 * 1024 * 2000),
+            _traffic(device_label='phone', upload_bytes=1024 * 1024 * 10, download_bytes=1024 * 1024 * 50),
+        ]
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, traffic=rows,
+        )
+        assert 'laptop: 500.00 MB up / 2000.00 MB down' in text
+        assert 'phone: 10.00 MB up / 50.00 MB down' in text
+
+    def test_truncated_adds_a_pointer_with_the_remaining_device_count(self):
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0,
+            traffic=[_traffic()], traffic_truncated=True, total_traffic_devices=25,
+        )
+        assert '...and 24 more device(s), smaller usage.' in text
+
+    def test_not_truncated_has_no_device_pointer(self):
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0,
+            traffic=[_traffic()], traffic_truncated=False,
+        )
+        assert 'more device(s)' not in text
+
+    def test_includes_the_wired_port_aggregation_footnote(self):
+        """CLAUDE.md rule 5: PER_PORT wired devices are excluded from this
+        section entirely (see SentinelScheduler._security_digest_job's
+        query filter), so the footnote explaining why must always be
+        present whenever the section renders at all."""
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, traffic=[_traffic()],
+        )
+        assert "Wired devices sharing a physical port aren't broken out individually" in text
+
+
+class TestRenderDigestHtmlTraffic:
+    def test_no_traffic_section_when_traffic_is_none_or_empty(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+        )
+        assert 'DEVICE TRAFFIC' not in html
+
+    def test_traffic_section_shows_even_on_an_all_clear_day(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            traffic=[_traffic()],
+        )
+        assert 'ALL CLEAR' in html
+        assert 'DEVICE TRAFFIC' in html
+
+    def test_renders_a_row_per_device_with_escaped_label(self):
+        rows = [_traffic(device_label='<script>alert(1)</script>')]
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            traffic=rows,
+        )
+        assert '<script>alert(1)</script>' not in html
+        assert '&lt;script&gt;' in html
+
+    def test_formats_upload_and_download_in_mb(self):
+        rows = [_traffic(device_label='laptop', upload_bytes=1024 * 1024 * 500, download_bytes=1024 * 1024 * 2000)]
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            traffic=rows,
+        )
+        assert '500.00 MB' in html
+        assert '2000.00 MB' in html
+
+    def test_truncated_adds_a_pointer_row_with_remaining_device_count(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            traffic=[_traffic()], traffic_truncated=True, total_traffic_devices=25,
+        )
+        assert '...and 24 more device(s), smaller usage.' in html
+
+    def test_includes_the_wired_port_aggregation_footnote(self):
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0,
+            traffic=[_traffic()],
+        )
+        # escape() turns the apostrophe into &#x27; — assert on a
+        # substring either side of it rather than the raw contraction.
+        assert 'Wired devices sharing a physical port' in html
+        assert "broken out individually" in html

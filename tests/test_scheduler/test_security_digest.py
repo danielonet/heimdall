@@ -11,7 +11,8 @@ import pytest_asyncio
 from flask import Flask
 from sqlalchemy import delete
 
-from sentinel.db.models import Alert
+from sentinel.adapter.models import TrafficGranularity
+from sentinel.db.models import Alert, Device, TrafficSample
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
@@ -19,6 +20,12 @@ from sentinel.scheduler.scheduler import SentinelScheduler
 pytestmark = pytest.mark.asyncio
 
 _MAC = 'aa:bb:cc:dd:ee:f3'
+# Distinct from _MAC (and from any real household MAC) so traffic-section
+# tests don't collide with the alert-grouping tests above or with the
+# shared dev DB's own live devices/samples.
+_TRAFFIC_MAC = 'aa:bb:cc:dd:ee:f4'
+_TRAFFIC_MAC_2 = 'aa:bb:cc:dd:ee:f5'
+_WIRED_PORT_ALIAS = 'ZZZ_TEST_PORT1'
 
 
 class _RecordingNotifier:
@@ -41,6 +48,12 @@ async def _init_db():
     yield
     async with get_session() as session:
         await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
+        await session.execute(
+            delete(TrafficSample).where(
+                TrafficSample.mac_address.in_([_TRAFFIC_MAC, _TRAFFIC_MAC_2, _WIRED_PORT_ALIAS])
+            )
+        )
+        await session.execute(delete(Device).where(Device.mac_address.in_([_TRAFFIC_MAC, _TRAFFIC_MAC_2])))
     await SettingsRepository().set_last_digest_sent_at(None)
     await get_engine().dispose()
 
@@ -55,6 +68,17 @@ def scheduler():
 async def _add_alert(alert_type: str, severity: str, created_at: datetime) -> None:
     async with get_session() as session:
         session.add(Alert(device_mac=_MAC, alert_type=alert_type, severity=severity, created_at=created_at))
+
+
+async def _add_traffic(
+    mac: str, upload: int, download: int, when: datetime,
+    granularity: TrafficGranularity = TrafficGranularity.PER_DEVICE,
+) -> None:
+    async with get_session() as session:
+        session.add(TrafficSample(
+            time=when, mac_address=mac, bytes_sent_delta=upload, bytes_recv_delta=download,
+            granularity=granularity.value,
+        ))
 
 
 class TestSecurityDigestJob:
@@ -99,6 +123,11 @@ class TestSecurityDigestJob:
         assert call['severity'] == 'CRITICAL'  # worst severity present wins
 
     async def test_severity_picks_warning_when_no_critical_present(self, scheduler):
+        """Same shared-DB caveat as test_sends_all_clear_when_no_alerts_
+        since_cutoff above: a real household CRITICAL alert landing inside
+        this 6h window (independently of the two WARNING/INFO alerts seeded
+        below) would legitimately flip the observed severity to CRITICAL —
+        occasional failure here isn't necessarily a bug."""
         now = datetime.now(timezone.utc)
         await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
         await _add_alert('HIGH_UPLOAD', 'WARNING', now - timedelta(hours=2))
@@ -180,3 +209,90 @@ class TestSecurityDigestJob:
 
         call = scheduler._notifier.calls[0]
         assert 'more alert type(s). See the Alerts tab in Heimdall for the full list.' in call['message']
+
+    async def test_device_traffic_section_sums_per_device_samples_and_resolves_label(self, scheduler):
+        """Requested directly 2026-09-08: per-device upload/download totals
+        for the digest window. Uses a nickname to also confirm
+        resolve_device_label's nickname > hostname precedence end-to-end
+        through the real query (not just the unit-level digest.py tests)."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
+        async with get_session() as session:
+            session.add(Device(mac_address=_TRAFFIC_MAC, hostname='zzz-test-host', nickname='ZZZ Test Nickname'))
+        await _add_traffic(_TRAFFIC_MAC, upload=1024 * 1024 * 500, download=1024 * 1024 * 100, when=now - timedelta(hours=3))
+        await _add_traffic(_TRAFFIC_MAC, upload=1024 * 1024 * 500, download=1024 * 1024 * 100, when=now - timedelta(hours=2))
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert 'DEVICE TRAFFIC' in call['message']
+        assert 'ZZZ Test Nickname: 1000.00 MB up / 200.00 MB down' in call['message']
+        assert 'zzz-test-host' not in call['message']  # nickname wins over hostname
+
+    async def test_device_traffic_section_shows_regardless_of_alert_content(self, scheduler):
+        """Traffic and alert volume are independent — see digest.py's own
+        docstrings. Doesn't assert on 'all clear'/alert presence at all: the
+        shared dev DB may have real household alerts land in this window
+        (see test_sends_all_clear_when_no_alerts_since_cutoff's docstring
+        for the same caveat on that pre-existing test) — that's an
+        orthogonal concern to whether *this device's* traffic shows up.
+        Uses a deliberately large volume (not just 1-2MB) so this sample
+        stays inside the MAX_TRAFFIC_DEVICES=20 cap regardless of how busy
+        the live household's own devices are — a small sample could
+        otherwise get truncated out on a heavy-traffic day."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+        await _add_traffic(
+            _TRAFFIC_MAC, upload=1024 * 1024 * 5000, download=1024 * 1024 * 5000, when=now - timedelta(minutes=30),
+        )
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert 'DEVICE TRAFFIC' in call['message']
+        assert f'{_TRAFFIC_MAC}: 5000.00 MB up / 5000.00 MB down' in call['message']
+
+    async def test_wired_per_port_samples_are_excluded_from_device_traffic(self, scheduler):
+        """CLAUDE.md rule 5: a PER_PORT sample has no real per-device figure
+        to report, only a port aggregate — it must never be attributed to
+        an individual device in this section. Doesn't assert the whole
+        section is absent — the shared dev DB has its own live PER_DEVICE
+        traffic constantly, so the section legitimately still appears; only
+        this specific wired alias must never be in it."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+        await _add_traffic(
+            _WIRED_PORT_ALIAS, upload=1024 * 1024 * 999, download=1024 * 1024 * 999,
+            when=now - timedelta(minutes=30), granularity=TrafficGranularity.PER_PORT,
+        )
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert _WIRED_PORT_ALIAS not in call['message']
+
+    async def test_device_traffic_excludes_samples_before_cutoff(self, scheduler):
+        """Same reasoning as the PER_PORT test above for why this doesn't
+        assert the whole section is absent — only that *this* MAC's
+        before-cutoff sample doesn't leak in."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+        await _add_traffic(_TRAFFIC_MAC, upload=1024 * 1024, download=1024 * 1024, when=now - timedelta(hours=5))
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert _TRAFFIC_MAC not in call['message']
+
+    async def test_device_traffic_falls_back_to_mac_when_no_device_row_exists(self, scheduler):
+        """outerjoin — a TrafficSample can outlive/predate its Device row
+        (or, in this test, simply never has one) and must still show up,
+        labeled by its bare MAC rather than silently dropped."""
+        now = datetime.now(timezone.utc)
+        await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+        await _add_traffic(_TRAFFIC_MAC_2, upload=1024 * 1024, download=1024 * 1024, when=now - timedelta(minutes=30))
+
+        await scheduler._security_digest_job()
+
+        call = scheduler._notifier.calls[0]
+        assert _TRAFFIC_MAC_2 in call['message']

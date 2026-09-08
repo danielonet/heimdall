@@ -24,11 +24,11 @@ from sqlalchemy import case, delete, func, select, text
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
 from sentinel.adapter.factory import create_router_adapter
-from sentinel.adapter.models import RouterInfo
+from sentinel.adapter.models import RouterInfo, TrafficGranularity
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
-from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
+from sentinel.db.models import Alert, Device, DnsQuery, TrafficSample, WanStatusHistory
 from sentinel.db.repositories import (
     AlertRepository, DeviceRepository, PortAllowlistRepository, SettingsRepository, TrustedMacRepository,
 )
@@ -44,7 +44,8 @@ from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
 from sentinel.notifications.digest import (
-    MAX_ALERT_TYPES, SEVERITY_RANK_TO_NAME, DigestTypeGroup, render_digest_html, render_digest_text,
+    MAX_ALERT_TYPES, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic, DigestTypeGroup,
+    render_digest_html, render_digest_text, resolve_device_label,
 )
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
@@ -1372,6 +1373,16 @@ class SentinelScheduler:
         html_message param. severity_counts comes from a separate aggregate
         query spanning the *whole* window, not derived from the (capped)
         groups — see render_digest_text's own docstring for why.
+
+        Requested directly 2026-09-08: also appends a per-device upload/
+        download traffic section (DigestDeviceTraffic, capped at
+        MAX_TRAFFIC_DEVICES), summed from TrafficSample rows in the same
+        window and shown regardless of whether there were any alerts —
+        traffic and alert volume are independent questions. Restricted to
+        granularity == PER_DEVICE only: a wired device sharing its physical
+        port (TrafficGranularity.PER_PORT) has no real per-device figure to
+        report, only a port aggregate — CLAUDE.md rule 5, never displayed
+        as if it were measured per device.
         """
         try:
             settings_repo = SettingsRepository()
@@ -1429,10 +1440,45 @@ class SentinelScheduler:
                             latest_created_at=r.latest_created_at,
                         ))
 
+                # Independent of whether there were any alerts — see
+                # render_digest_text/_html's own docstrings on why the
+                # traffic section still shows on an "all clear" day.
+                # granularity == 'per_device' only: a wired device sharing
+                # its physical port (TrafficGranularity.PER_PORT) has no
+                # real per-device figure, only a port aggregate — CLAUDE.md
+                # rule 5, never displayed as if it were measured per device.
+                traffic_type_rows = (await session.execute(
+                    select(
+                        TrafficSample.mac_address, Device.hostname, Device.nickname,
+                        func.sum(TrafficSample.bytes_sent_delta).label('upload_bytes'),
+                        func.sum(TrafficSample.bytes_recv_delta).label('download_bytes'),
+                    )
+                    .outerjoin(Device, Device.mac_address == TrafficSample.mac_address)
+                    .where(TrafficSample.time >= cutoff, TrafficSample.granularity == TrafficGranularity.PER_DEVICE.value)
+                    .group_by(TrafficSample.mac_address, Device.hostname, Device.nickname)
+                    .order_by(
+                        (func.sum(TrafficSample.bytes_sent_delta) + func.sum(TrafficSample.bytes_recv_delta)).desc()
+                    )
+                )).all()
+                total_traffic_devices = len(traffic_type_rows)
+                traffic = [
+                    DigestDeviceTraffic(
+                        device_label=resolve_device_label(r.hostname, r.nickname, r.mac_address),
+                        upload_bytes=r.upload_bytes or 0,
+                        download_bytes=r.download_bytes or 0,
+                    )
+                    for r in traffic_type_rows[:MAX_TRAFFIC_DEVICES]
+                ]
+
             truncated = total_types > len(digest_groups)
-            message = render_digest_text(digest_groups, total, severity_counts, cutoff, truncated, total_types)
+            traffic_truncated = total_traffic_devices > len(traffic)
+            message = render_digest_text(
+                digest_groups, total, severity_counts, cutoff, truncated, total_types,
+                traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
+            )
             html_message = render_digest_html(
                 digest_groups, total, severity_counts, cutoff, now, truncated, total_types,
+                traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
             )
             severity = (
                 'CRITICAL' if severity_counts.get('CRITICAL')

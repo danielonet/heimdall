@@ -36,6 +36,22 @@ async def _init_db():
         'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
     )
     init_db(app)
+
+    # Some tests below (SettingsRepository.*) mutate the AppSettings
+    # singleton — snapshot the row that's actually there first and restore
+    # it verbatim on teardown, rather than the old `delete(AppSettings)`
+    # cleanup, which reset the *entire* row (SMTP config, auto_block_on_
+    # threat, baseline_established_at, everything) back to schema defaults
+    # — including on the shared dev DB a live instance is also using. That
+    # silently wiped a real user's settings whenever this suite happened to
+    # run — see 2026-09-08 incident.
+    async with get_session() as session:
+        original = await session.get(AppSettings, 1)
+        original_values = (
+            {c.name: getattr(original, c.name) for c in AppSettings.__table__.columns}
+            if original is not None else None
+        )
+
     yield
     async with get_session() as session:
         macs = [_MAC, _MAC_2, _MAC_3]
@@ -48,6 +64,8 @@ async def _init_db():
         await session.execute(delete(DnsQuery).where(DnsQuery.device_mac.in_(macs)))
         await session.execute(delete(TrafficSample).where(TrafficSample.mac_address.in_(macs)))
         await session.execute(delete(AppSettings))
+        if original_values is not None:
+            session.add(AppSettings(**original_values))
         await session.execute(delete(DeviceTypeProfile).where(DeviceTypeProfile.device_type == _TEST_DEVICE_TYPE))
     await get_engine().dispose()
 
@@ -633,6 +651,15 @@ class TestSettingsRepository:
         assert await SettingsRepository().get_router_username() == 'newadmin'
 
     async def test_smtp_settings_fall_back_to_env_defaults_with_no_row(self):
+        """Needs a genuinely absent AppSettings row — used to rely on a
+        previous test's teardown having deleted it and never restored it
+        (see the 2026-09-08 fix to _init_db's teardown, which now snapshots
+        and restores the row instead of leaving it deleted); that was an
+        accidental cross-test ordering dependency, not real isolation, so
+        this test now creates its own "no row" state explicitly."""
+        async with get_session() as session:
+            await session.execute(delete(AppSettings))
+
         smtp = await SettingsRepository().get_smtp_settings()
         assert smtp == {
             'smtp_host': settings.SMTP_HOST,

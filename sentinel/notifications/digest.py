@@ -47,6 +47,12 @@ _MONO_STACK = "'JetBrains Mono','Courier New',Courier,monospace"
 # shared across the module boundary deliberately, not an internal detail.
 SEVERITY_RANK_TO_NAME = {3: 'CRITICAL', 2: 'WARNING', 1: 'INFO'}
 
+# Same reasoning as MAX_ALERT_TYPES: a household can easily have 30-50+
+# devices ever seen, but only the busiest ones are actually interesting in
+# a daily glance. Ranked by total bytes, so the cap always keeps the
+# heaviest users, not an arbitrary/alphabetical slice.
+MAX_TRAFFIC_DEVICES = 20
+
 
 @dataclass
 class DigestTypeGroup:
@@ -65,13 +71,45 @@ class DigestTypeGroup:
     latest_created_at: datetime
 
 
+@dataclass
+class DigestDeviceTraffic:
+    """One device's total upload/download for the digest window. Only ever
+    built from TrafficSample rows with granularity == 'per_device' — see
+    SentinelScheduler._security_digest_job and CLAUDE.md rule 5: a wired
+    device sharing its physical port with another (TrafficGranularity.
+    PER_PORT) has no real per-device figure to report at all, only a port
+    aggregate, so it's excluded here rather than shown as if measured.
+    """
+    device_label: str
+    upload_bytes: int
+    download_bytes: int
+
+
+def resolve_device_label(hostname: str | None, nickname: str | None, mac: str) -> str:
+    """Mirrors frontend/src/lib/deviceDisplay.js:deviceDisplayName's
+    nickname > hostname > bare-MAC precedence, for building
+    DigestDeviceTraffic.device_label from a query's own hostname/nickname
+    columns (see SentinelScheduler._security_digest_job)."""
+    return nickname or hostname or mac
+
+
 def _plural(n: int, word: str) -> str:
     return f'{n} {word}' if n == 1 else f'{n} {word}s'
+
+
+def _format_mb(n_bytes: int) -> str:
+    """Fixed MB unit, not formatBytes.js's tiered KB/MB/GB — requested as
+    megabytes specifically, and a fixed unit keeps every row in this
+    section directly comparable at a glance. Same 1024-based conversion as
+    the frontend's own formatBytes for consistency elsewhere in the app."""
+    return f'{n_bytes / 1024 / 1024:.2f} MB'
 
 
 def render_digest_text(
     groups: list[DigestTypeGroup], total: int, severity_counts: dict[str, int],
     cutoff: datetime, truncated: bool, total_types: int,
+    traffic: list[DigestDeviceTraffic] | None = None, traffic_truncated: bool = False,
+    total_traffic_devices: int = 0,
 ) -> str:
     """Plain-text fallback — shown by clients that don't render HTML, and
     always what ntfy pushes (a phone notification has no room for a table).
@@ -80,24 +118,42 @@ def render_digest_text(
     separate aggregate query — see SentinelScheduler._security_digest_job),
     not derived from `groups`: a group's own .severity is its *worst* alert,
     which would double-count towards the wrong bucket if summed naively.
+
+    The traffic section (if `traffic` is given) is appended even on an
+    otherwise "all clear" day — no alerts doesn't mean no activity worth
+    reporting, and the two are independent questions.
     """
     if total == 0:
-        return f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.'
-
-    lines = [f'HEIMDALL SECURITY DIGEST — {total} alert(s) since {cutoff:%Y-%m-%d %H:%M} UTC', '']
-    lines.append(', '.join(f'{c} {s}' for s, c in sorted(severity_counts.items(), key=lambda kv: -kv[1])))
-    lines.append('')
-    for g in groups:
-        devices = _plural(g.device_count, 'device')
-        lines.append(
-            f'[{g.severity}] {g.alert_type} — {_plural(g.count, "occurrence")} across {devices}: '
-            f'{g.latest_description or g.alert_type} (latest: {g.latest_created_at:%Y-%m-%d %H:%M} UTC)'
-        )
-    if truncated:
+        lines = [f'No alerts since {cutoff:%Y-%m-%d %H:%M} UTC — all clear.']
+    else:
+        lines = [f'HEIMDALL SECURITY DIGEST — {total} alert(s) since {cutoff:%Y-%m-%d %H:%M} UTC', '']
+        lines.append(', '.join(f'{c} {s}' for s, c in sorted(severity_counts.items(), key=lambda kv: -kv[1])))
         lines.append('')
+        for g in groups:
+            devices = _plural(g.device_count, 'device')
+            lines.append(
+                f'[{g.severity}] {g.alert_type} — {_plural(g.count, "occurrence")} across {devices}: '
+                f'{g.latest_description or g.alert_type} (latest: {g.latest_created_at:%Y-%m-%d %H:%M} UTC)'
+            )
+        if truncated:
+            lines.append('')
+            lines.append(
+                f'...and {total_types - len(groups)} more alert type(s). '
+                'See the Alerts tab in Heimdall for the full list.'
+            )
+
+    if traffic:
+        lines.append('')
+        lines.append('DEVICE TRAFFIC (upload / download)')
+        for t in traffic:
+            lines.append(f'{t.device_label}: {_format_mb(t.upload_bytes)} up / {_format_mb(t.download_bytes)} down')
+        if traffic_truncated:
+            lines.append(f'...and {total_traffic_devices - len(traffic)} more device(s), smaller usage.')
         lines.append(
-            f'...and {total_types - len(groups)} more alert type(s). See the Alerts tab in Heimdall for the full list.'
+            "Wired devices sharing a physical port aren't broken out individually — "
+            'only a combined port total is measurable for them.'
         )
+
     return '\n'.join(lines)
 
 
@@ -113,6 +169,8 @@ def _severity_pill(severity: str) -> str:
 def render_digest_html(
     groups: list[DigestTypeGroup], total: int, severity_counts: dict[str, int],
     cutoff: datetime, now: datetime, truncated: bool, total_types: int,
+    traffic: list[DigestDeviceTraffic] | None = None, traffic_truncated: bool = False,
+    total_traffic_devices: int = 0,
 ) -> str:
     """Table-based, fully inline-styled HTML — no <style> block, no CSS
     variables, no flex/grid: email clients (Gmail's web/app clients
@@ -122,6 +180,10 @@ def render_digest_html(
 
     severity_counts is the TRUE breakdown across the whole window — see
     render_digest_text's docstring for why this isn't derived from `groups`.
+
+    The traffic section (if `traffic` is given) renders as its own card
+    section below the alerts table, even on an otherwise "all clear" day —
+    see render_digest_text's docstring for why those are independent.
     """
     if total > 0:
         badges = ''.join(
@@ -184,6 +246,44 @@ def render_digest_html(
             + '</tr>'
         )
 
+    traffic_section = ''
+    if traffic:
+        traffic_header = (
+            '<tr>'
+            + ''.join(
+                f'<th style="padding:6px 10px;text-align:{"right" if label != "DEVICE" else "left"};'
+                f'color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:2px;font-weight:600;">{label}</th>'
+                for label in ('DEVICE', 'UPLOAD', 'DOWNLOAD')
+            )
+            + '</tr>'
+        )
+        traffic_rows_html = ''.join(
+            '<tr>'
+            f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};'
+            f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">{escape(t.device_label)}</td>'
+            f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};text-align:right;'
+            f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">{_format_mb(t.upload_bytes)}</td>'
+            f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};text-align:right;'
+            f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">{_format_mb(t.download_bytes)}</td>'
+            '</tr>'
+            for t in traffic
+        )
+        traffic_footnote = "Wired devices sharing a physical port aren't broken out individually — only a combined port total is measurable for them."
+        if traffic_truncated:
+            traffic_footnote = (
+                f'...and {total_traffic_devices - len(traffic)} more device(s), smaller usage. ' + traffic_footnote
+            )
+        traffic_section = f"""
+<tr><td style="padding:4px 24px 20px 24px;border-top:1px solid {_BORDER};">
+<div style="color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:13px;letter-spacing:1px;font-weight:600;margin:16px 0 10px 0;">DEVICE TRAFFIC</div>
+<table cellpadding="0" cellspacing="0" border="0" width="100%">
+{traffic_header}
+{traffic_rows_html}
+</table>
+<div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:0.5px;margin-top:10px;line-height:1.5;">{escape(traffic_footnote)}</div>
+</td></tr>
+"""
+
     return f"""\
 <!DOCTYPE html>
 <html>
@@ -216,7 +316,7 @@ def render_digest_html(
 {body_rows}
 </table>
 </td></tr>
-
+{traffic_section}
 <tr><td style="padding:14px 24px;background-color:{_SURFACE_ELEVATED};">
 <div style="color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:1px;">
 Heimdall — self-hosted home network security monitor. This digest summarizes every alert regardless of severity, once a day, grouped by type.

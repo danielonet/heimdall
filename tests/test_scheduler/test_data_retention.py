@@ -37,6 +37,23 @@ async def _init_db():
         'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
     )
     init_db(app)
+
+    # These tests call SettingsRepository().set_data_retention_days(...) to
+    # exercise several windows — snapshot the AppSettings row that's
+    # actually there first and restore it verbatim on teardown, rather than
+    # the old `delete(AppSettings)` cleanup, which reset the *entire* row
+    # (SMTP config, auto_block_on_threat, baseline_established_at,
+    # everything) back to schema defaults — including on the shared dev DB
+    # a live instance is also using. That silently wiped a real user's
+    # settings whenever this suite happened to run — see 2026-09-08
+    # incident.
+    async with get_session() as session:
+        original = await session.get(AppSettings, 1)
+        original_values = (
+            {c.name: getattr(original, c.name) for c in AppSettings.__table__.columns}
+            if original is not None else None
+        )
+
     yield
     async with get_session() as session:
         await session.execute(delete(TrafficSample).where(TrafficSample.mac_address == _MAC))
@@ -44,6 +61,8 @@ async def _init_db():
         await session.execute(delete(Alert).where(Alert.device_mac == _MAC))
         await session.execute(delete(WanStatusHistory))
         await session.execute(delete(AppSettings))
+        if original_values is not None:
+            session.add(AppSettings(**original_values))
     await get_engine().dispose()
 
 
