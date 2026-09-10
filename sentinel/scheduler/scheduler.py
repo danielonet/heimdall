@@ -19,16 +19,16 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from flask import Flask
 from redis.asyncio import Redis, from_url
-from sqlalchemy import case, delete, func, select, text
+from sqlalchemy import delete, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
 from sentinel.adapter.factory import create_router_adapter
-from sentinel.adapter.models import RouterInfo, TrafficGranularity
+from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
-from sentinel.db.models import Alert, Device, DnsQuery, TrafficSample, WanStats, WanStatusHistory
+from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
 from sentinel.db.repositories import (
     AlertRepository, DeviceRepository, PortAllowlistRepository, SettingsRepository, TrustedMacRepository,
 )
@@ -43,10 +43,8 @@ from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.ml.trainer import ModelTrainer
-from sentinel.notifications.digest import (
-    MAX_ALERT_TYPES, MAX_BANDWIDTH_HOURS, MAX_TRAFFIC_DEVICES, SEVERITY_RANK_TO_NAME, DigestDeviceTraffic,
-    DigestHourlyBandwidth, DigestTypeGroup, render_digest_html, render_digest_text, resolve_device_label,
-)
+from sentinel.notifications.digest import render_digest_html, render_digest_text
+from sentinel.notifications.digest_query import build_digest_data
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle
 from sentinel.security.arp_watch import ArpWatcher
@@ -1354,42 +1352,18 @@ class SentinelScheduler:
         "still watching, nothing to report" is itself reassurance for a
         home security tool, not noise.
 
-        Requested directly 2026-09-07: the original version only ever
-        showed aggregate counts ("N alerts — X CRITICAL, Y WARNING"), no
-        actual description of what happened, no device names, plain text
-        only. First rebuilt to list individual alerts in a branded HTML
-        table (device hostname/nickname joined in, same precedence
-        deviceDisplayName uses on the frontend); then, same day, regrouped
-        by alert_type instead — a genuine burst (a real attack, or one
-        flaky device rapid-cycling) would otherwise fill the whole capped
-        list with one repeating type and push every other distinct issue
-        out of view. Now each alert_type gets exactly one row (worst
-        severity seen, occurrence + distinct-device counts, latest
-        description) — see sentinel.notifications.digest.DigestTypeGroup —
-        capped at MAX_ALERT_TYPES (10), so a burst costs one row no matter
-        how many times it fired. Renders both a plain-text body (see
-        render_digest_text — also what ntfy gets) and a tabular HTML body
-        for the email channel (render_digest_html) via NotificationService's
-        html_message param. severity_counts comes from a separate aggregate
-        query spanning the *whole* window, not derived from the (capped)
-        groups — see render_digest_text's own docstring for why.
-
-        Requested directly 2026-09-08: also appends a per-device upload/
-        download traffic section (DigestDeviceTraffic, capped at
-        MAX_TRAFFIC_DEVICES), summed from TrafficSample rows in the same
-        window and shown regardless of whether there were any alerts —
-        traffic and alert volume are independent questions. Restricted to
-        granularity == PER_DEVICE only: a wired device sharing its physical
-        port (TrafficGranularity.PER_PORT) has no real per-device figure to
-        report, only a port aggregate — CLAUDE.md rule 5, never displayed
-        as if it were measured per device.
-
-        Requested directly 2026-09-08: also appends an hourly household
-        bandwidth bar chart (DigestHourlyBandwidth, capped at
-        MAX_BANDWIDTH_HOURS), built from WanStats — the router's own WAN-
-        interface counter, which carries no device/port dimension at all,
-        so it needs none of the PER_DEVICE/PER_PORT filtering the traffic
-        section above does.
+        The actual [cutoff, now) query — alert-type groups, per-device
+        traffic, hourly household bandwidth — lives in
+        sentinel.notifications.digest_query.build_digest_data, shared with
+        the on-demand Reports tab (sentinel/api/routes/reports.py); see
+        that module's own docstring for the query shape and every design
+        note behind it (why grouped by alert_type instead of one row per
+        alert, why traffic is PER_DEVICE-only, why bandwidth is never
+        device-scoped, why severity_counts isn't derived from the capped
+        groups). This method just resolves the window, calls it once, and
+        renders the result both as plain text (render_digest_text — also
+        what ntfy gets) and as the tabular HTML email body
+        (render_digest_html, via NotificationService's html_message param).
         """
         try:
             settings_repo = SettingsRepository()
@@ -1397,126 +1371,26 @@ class SentinelScheduler:
             now = datetime.now(timezone.utc)
             cutoff = last_sent or (now - timedelta(days=1))
 
+            # Query logic lives in digest_query.py, shared with the Reports
+            # tab (sentinel/api/routes/reports.py) — same window-based
+            # alert-type/device-traffic/hourly-bandwidth shape, just an
+            # on-demand [start, end) x optional device instead of this job's
+            # own [cutoff, now) x every device, so the two can never quietly
+            # drift apart. See build_digest_data's own docstring.
             async with get_session() as session:
-                severity_rows = (await session.execute(
-                    select(Alert.severity, func.count().label('count'))
-                    .where(Alert.created_at >= cutoff)
-                    .group_by(Alert.severity)
-                )).all()
-                severity_counts = {r.severity: r.count for r in severity_rows}
-                total = sum(severity_counts.values())
+                digest = await build_digest_data(session, cutoff, now)
 
-                digest_groups: list[DigestTypeGroup] = []
-                total_types = 0
-                if total > 0:
-                    severity_rank = case(
-                        (Alert.severity == 'CRITICAL', 3), (Alert.severity == 'WARNING', 2), else_=1,
-                    )
-                    type_rows = (await session.execute(
-                        select(
-                            Alert.alert_type,
-                            func.count().label('count'),
-                            func.count(func.distinct(Alert.device_mac)).label('device_count'),
-                            func.max(severity_rank).label('severity_rank'),
-                            func.max(Alert.created_at).label('latest_created_at'),
-                        )
-                        .where(Alert.created_at >= cutoff)
-                        .group_by(Alert.alert_type)
-                        .order_by(func.max(severity_rank).desc(), func.count().desc())
-                    )).all()
-                    total_types = len(type_rows)
-
-                    # One extra query per shown type (capped at
-                    # MAX_ALERT_TYPES=10) for the latest alert's own
-                    # description — negligible cost for a once-daily job,
-                    # and much simpler than a window-function join for a
-                    # value this small.
-                    for r in type_rows[:MAX_ALERT_TYPES]:
-                        latest = (await session.execute(
-                            select(Alert.description)
-                            .where(Alert.alert_type == r.alert_type, Alert.created_at >= cutoff)
-                            .order_by(Alert.created_at.desc())
-                            .limit(1)
-                        )).scalar_one_or_none()
-                        digest_groups.append(DigestTypeGroup(
-                            alert_type=r.alert_type,
-                            severity=SEVERITY_RANK_TO_NAME[r.severity_rank],
-                            count=r.count,
-                            device_count=r.device_count,
-                            latest_description=latest,
-                            latest_created_at=r.latest_created_at,
-                        ))
-
-                # Independent of whether there were any alerts — see
-                # render_digest_text/_html's own docstrings on why the
-                # traffic section still shows on an "all clear" day.
-                # granularity == 'per_device' only: a wired device sharing
-                # its physical port (TrafficGranularity.PER_PORT) has no
-                # real per-device figure, only a port aggregate — CLAUDE.md
-                # rule 5, never displayed as if it were measured per device.
-                traffic_type_rows = (await session.execute(
-                    select(
-                        TrafficSample.mac_address, Device.hostname, Device.nickname,
-                        func.sum(TrafficSample.bytes_sent_delta).label('upload_bytes'),
-                        func.sum(TrafficSample.bytes_recv_delta).label('download_bytes'),
-                    )
-                    .outerjoin(Device, Device.mac_address == TrafficSample.mac_address)
-                    .where(TrafficSample.time >= cutoff, TrafficSample.granularity == TrafficGranularity.PER_DEVICE.value)
-                    .group_by(TrafficSample.mac_address, Device.hostname, Device.nickname)
-                    .order_by(
-                        (func.sum(TrafficSample.bytes_sent_delta) + func.sum(TrafficSample.bytes_recv_delta)).desc()
-                    )
-                )).all()
-                total_traffic_devices = len(traffic_type_rows)
-                traffic = [
-                    DigestDeviceTraffic(
-                        device_label=resolve_device_label(r.hostname, r.nickname, r.mac_address),
-                        upload_bytes=r.upload_bytes or 0,
-                        download_bytes=r.download_bytes or 0,
-                    )
-                    for r in traffic_type_rows[:MAX_TRAFFIC_DEVICES]
-                ]
-
-                # Household-total WAN bandwidth by hour — WanStats has no
-                # device/port dimension at all (see DigestHourlyBandwidth's
-                # own docstring), so unlike traffic_type_rows above this
-                # needs no PER_DEVICE/PER_PORT filter. date_trunc('hour', …)
-                # buckets on the DB side; bytes_*_delta are nullable (a
-                # missed poll leaves no delta), coalesced to 0 so one gap
-                # doesn't null out its whole hour's sum.
-                hour_bucket = func.date_trunc('hour', WanStats.time)
-                hourly_rows = (await session.execute(
-                    select(
-                        hour_bucket.label('hour'),
-                        (
-                            func.coalesce(func.sum(WanStats.bytes_sent_delta), 0)
-                            + func.coalesce(func.sum(WanStats.bytes_recv_delta), 0)
-                        ).label('total_bytes'),
-                    )
-                    .where(WanStats.time >= cutoff)
-                    .group_by(hour_bucket)
-                    .order_by(hour_bucket)
-                )).all()
-                # Chronological, not ranked — a timeline reads left-to-right,
-                # so a too-long (missed-digest) window keeps its most RECENT
-                # MAX_BANDWIDTH_HOURS hours, not its largest.
-                hourly_bandwidth = [
-                    DigestHourlyBandwidth(hour=r.hour, total_bytes=r.total_bytes)
-                    for r in hourly_rows[-MAX_BANDWIDTH_HOURS:]
-                ]
-
-            truncated = total_types > len(digest_groups)
-            traffic_truncated = total_traffic_devices > len(traffic)
             message = render_digest_text(
-                digest_groups, total, severity_counts, cutoff, truncated, total_types,
-                traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
-                hourly_bandwidth=hourly_bandwidth,
+                digest.digest_groups, digest.total, digest.severity_counts, cutoff, digest.truncated,
+                digest.total_types, traffic=digest.traffic, traffic_truncated=digest.traffic_truncated,
+                total_traffic_devices=digest.total_traffic_devices, hourly_bandwidth=digest.hourly_bandwidth,
             )
             html_message = render_digest_html(
-                digest_groups, total, severity_counts, cutoff, now, truncated, total_types,
-                traffic=traffic, traffic_truncated=traffic_truncated, total_traffic_devices=total_traffic_devices,
-                hourly_bandwidth=hourly_bandwidth,
+                digest.digest_groups, digest.total, digest.severity_counts, cutoff, now, digest.truncated,
+                digest.total_types, traffic=digest.traffic, traffic_truncated=digest.traffic_truncated,
+                total_traffic_devices=digest.total_traffic_devices, hourly_bandwidth=digest.hourly_bandwidth,
             )
+            severity_counts = digest.severity_counts
             severity = (
                 'CRITICAL' if severity_counts.get('CRITICAL')
                 else 'WARNING' if severity_counts.get('WARNING')

@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from sentinel.db.models import Alert, AlertSnooze, Device, PortAllowlistEntry, PortStats, Rule, TrafficSample, WanStats
+from sentinel.notifications.digest_query import DigestData
 
 
 def device_to_dict(device: Device) -> dict[str, Any]:
@@ -132,4 +133,39 @@ def rule_to_dict(rule: Rule) -> dict[str, Any]:
         'enabled': rule.enabled,
         'created_at': rule.created_at.isoformat() if rule.created_at else None,
         'last_triggered': rule.last_triggered.isoformat() if rule.last_triggered else None,
+    }
+
+
+def digest_data_to_dict(digest: DigestData) -> dict[str, Any]:
+    """Wire shape for GET /api/reports — same fields build_digest_data
+    hands to render_digest_text/render_digest_html for the email, just
+    JSON instead of rendered text/HTML. See sentinel/notifications/
+    digest_query.py."""
+    return {
+        'start': digest.start.isoformat(),
+        'end': digest.end.isoformat(),
+        'total': digest.total,
+        'severity_counts': digest.severity_counts,
+        'digest_groups': [
+            {
+                'alert_type': g.alert_type,
+                'severity': g.severity,
+                'count': g.count,
+                'device_count': g.device_count,
+                'latest_description': g.latest_description,
+                'latest_created_at': g.latest_created_at.isoformat() if g.latest_created_at else None,
+            }
+            for g in digest.digest_groups
+        ],
+        'truncated': digest.truncated,
+        'total_types': digest.total_types,
+        'traffic': [
+            {'device_label': t.device_label, 'upload_bytes': t.upload_bytes, 'download_bytes': t.download_bytes}
+            for t in digest.traffic
+        ],
+        'traffic_truncated': digest.traffic_truncated,
+        'total_traffic_devices': digest.total_traffic_devices,
+        'hourly_bandwidth': [
+            {'hour': h.hour.isoformat(), 'total_bytes': h.total_bytes} for h in digest.hourly_bandwidth
+        ],
     }

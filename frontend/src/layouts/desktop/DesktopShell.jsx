@@ -40,6 +40,7 @@ const NAV_ITEMS = [
   { to: '/ports', label: 'PORTS' },
   { to: '/threats', label: 'THREATS' },
   { to: '/rules', label: 'RULES' },
+  { to: '/reports', label: 'REPORTS' },
   { to: '/settings', label: 'SETTINGS' },
 ]
 

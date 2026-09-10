@@ -11,6 +11,7 @@ import { AlertsPage } from './pages/AlertsPage'
 import { PortsPage } from './pages/PortsPage'
 import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
+import { ReportsPage } from './pages/ReportsPage'
 import { SettingsPage } from './pages/SettingsPage'
 
 const queryClient = new QueryClient({
@@ -33,6 +34,7 @@ function App() {
               <Route path="/ports" element={<PortsPage />} />
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />
+              <Route path="/reports" element={<ReportsPage />} />
               {/* Notifications is now a section of Settings, not its own
                   page — redirect any old link/bookmark instead of a 404. */}
               <Route path="/notifications" element={<Navigate to="/settings" replace />} />
