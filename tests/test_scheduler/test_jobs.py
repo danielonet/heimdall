@@ -5,6 +5,7 @@ through its own session internally, so these tests clean up explicitly by
 deleting the mock adapter's well-known MACs/ports after each test.
 """
 import os
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -13,7 +14,8 @@ from redis.asyncio import from_url
 from sqlalchemy import delete, select
 
 from sentinel.adapter.mock.mock_adapter import MockSagemcomAdapter
-from sentinel.adapter.models import DeviceSnapshot
+from sentinel.adapter.models import DeviceSnapshot, TrafficGranularity
+from sentinel.adapter.models import TrafficSample as TrafficSampleSnapshot
 from sentinel.api.extensions import socketio
 from sentinel.db.models import Alert, AppSettings, Device, PortStats, TrafficSample, TrustedMac, WanStats
 from sentinel.db.repositories import TrustedMacRepository
@@ -24,7 +26,9 @@ from sentinel.detection.wan_bandwidth import WanBandwidthDetector
 from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.model_store import ModelStore
 from sentinel.notifications.service import NotificationConfig, NotificationService
-from sentinel.scheduler.jobs import _upsert_devices, _wired_single_occupant_macs, poll_cycle
+from sentinel.scheduler.jobs import (
+    _synthesize_missing_device_snapshots, _upsert_devices, _wired_single_occupant_macs, poll_cycle,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -641,6 +645,48 @@ class TestWiredSingleOccupantMacs:
             _wired_snapshot('bb:bb:bb:bb:bb:bb', 'PHY2'),
         ]
         assert _wired_single_occupant_macs(devices) == {'aa:aa:aa:aa:aa:aa', 'bb:bb:bb:bb:bb:bb'}
+
+
+def _traffic_snapshot(mac: str, granularity: TrafficGranularity = TrafficGranularity.PER_DEVICE) -> TrafficSampleSnapshot:
+    return TrafficSampleSnapshot(
+        mac_address=mac, timestamp=datetime.now(timezone.utc), bytes_sent_delta=100, bytes_recv_delta=200,
+        granularity=granularity,
+    )
+
+
+class TestSynthesizeMissingDeviceSnapshots:
+    """Regression coverage for a real, confirmed-live gap (2026-09-10):
+    get_connected_devices() (5-minute cache) and get_traffic_samples()
+    (always fresh) can disagree within one poll — a wired device that
+    connects and disconnects within that cache window gets real traffic
+    attributed to it (SagemcomXmoAdapter._single_occupant_port_samples)
+    without ever appearing in `devices`, so it never gets a devices row, a
+    NEW_DEVICE alert, or per-device anomaly scoring. See poll_cycle's own
+    comment for the full mechanism."""
+
+    async def test_traffic_mac_missing_from_devices_gets_a_placeholder(self):
+        result = _synthesize_missing_device_snapshots([], [_traffic_snapshot('aa:aa:aa:aa:aa:aa')])
+        assert len(result) == 1
+        assert result[0].mac_address == 'aa:aa:aa:aa:aa:aa'
+        assert result[0].is_online is True
+
+    async def test_traffic_mac_already_in_devices_is_not_duplicated(self):
+        devices = [_wired_snapshot('aa:aa:aa:aa:aa:aa', 'PHY2')]
+        result = _synthesize_missing_device_snapshots(devices, [_traffic_snapshot('aa:aa:aa:aa:aa:aa')])
+        assert result == []
+
+    async def test_per_port_samples_are_ignored(self):
+        """A PER_PORT sample's mac_address is a port alias ('PHY1'), not a
+        real device MAC — never worth a placeholder device."""
+        result = _synthesize_missing_device_snapshots(
+            [], [_traffic_snapshot('PHY1', granularity=TrafficGranularity.PER_PORT)],
+        )
+        assert result == []
+
+    async def test_duplicate_traffic_samples_for_the_same_missing_mac_produce_one_placeholder(self):
+        samples = [_traffic_snapshot('aa:aa:aa:aa:aa:aa'), _traffic_snapshot('aa:aa:aa:aa:aa:aa')]
+        result = _synthesize_missing_device_snapshots([], samples)
+        assert len(result) == 1
 
 
 class TestUpsertDevicesPortGranularity:

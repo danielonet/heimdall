@@ -32,7 +32,9 @@ export function ReportsPage() {
   // bandwidth. Zero-traffic devices never reach `traffic` at all (see
   // digest_query.py's HAVING clause) — the "> 0" half of the ask is
   // already guaranteed server-side, this just narrows to untrusted ones.
-  const [untrustedOnly, setUntrustedOnly] = useState(false)
+  // Defaults on — requested directly: this is the thing worth seeing
+  // first on this page, not an opt-in.
+  const [untrustedOnly, setUntrustedOnly] = useState(true)
 
   function applyPreset(rangeMs) {
     const now = new Date()

@@ -76,8 +76,24 @@ async def poll_cycle(
     through the DetectionPipeline this poll cycle runs.
     """
     devices = await adapter.get_connected_devices()
-    _enrich_vendor_names(devices)
     traffic_samples = await adapter.get_traffic_samples()
+    # Confirmed live 2026-09-10: get_connected_devices() is cached for
+    # SagemcomXmoAdapter._CONNECTED_DEVICES_CACHE_TTL_S (5 minutes), while
+    # get_traffic_samples() re-fetches fresh every poll — a wired device
+    # that connects and disconnects within that cache window (e.g. via
+    # SagemcomXmoAdapter._single_occupant_port_samples' single-occupant-
+    # port promotion) can get real PER_DEVICE traffic attributed to it on
+    # a poll whose *devices* list still predates the connection. Left
+    # alone, that MAC never gets a devices row, a NEW_DEVICE alert, or
+    # per-device anomaly scoring — it just accumulates traffic invisibly,
+    # showing up nowhere except as a bare, unnamed, permanently-untrusted-
+    # by-default MAC in a traffic report. Folding a placeholder snapshot
+    # for it into `devices` here, before anything downstream runs, means
+    # the entire existing pipeline (upsert, alerting, learning-period
+    # auto-trust, anomaly detection) picks it up with no special-casing
+    # anywhere else.
+    devices = devices + _synthesize_missing_device_snapshots(devices, traffic_samples)
+    _enrich_vendor_names(devices)
     port_stats = await adapter.get_port_stats()
     router_info = await adapter.get_router_info()
     wan_stats = await adapter.get_wan_stats()  # None if the (unverified) xpath doesn't resolve
@@ -215,6 +231,32 @@ async def _retrain_once_armed(anomaly_engine: AnomalyEngine) -> None:
 
     await settings_repo.set_armed_retrain_done(True)
     logger.info('System armed — retrained all device models from the full learning-period history')
+
+
+def _synthesize_missing_device_snapshots(
+    devices: list[DeviceSnapshot], traffic_samples: list[TrafficSampleSnapshot],
+) -> list[DeviceSnapshot]:
+    """One placeholder DeviceSnapshot per PER_DEVICE traffic_samples MAC
+    that isn't already in `devices` — see poll_cycle's own comment on the
+    5-minute-cache-vs-always-fresh mismatch this covers for. Deliberately
+    minimal (blank hostname/IP, is_online=True — it generated traffic this
+    poll, so it was clearly connected for at least part of it): this is
+    "make sure it exists at all", not an attempt to reconstruct data the
+    adapter itself didn't report this cycle. hostname/IP fill in normally
+    on whichever later poll actually catches it in a fresh connected-
+    devices fetch.
+    """
+    known_macs = {d.mac_address for d in devices}
+    seen: set[str] = set()
+    synthesized: list[DeviceSnapshot] = []
+    for sample in traffic_samples:
+        if sample.granularity != TrafficGranularity.PER_DEVICE:
+            continue
+        if sample.mac_address in known_macs or sample.mac_address in seen:
+            continue
+        seen.add(sample.mac_address)
+        synthesized.append(DeviceSnapshot(mac_address=sample.mac_address, ip_address='', hostname='', is_online=True))
+    return synthesized
 
 
 def _enrich_vendor_names(devices: list[DeviceSnapshot]) -> None:
