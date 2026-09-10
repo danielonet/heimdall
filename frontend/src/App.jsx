@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthGuard } from './AuthGuard'
 import { Shell } from './Shell'
@@ -11,7 +11,6 @@ import { AlertsPage } from './pages/AlertsPage'
 import { PortsPage } from './pages/PortsPage'
 import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
-import { NotificationsPage } from './pages/NotificationsPage'
 import { SettingsPage } from './pages/SettingsPage'
 
 const queryClient = new QueryClient({
@@ -34,7 +33,9 @@ function App() {
               <Route path="/ports" element={<PortsPage />} />
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />
-              <Route path="/notifications" element={<NotificationsPage />} />
+              {/* Notifications is now a section of Settings, not its own
+                  page — redirect any old link/bookmark instead of a 404. */}
+              <Route path="/notifications" element={<Navigate to="/settings" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Routes>

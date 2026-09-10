@@ -30,13 +30,13 @@ MAX_RETENTION_DAYS = 3650  # 10 years
 MIN_SMTP_PORT = 1
 MAX_SMTP_PORT = 65535
 MIN_ALERT_STALE_HOURS = 1
-MAX_ALERT_STALE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertStalenessSection.jsx
+MAX_ALERT_STALE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertLifecycleSection.jsx
 MIN_ALERT_AUTO_RESOLVE_HOURS = 1
-MAX_ALERT_AUTO_RESOLVE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertAutoResolveSection.jsx
+MAX_ALERT_AUTO_RESOLVE_HOURS = 24 * 90  # 90 days — must match frontend/src/components/settings/AlertLifecycleSection.jsx
 MIN_DEVICE_ARCHIVE_AFTER_DAYS = 7
-MAX_DEVICE_ARCHIVE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DeviceArchiveSection.jsx
+MAX_DEVICE_ARCHIVE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DataRetentionSection.jsx
 MIN_DEVICE_PURGE_AFTER_DAYS = 7
-MAX_DEVICE_PURGE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DeviceArchiveSection.jsx
+MAX_DEVICE_PURGE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DataRetentionSection.jsx
 
 
 async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:

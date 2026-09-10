@@ -4,13 +4,12 @@ import { useHealth } from '../hooks/useHealth'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
 import { Badge } from '../components/Badge'
-import { AlertAutoResolveSection } from '../components/settings/AlertAutoResolveSection'
-import { AlertStalenessSection } from '../components/settings/AlertStalenessSection'
+import { AlertLifecycleSection } from '../components/settings/AlertLifecycleSection'
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
-import { DatabaseSection } from '../components/settings/DatabaseSection'
-import { DeviceArchiveSection } from '../components/settings/DeviceArchiveSection'
+import { DataRetentionSection } from '../components/settings/DataRetentionSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
+import { NotificationsSection } from '../components/settings/NotificationsSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
 import heimdallLogo from '../assets/heimdall-icon.png'
@@ -41,12 +40,26 @@ export function SettingsPage() {
 
   // Keyed off layout mode, not viewport — see PortsPage/ThreatsPage.
   const gridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-4 gap-3'
-  // Every settings tile lives in this one 4-wide grid (items-stretch, the
-  // grid default, matches each row's tiles to the tallest one in it) —
-  // previously split across a mismatched 3-up/4-up pair of groups for no
-  // real reason; one consistent column count reads as a single set of
-  // options, not two unrelated groupings.
-  const tilesClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-4 gap-3'
+  // Everything that used to be the separate NOTIFICATIONS tab now lives in
+  // this one tile grid too (requested directly: consolidate the tab into
+  // Settings) — and several formerly-standalone tiles were merged into
+  // denser ones along the way (AlertLifecycleSection = staleness +
+  // auto-resolve, DataRetentionSection = DB retention + device archive/
+  // purge, NotificationsSection = ntfy + SMTP; NETWORK INTERFACE moved into
+  // the ROUTER panel below as a third sub-section alongside ROUTER LOGIN)
+  // specifically so the whole page reads as fewer, richer cards instead of
+  // many thin ones — the actual ask, not just a relocation.
+  //
+  // Responsive beyond the binary mobile/desktop split this codebase
+  // otherwise uses everywhere else: base desktop is 2-up, xl (>=1280px) is
+  // 4-up, so this fits as one wide page on a real monitor without forcing
+  // a scroll a phone-width layout wouldn't need either. The two content-
+  // heavy merged tiles (DATA RETENTION, NOTIFICATIONS) span 2 columns at
+  // every desktop width — full-width at 2-up, half-width side-by-side once
+  // 4-up kicks in — since their own multi-field rows need more than one
+  // quarter of a narrow-ish desktop window to lay out cleanly.
+  const tilesClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-2 xl:grid-cols-4 gap-3'
+  const wideTileClass = mode === 'mobile' ? '' : 'col-span-2'
 
   async function handleLogout() {
     await logout()
@@ -95,17 +108,20 @@ export function SettingsPage() {
           </div>
         )}
         <RouterCredentialsForm />
+        <NetworkInterfaceSection />
       </div>
 
       <div className={tilesClass}>
         <LearningStatusSection />
-        <DatabaseSection />
-        <NetworkInterfaceSection />
         <AutoBlockSection />
-        <AlertStalenessSection />
-        <AlertAutoResolveSection />
-        <DeviceArchiveSection />
+        <AlertLifecycleSection />
         <PurgeDatabaseSection />
+        <div className={wideTileClass}>
+          <DataRetentionSection />
+        </div>
+        <div className={wideTileClass}>
+          <NotificationsSection />
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-3">

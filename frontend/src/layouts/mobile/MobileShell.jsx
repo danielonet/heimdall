@@ -14,7 +14,8 @@ const TABS = [
   { to: '/alerts', label: 'ALERTS' },
   { to: '/threats', label: 'THREATS' },
   { to: '/rules', label: 'RULES' },
-  { to: '/notifications', label: 'NOTIFICATIONS' },
+  // Notifications is now a section of Settings (reachable via the CONFIG
+  // icon in BOTTOM_NAV below), not its own top tab.
 ]
 
 const BOTTOM_NAV = [

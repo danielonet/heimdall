@@ -16,9 +16,14 @@ export function NetworkInterfaceSection() {
 
   const isDirty = data && selected !== data.sniff_iface
 
+  // No own border/bg — embedded as a sub-section of the ROUTER panel
+  // (SettingsPage), same nested pattern as RouterCredentialsForm right
+  // above it. Was previously its own standalone tile in the main grid;
+  // folded in here as part of the compact-settings-page consolidation
+  // since it's the same "this machine's network configuration" domain.
   return (
-    <div className="border border-border bg-surface p-3">
-      <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">NETWORK INTERFACE</div>
+    <div className="mt-2 border-t border-border/50 pt-2">
+      <div className="mb-1.5 text-[8px] tracking-[3px] text-text-muted">NETWORK INTERFACE</div>
       <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
         The LAN-facing NIC ARP watch and passive fingerprinting listen on. Applies immediately.
       </p>
