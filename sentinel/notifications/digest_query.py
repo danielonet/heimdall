@@ -54,6 +54,11 @@ async def build_digest_data(
     wide WAN total with no device dimension at all to filter by — see
     DigestHourlyBandwidth's own docstring.
 
+    The device-traffic section only ever includes a device with nonzero
+    upload OR download this window — a device that was polled (PER_DEVICE
+    samples exist) but sat completely idle the whole time isn't worth a
+    "0.00 MB up / 0.00 MB down" row.
+
     The max_* caps default to the email's own limits (MAX_ALERT_TYPES etc.
     — see digest.py) so _security_digest_job's behavior is unchanged by
     this refactor; pass None for "no cap" (the Reports tab's own default —
@@ -114,6 +119,14 @@ async def build_digest_data(
     if device_mac:
         traffic_filters.append(TrafficSample.mac_address == device_mac)
 
+    # Requested directly: a device with zero upload AND zero download this
+    # window (PER_DEVICE samples exist — it was polled — but every delta
+    # came back 0, e.g. connected but idle) isn't worth a row; HAVING drops
+    # it before the cap/ordering below even sees it, rather than the caller
+    # having to filter dead rows back out after the fact.
+    traffic_total = func.coalesce(func.sum(TrafficSample.bytes_sent_delta), 0) + func.coalesce(
+        func.sum(TrafficSample.bytes_recv_delta), 0
+    )
     traffic_rows = (await session.execute(
         select(
             TrafficSample.mac_address, Device.hostname, Device.nickname,
@@ -123,7 +136,8 @@ async def build_digest_data(
         .outerjoin(Device, Device.mac_address == TrafficSample.mac_address)
         .where(*traffic_filters)
         .group_by(TrafficSample.mac_address, Device.hostname, Device.nickname)
-        .order_by((func.sum(TrafficSample.bytes_sent_delta) + func.sum(TrafficSample.bytes_recv_delta)).desc())
+        .having(traffic_total > 0)
+        .order_by(traffic_total.desc())
     )).all()
     total_traffic_devices = len(traffic_rows)
     shown_traffic = traffic_rows if max_traffic_devices is None else traffic_rows[:max_traffic_devices]

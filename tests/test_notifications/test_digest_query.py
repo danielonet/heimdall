@@ -145,6 +145,40 @@ class TestDeviceFilter:
         assert digest.traffic == []
 
 
+class TestZeroTrafficDevicesExcluded:
+    """Requested directly: don't list a device that's polled (PER_DEVICE
+    samples exist) but had zero upload and zero download the whole window
+    — a "0.00 MB up / 0.00 MB down" row isn't useful."""
+
+    async def test_device_with_zero_upload_and_download_is_dropped(self):
+        await _add_traffic(_MAC_A, 0, 0, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, device_mac=_MAC_A)
+
+        assert digest.traffic == []
+
+    async def test_device_with_only_upload_still_shows(self):
+        await _add_traffic(_MAC_A, 500, 0, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, device_mac=_MAC_A)
+
+        assert len(digest.traffic) == 1
+        assert digest.traffic[0].upload_bytes == 500
+
+    async def test_zero_traffic_device_does_not_count_toward_the_truncation_total(self):
+        await _add_traffic(_MAC_A, 0, 0, _NOW - timedelta(hours=1))
+        await _add_traffic(_MAC_B, 100, 200, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, max_traffic_devices=None)
+
+        labels = {t.device_label for t in digest.traffic}
+        assert _MAC_A not in labels
+        assert _MAC_B in labels
+
+
 class TestCaps:
     async def test_none_cap_returns_every_type_uncapped(self):
         for i in range(3):
