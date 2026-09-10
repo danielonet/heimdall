@@ -210,7 +210,10 @@ def render_digest_text(
         lines.append('')
         lines.append('DEVICE TRAFFIC (upload / download)')
         for t in traffic:
-            lines.append(f'{t.device_label}: {_format_mb(t.upload_bytes)} up / {_format_mb(t.download_bytes)} down')
+            trust_tag = '' if t.is_trusted else ' [UNTRUSTED]'
+            lines.append(
+                f'{t.device_label}{trust_tag}: {_format_mb(t.upload_bytes)} up / {_format_mb(t.download_bytes)} down'
+            )
         if traffic_truncated:
             lines.append(f'...and {total_traffic_devices - len(traffic)} more device(s), smaller usage.')
         lines.append(
@@ -221,13 +224,25 @@ def render_digest_text(
     return '\n'.join(lines)
 
 
-def _severity_pill(severity: str) -> str:
-    color = _SEVERITY_COLOR.get(severity, _TEXT_MUTED)
+def _pill(text: str, color: str) -> str:
     return (
         f'<span style="display:inline-block;padding:2px 8px;border:1px solid {color};'
         f'border-radius:2px;color:{color};font-family:{_MONO_STACK};font-size:10px;'
-        f'letter-spacing:1px;font-weight:600;white-space:nowrap;">{escape(severity)}</span>'
+        f'letter-spacing:1px;font-weight:600;white-space:nowrap;">{escape(text)}</span>'
     )
+
+
+def _severity_pill(severity: str) -> str:
+    return _pill(severity, _SEVERITY_COLOR.get(severity, _TEXT_MUTED))
+
+
+def _trust_pill(is_trusted: bool) -> str:
+    # accent-green and accent-red in the frontend's own default Amber CRT
+    # palette (frontend/src/index.css) — #ffb02d and #ff5a3a respectively —
+    # already exactly match _ACCENT and _SEVERITY_COLOR['CRITICAL'] here, so
+    # no new color constants needed to mirror the Reports tab's own
+    # trusted/untrusted coloring (ReportDeviceTrafficChart.jsx).
+    return _pill('TRUSTED', _ACCENT) if is_trusted else _pill('UNTRUSTED', _SEVERITY_COLOR['CRITICAL'])
 
 
 def render_digest_html(
@@ -354,7 +369,7 @@ def render_digest_html(
         )
         bandwidth_section = f"""
 <tr><td style="padding:4px 24px 20px 24px;border-top:1px solid {_BORDER};">
-<div style="color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:13px;letter-spacing:1px;font-weight:600;margin:16px 0 10px 0;">BANDWIDTH BY HOUR</div>
+<div style="color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:13px;letter-spacing:1px;font-weight:600;margin:16px 0 10px 0;">BANDWIDTH BY HOUR <span style="color:{_TEXT_MUTED};font-weight:400;letter-spacing:0.5px;">(household total)</span></div>
 <table cellpadding="0" cellspacing="0" border="0"><tr>
 {''.join(bar_cells)}
 </tr></table>
@@ -367,16 +382,30 @@ def render_digest_html(
         traffic_header = (
             '<tr>'
             + ''.join(
-                f'<th style="padding:6px 10px;text-align:{"right" if label != "DEVICE" else "left"};'
+                f'<th style="padding:6px 10px;text-align:{"right" if label in ("UPLOAD", "DOWNLOAD") else "left"};'
                 f'color:{_TEXT_MUTED};font-family:{_MONO_STACK};font-size:9px;letter-spacing:2px;font-weight:600;">{label}</th>'
-                for label in ('DEVICE', 'UPLOAD', 'DOWNLOAD')
+                for label in ('DEVICE', 'TRUST', 'UPLOAD', 'DOWNLOAD')
             )
             + '</tr>'
         )
+        # Same magnitude-by-color read as the Reports tab's own device-
+        # traffic bar chart (ReportDeviceTrafficChart.jsx) — a horizontal
+        # bar under each device's name, width proportional to its share of
+        # the largest total in this list, colored by trust exactly like
+        # that chart's bars. A flat table alone loses the "who's actually
+        # using the most, and are they trusted" at-a-glance read the chart
+        # gives; email can't run recharts, but a sized/colored table cell
+        # gets close.
+        max_total = max((t.upload_bytes + t.download_bytes for t in traffic), default=0)
         traffic_rows_html = ''.join(
             '<tr>'
             f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};'
-            f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">{escape(t.device_label)}</td>'
+            f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">'
+            f'{escape(t.device_label)}'
+            f'<div style="margin-top:4px;height:3px;width:{max(2, round((t.upload_bytes + t.download_bytes) / max_total * 100)) if max_total else 2}px;'
+            f'background-color:{_ACCENT if t.is_trusted else _SEVERITY_COLOR["CRITICAL"]};font-size:0;line-height:0;">&nbsp;</div>'
+            '</td>'
+            f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};">{_trust_pill(t.is_trusted)}</td>'
             f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};text-align:right;'
             f'color:{_TEXT_PRIMARY};font-family:{_MONO_STACK};font-size:12px;white-space:nowrap;">{_format_mb(t.upload_bytes)}</td>'
             f'<td style="padding:6px 10px;border-top:1px solid {_BORDER};text-align:right;'

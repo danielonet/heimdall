@@ -20,7 +20,11 @@ def _group(**overrides) -> DigestTypeGroup:
 
 
 def _traffic(**overrides) -> DigestDeviceTraffic:
-    defaults = dict(device_label='laptop', upload_bytes=1024 * 1024, download_bytes=1024 * 1024 * 4)
+    # is_trusted=True by default (the dataclass's own default is False) so
+    # existing trust-agnostic assertions in this file aren't tripped up by
+    # the [UNTRUSTED] tag/pill — TestDeviceTrafficTrust below covers that
+    # behavior explicitly instead.
+    defaults = dict(device_label='laptop', upload_bytes=1024 * 1024, download_bytes=1024 * 1024 * 4, is_trusted=True)
     defaults.update(overrides)
     return DigestDeviceTraffic(**defaults)
 
@@ -437,3 +441,60 @@ class TestRenderDigestHtmlBandwidth:
         assert '2026-09-06 06:00' in html
         assert 'peak 07:00' in html
         assert '500.00' in html.split('peak 07:00')[1][:40]  # MB figure follows the peak label closely
+
+
+class TestDeviceTrafficTrust:
+    """Requested directly: make the digest email resemble the Reports tab
+    as closely as possible — the tab's device-traffic bar chart/table color
+    an untrusted device red, trusted green (ReportDeviceTrafficChart.jsx),
+    so the email now carries the same distinction."""
+
+    def test_text_tags_an_untrusted_device(self):
+        rows = [_traffic(device_label='laptop', is_trusted=False)]
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, traffic=rows,
+        )
+        assert 'laptop [UNTRUSTED]:' in text
+
+    def test_text_does_not_tag_a_trusted_device(self):
+        rows = [_traffic(device_label='laptop', is_trusted=True)]
+        text = render_digest_text(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, truncated=False, total_types=0, traffic=rows,
+        )
+        assert 'laptop:' in text
+        assert 'UNTRUSTED' not in text
+
+    def test_html_renders_a_trust_pill_for_each_device(self):
+        rows = [_traffic(device_label='laptop', is_trusted=True), _traffic(device_label='cam', is_trusted=False)]
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0, traffic=rows,
+        )
+        assert '>TRUSTED<' in html
+        assert '>UNTRUSTED<' in html
+
+    def test_html_pill_colors_match_the_reports_tab_palette(self):
+        """#ffb02d/#ff5a3a are accent-green/accent-red in the frontend's
+        own default Amber CRT palette — same hex the Reports tab's bar
+        chart uses via var(--color-accent-green)/var(--color-accent-red)."""
+        rows = [_traffic(device_label='laptop', is_trusted=True), _traffic(device_label='cam', is_trusted=False)]
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0, traffic=rows,
+        )
+        assert 'color:#ffb02d' in html
+        assert 'color:#ff5a3a' in html
+
+    def test_html_bar_width_reflects_relative_traffic_share(self):
+        rows = [
+            _traffic(device_label='big', upload_bytes=1000, download_bytes=0, is_trusted=True),
+            _traffic(device_label='small', upload_bytes=10, download_bytes=0, is_trusted=True),
+        ]
+        html = render_digest_html(
+            [], total=0, severity_counts={}, cutoff=_CUTOFF, now=_NOW, truncated=False, total_types=0, traffic=rows,
+        )
+        big_idx = html.find('big')
+        small_idx = html.find('small')
+        big_width = int(html[big_idx:].split('width:')[1].split('px')[0])
+        small_width = int(html[small_idx:].split('width:')[1].split('px')[0])
+        assert big_width == 100  # the largest device in the list maxes out the bar
+        assert small_width < big_width
+        assert small_width >= 2  # a real (nonzero) amount is never invisible

@@ -218,7 +218,13 @@ class TestSecurityDigestJob:
         now = datetime.now(timezone.utc)
         await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=6))
         async with get_session() as session:
-            session.add(Device(mac_address=_TRAFFIC_MAC, hostname='zzz-test-host', nickname='ZZZ Test Nickname'))
+            # is_trusted=True: this test is about nickname resolution, not
+            # trust — an untrusted device would pick up the [UNTRUSTED] tag
+            # (see TestDeviceTrafficTrust in test_digest.py) and break the
+            # exact-string match below for an unrelated reason.
+            session.add(Device(
+                mac_address=_TRAFFIC_MAC, hostname='zzz-test-host', nickname='ZZZ Test Nickname', is_trusted=True,
+            ))
         await _add_traffic(_TRAFFIC_MAC, upload=1024 * 1024 * 500, download=1024 * 1024 * 100, when=now - timedelta(hours=3))
         await _add_traffic(_TRAFFIC_MAC, upload=1024 * 1024 * 500, download=1024 * 1024 * 100, when=now - timedelta(hours=2))
 
@@ -250,7 +256,11 @@ class TestSecurityDigestJob:
 
         call = scheduler._notifier.calls[0]
         assert 'DEVICE TRAFFIC' in call['message']
-        assert f'{_TRAFFIC_MAC}: 5000.00 MB up / 5000.00 MB down' in call['message']
+        # [UNTRUSTED]: no Device row exists for this MAC at all (no seed
+        # above) — correctly reads as untrusted, same as a real Device.
+        # is_trusted=False row (see digest_query.py's own comment on the
+        # outerjoin-finds-nothing case).
+        assert f'{_TRAFFIC_MAC} [UNTRUSTED]: 5000.00 MB up / 5000.00 MB down' in call['message']
 
     async def test_wired_per_port_samples_are_excluded_from_device_traffic(self, scheduler):
         """CLAUDE.md rule 5: a PER_PORT sample has no real per-device figure
