@@ -114,6 +114,12 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 
 Requires a Linux host with Docker, on the same LAN as the router it will monitor (several containers run with `network_mode: host` to sniff ARP/DHCP/DNS traffic directly).
 
+Installing on a dedicated home lab box at a fixed internal IP, pulling
+pre-built images instead of building from source? See
+[`docs/homelab-deployment.md`](docs/homelab-deployment.md) for that specific
+walkthrough — the general steps below still apply, this just sequences them
+for that setup.
+
 ### 1. Choose an installation tier and run the installer
 
 | Tier | Containers beyond core (Postgres/Redis/backend/frontend) | Installer |
