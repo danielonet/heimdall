@@ -458,7 +458,23 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             target.interface_name = snapshot.interface_name
             target.port_alias = snapshot.port_alias or None
             target.traffic_granularity = traffic_granularity
-            target.signal_strength_dbm = snapshot.signal_strength_dbm
+            # Confirmed live 2026-09-10: the router only ever reports a real
+            # SignalStrength for a device it currently has an AP association
+            # for (SagemcomXmoAdapter._to_device_snapshot sources both
+            # ap_alias and signal_strength_dbm from the same associated-
+            # client record) — the instant a device drops its association,
+            # this snapshots back to 0/no-reading. Same decay shape as the
+            # hostname fix above: only move to a real reading, keep the last
+            # known one otherwise, so the Network Map's signal-strength
+            # placement for "NOT ASSOCIATED" devices (networkMapLayout.js's
+            # signalRadius) has something other than 0 to differentiate on
+            # for any device that's ever actually been seen with a signal —
+            # a device that truly never has (nothing to preserve, since this
+            # only ever moves off its own model-default 0) still correctly
+            # falls to the weakest/outer position, matching that function's
+            # documented intent.
+            if snapshot.signal_strength_dbm:
+                target.signal_strength_dbm = snapshot.signal_strength_dbm
             target.signal_rate_mbps = snapshot.signal_rate_mbps
             target.device_type = snapshot.device_type or None
             target.ap_alias = snapshot.ap_alias or None

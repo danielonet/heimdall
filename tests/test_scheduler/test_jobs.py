@@ -737,10 +737,12 @@ class TestUpsertDevicesPortGranularity:
             assert (await session.get(Device, mac1)).traffic_granularity == 'per_device'
 
 
-def _wifi_snapshot(mac: str, hostname: str, ip: str, is_online: bool = True) -> DeviceSnapshot:
+def _wifi_snapshot(
+    mac: str, hostname: str, ip: str, is_online: bool = True, signal_strength_dbm: int = 0,
+) -> DeviceSnapshot:
     return DeviceSnapshot(
         mac_address=mac, ip_address=ip, hostname=hostname,
-        interface_name='WiFi', is_online=is_online,
+        interface_name='WiFi', is_online=is_online, signal_strength_dbm=signal_strength_dbm,
     )
 
 
@@ -897,3 +899,61 @@ class TestUpsertDevicesPreservesHostnameOnDecay:
 
         async with get_session() as session:
             assert (await session.get(Device, self._MAC)).hostname == 'new-name'
+
+
+class TestUpsertDevicesPreservesSignalStrengthOnDecay:
+    """Regression coverage for a real, confirmed-live bug (2026-09-11): the
+    router only ever reports a real SignalStrength for a device it
+    currently has an AP association for (both ap_alias and
+    signal_strength_dbm come from the same associated-client record — see
+    SagemcomXmoAdapter._to_device_snapshot) — the instant a device drops
+    its association, signal_strength_dbm snapshots back to 0. Reported as:
+    the Network Map's "NOT ASSOCIATED" devices were all sitting at the same
+    distance from center — networkMapLayout.js's signalRadius() spreads
+    that bucket by signal strength, but every device in it had decayed to
+    0 the moment it stopped being live-associated, so there was nothing
+    left to differentiate on."""
+
+    _MAC = '44:44:44:44:44:02'
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup(self):
+        yield
+        async with get_session() as session:
+            await session.execute(delete(Device).where(Device.mac_address == self._MAC))
+
+    async def test_signal_dropping_to_zero_does_not_erase_the_last_real_reading(self):
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'phone', '10.0.0.70', signal_strength_dbm=-55)])
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).signal_strength_dbm == -55
+
+        # Device drops its AP association — router reports no reading (0).
+        async with get_session() as session:
+            await _upsert_devices(
+                session, [_wifi_snapshot(self._MAC, '', '', is_online=False, signal_strength_dbm=0)],
+            )
+
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).signal_strength_dbm == -55
+
+    async def test_a_genuinely_new_reading_still_updates(self):
+        """Not frozen forever — a real change in signal (device moved
+        closer/further from the AP) must still take effect."""
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'phone', '10.0.0.70', signal_strength_dbm=-70)])
+
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'phone', '10.0.0.70', signal_strength_dbm=-40)])
+
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).signal_strength_dbm == -40
+
+    async def test_a_device_that_never_had_a_real_reading_stays_at_the_zero_default(self):
+        """Nothing to preserve — correctly falls to the "no data" case
+        networkMapLayout.js's signalRadius() already treats as weakest."""
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'phone', '10.0.0.70', signal_strength_dbm=0)])
+
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).signal_strength_dbm == 0
