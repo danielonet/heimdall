@@ -17,7 +17,7 @@ export function ReportBandwidthChart({ hourlyBandwidth }) {
 
   return (
     <ResponsiveContainer width="100%" height={180}>
-      <BarChart data={data} margin={{ left: 8, right: 8 }}>
+      <BarChart data={data} margin={{ left: 4, right: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
         <XAxis
           dataKey="hour"
@@ -27,7 +27,11 @@ export function ReportBandwidthChart({ hourlyBandwidth }) {
         />
         <YAxis
           tick={{ fontSize: 9, fill: 'var(--color-text-muted)' }}
-          width={48}
+          // formatBytes output ("726.9 MB", "2.85 GB", ...) runs wider than
+          // it looks at a glance — 48px clipped/overlapped the longer
+          // labels into the plot area. 68 comfortably fits the realistic
+          // worst case (a low-hundreds MB/GB reading, one decimal + unit).
+          width={68}
           tickFormatter={(v) => formatBytes(v)}
         />
         <Tooltip
