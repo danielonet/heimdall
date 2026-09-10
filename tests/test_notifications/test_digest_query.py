@@ -65,6 +65,13 @@ async def _add_traffic(
         ))
 
 
+async def _add_device(mac: str, **overrides) -> None:
+    defaults = dict(mac_address=mac, hostname='test-device', is_trusted=False)
+    defaults.update(overrides)
+    async with get_session() as session:
+        session.add(Device(**defaults))
+
+
 class TestWindowBounds:
     async def test_start_is_inclusive(self):
         await _add_alert('ZZZ_TEST_AT_START', _MAC_A, _START)
@@ -212,3 +219,36 @@ class TestCaps:
         labels = {t.device_label for t in digest.traffic}
         assert _MAC_A in labels
         assert _MAC_B in labels
+
+
+class TestTrafficIsTrusted:
+    """Requested directly: an untrusted-device filter/highlight on the
+    Reports tab needs is_trusted carried through the traffic section."""
+
+    async def test_trusted_device_carries_through(self):
+        await _add_device(_MAC_A, hostname='trusted-one', is_trusted=True)
+        await _add_traffic(_MAC_A, 100, 200, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, device_mac=_MAC_A)
+
+        assert digest.traffic[0].is_trusted is True
+
+    async def test_untrusted_device_carries_through(self):
+        await _add_device(_MAC_A, hostname='untrusted-one', is_trusted=False)
+        await _add_traffic(_MAC_A, 100, 200, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, device_mac=_MAC_A)
+
+        assert digest.traffic[0].is_trusted is False
+
+    async def test_traffic_with_no_matching_device_row_defaults_untrusted(self):
+        """A MAC with traffic but no devices row at all — the outerjoin
+        finds nothing — must never silently read as trusted."""
+        await _add_traffic(_MAC_A, 100, 200, _NOW - timedelta(hours=1))
+
+        async with get_session() as session:
+            digest = await build_digest_data(session, _START, _END, device_mac=_MAC_A)
+
+        assert digest.traffic[0].is_trusted is False

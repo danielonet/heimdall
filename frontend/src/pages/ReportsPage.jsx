@@ -5,6 +5,7 @@ import { useDevices } from '../hooks/useDevices'
 import { deviceDisplayName } from '../lib/deviceDisplay'
 import { ReportAlertGroups } from '../components/reports/ReportAlertGroups'
 import { ReportDeviceTraffic } from '../components/reports/ReportDeviceTraffic'
+import { ReportDeviceTrafficChart } from '../components/reports/ReportDeviceTrafficChart'
 import { ReportBandwidthChart } from '../components/reports/ReportBandwidthChart'
 
 const HOUR_MS = 3600_000
@@ -27,6 +28,11 @@ export function ReportsPage() {
   const [endValue, setEndValue] = useState(() => toLocalInputValue(new Date()))
   const [startValue, setStartValue] = useState(() => toLocalInputValue(new Date(Date.now() - 24 * HOUR_MS)))
   const [deviceMac, setDeviceMac] = useState('')
+  // Requested directly: highlight untrusted devices that actually used
+  // bandwidth. Zero-traffic devices never reach `traffic` at all (see
+  // digest_query.py's HAVING clause) — the "> 0" half of the ask is
+  // already guaranteed server-side, this just narrows to untrusted ones.
+  const [untrustedOnly, setUntrustedOnly] = useState(false)
 
   function applyPreset(rangeMs) {
     const now = new Date()
@@ -51,6 +57,10 @@ export function ReportsPage() {
     end: rangeInvalid ? null : end,
     deviceMac: deviceMac || undefined,
   })
+
+  const traffic = data?.traffic || []
+  const shownTraffic = untrustedOnly ? traffic.filter((t) => !t.is_trusted) : traffic
+  const untrustedCount = traffic.filter((t) => !t.is_trusted).length
 
   const filterGridClass = mode === 'mobile' ? 'grid grid-cols-1 gap-2' : 'flex flex-wrap items-end gap-3'
 
@@ -142,10 +152,32 @@ export function ReportsPage() {
           </div>
 
           <div className="border border-border bg-surface">
-            <div className="border-b border-border/50 p-3 text-[8px] tracking-[3px] text-text-muted">
-              DEVICE TRAFFIC {deviceMac && '— THIS DEVICE'}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 p-3">
+              <div className="text-[8px] tracking-[3px] text-text-muted">
+                DEVICE TRAFFIC {deviceMac && '— THIS DEVICE'}
+              </div>
+              <label className="flex items-center gap-1.5 text-[9px] tracking-wider text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={untrustedOnly}
+                  onChange={(e) => setUntrustedOnly(e.target.checked)}
+                  className="accent-accent-red"
+                />
+                UNTRUSTED ONLY {untrustedCount > 0 && `(${untrustedCount})`}
+              </label>
             </div>
-            <ReportDeviceTraffic traffic={data.traffic} />
+            {untrustedOnly && shownTraffic.length === 0 ? (
+              <div className="p-4 text-center text-[10px] text-text-muted">
+                No untrusted devices used any bandwidth in this window.
+              </div>
+            ) : (
+              <>
+                <div className="p-3">
+                  <ReportDeviceTrafficChart traffic={shownTraffic} />
+                </div>
+                <ReportDeviceTraffic traffic={shownTraffic} />
+              </>
+            )}
           </div>
         </>
       )}

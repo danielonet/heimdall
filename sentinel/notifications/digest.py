@@ -92,10 +92,21 @@ class DigestDeviceTraffic:
     device sharing its physical port with another (TrafficGranularity.
     PER_PORT) has no real per-device figure to report at all, only a port
     aggregate, so it's excluded here rather than shown as if measured.
+
+    is_trusted mirrors Device.is_trusted (False for a MAC with traffic but
+    no devices row at all — an unknown device is never trusted by
+    default). Not used by the email renderers below; carried through for
+    the Reports tab's own untrusted-device filter/coloring — see
+    sentinel/api/serializers.py:digest_data_to_dict.
     """
     device_label: str
     upload_bytes: int
     download_bytes: int
+    # Defaulted (not required) only so existing tests/call sites that don't
+    # care about trust status don't need updating — digest_query.py always
+    # passes the real value explicitly. False matches Device.is_trusted's
+    # own server_default: an unknown device is never trusted by default.
+    is_trusted: bool = False
 
 
 @dataclass

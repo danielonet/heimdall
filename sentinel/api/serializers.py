@@ -160,7 +160,10 @@ def digest_data_to_dict(digest: DigestData) -> dict[str, Any]:
         'truncated': digest.truncated,
         'total_types': digest.total_types,
         'traffic': [
-            {'device_label': t.device_label, 'upload_bytes': t.upload_bytes, 'download_bytes': t.download_bytes}
+            {
+                'device_label': t.device_label, 'upload_bytes': t.upload_bytes, 'download_bytes': t.download_bytes,
+                'is_trusted': t.is_trusted,
+            }
             for t in digest.traffic
         ],
         'traffic_truncated': digest.traffic_truncated,

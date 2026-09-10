@@ -129,13 +129,13 @@ async def build_digest_data(
     )
     traffic_rows = (await session.execute(
         select(
-            TrafficSample.mac_address, Device.hostname, Device.nickname,
+            TrafficSample.mac_address, Device.hostname, Device.nickname, Device.is_trusted,
             func.sum(TrafficSample.bytes_sent_delta).label('upload_bytes'),
             func.sum(TrafficSample.bytes_recv_delta).label('download_bytes'),
         )
         .outerjoin(Device, Device.mac_address == TrafficSample.mac_address)
         .where(*traffic_filters)
-        .group_by(TrafficSample.mac_address, Device.hostname, Device.nickname)
+        .group_by(TrafficSample.mac_address, Device.hostname, Device.nickname, Device.is_trusted)
         .having(traffic_total > 0)
         .order_by(traffic_total.desc())
     )).all()
@@ -146,6 +146,11 @@ async def build_digest_data(
             device_label=resolve_device_label(r.hostname, r.nickname, r.mac_address),
             upload_bytes=r.upload_bytes or 0,
             download_bytes=r.download_bytes or 0,
+            # No devices row at all (a MAC with traffic Heimdall never
+            # otherwise learned about) reads as untrusted, same as a real
+            # Device.is_trusted=False row — never silently "trusted" just
+            # because the join found nothing.
+            is_trusted=bool(r.is_trusted),
         )
         for r in shown_traffic
     ]

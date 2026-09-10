@@ -1,3 +1,4 @@
+import { Badge } from '../Badge'
 import { formatBytes } from '../../lib/format'
 
 /** device_label already comes pre-resolved from the backend (nickname >
@@ -17,6 +18,7 @@ export function ReportDeviceTraffic({ traffic }) {
         <thead>
           <tr className="text-[9px] tracking-wider text-text-muted">
             <th className="px-3 py-2 font-normal">DEVICE</th>
+            <th className="px-3 py-2 font-normal">TRUST</th>
             <th className="px-3 py-2 text-right font-normal">UPLOAD</th>
             <th className="px-3 py-2 text-right font-normal">DOWNLOAD</th>
           </tr>
@@ -25,6 +27,11 @@ export function ReportDeviceTraffic({ traffic }) {
           {traffic.map((t) => (
             <tr key={t.device_label} className="border-t border-border/50">
               <td className="px-3 py-2 text-text-primary">{t.device_label}</td>
+              <td className="px-3 py-2">
+                <Badge variant={t.is_trusted ? 'success' : 'danger'}>
+                  {t.is_trusted ? 'TRUSTED' : 'UNTRUSTED'}
+                </Badge>
+              </td>
               <td className="px-3 py-2 text-right text-text-secondary">{formatBytes(t.upload_bytes)}</td>
               <td className="px-3 py-2 text-right text-text-secondary">{formatBytes(t.download_bytes)}</td>
             </tr>
