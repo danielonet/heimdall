@@ -56,7 +56,7 @@ function Bridge({ node }) {
       stroke={color}
       strokeWidth={1}
       strokeDasharray={bridgeDashArray(node.status)}
-      opacity={severed ? 0.3 : node.status === 'offline' ? 0.25 : node.status === 'online' ? 0.5 : 0.85}
+      opacity={severed ? 0.3 : node.status === 'offline' ? 0.4 : node.status === 'online' ? 0.5 : 0.85}
       className={bridgeAnimClass(node.status)}
     />
   )
@@ -75,7 +75,7 @@ function Node({ node, onSelect, isHovered, onHover }) {
   return (
     <g
       className="cursor-pointer"
-      opacity={dim ? 0.4 : 1}
+      opacity={dim ? 0.6 : 1}
       onClick={() => onSelect(node.mac)}
       onMouseEnter={() => onHover(node.mac)}
       onMouseLeave={() => onHover(null)}
