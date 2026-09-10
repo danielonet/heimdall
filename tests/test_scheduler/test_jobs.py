@@ -689,3 +689,165 @@ class TestUpsertDevicesPortGranularity:
             await _upsert_devices(session, [_wired_snapshot(mac1, 'PHY1')])
         async with get_session() as session:
             assert (await session.get(Device, mac1)).traffic_granularity == 'per_device'
+
+
+def _wifi_snapshot(mac: str, hostname: str, ip: str, is_online: bool = True) -> DeviceSnapshot:
+    return DeviceSnapshot(
+        mac_address=mac, ip_address=ip, hostname=hostname,
+        interface_name='WiFi', is_online=is_online,
+    )
+
+
+class TestUpsertDevicesRoutesLinkedMacsToCanonical:
+    """Regression coverage for a real, confirmed-live bug (2026-09-10): a
+    phone that DeviceIdentityLinker had already linked away as a stale
+    duplicate kept reporting live traffic under its old (now-hidden) MAC —
+    _upsert_devices wrote every poll's fresh is_online/last_seen/hostname/ip
+    straight onto that hidden row, so the canonical row list_devices()
+    actually shows never budged from whatever it looked like the moment it
+    was linked, days earlier. The user saw this as "my phone shows offline
+    with no name" even though it was online right now — the live-facing
+    twin of the "I see 2 phones" duplicate-identity symptom this same
+    incident's DeviceIdentityLinker fix addresses."""
+
+    _OLD_MAC = '33:33:33:33:33:01'    # linked away — the router still reports this exact MAC
+    _CANONICAL_MAC = '33:33:33:33:33:02'
+    _MACS = [_OLD_MAC, _CANONICAL_MAC]
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup(self):
+        yield
+        async with get_session() as session:
+            await session.execute(delete(Device).where(Device.mac_address.in_(self._MACS)))
+            await session.execute(delete(TrustedMac).where(TrustedMac.mac_address.in_(self._MACS)))
+
+    async def _seed(self, **canonical_overrides):
+        async with get_session() as session:
+            session.add(Device(
+                mac_address=self._CANONICAL_MAC, hostname='', ip_address='',
+                is_online=False, ever_connected=False, **canonical_overrides,
+            ))
+            session.add(Device(
+                mac_address=self._OLD_MAC, hostname='Redmi-Note-13-Pro-5G', ip_address='10.0.0.50',
+                is_online=False, ever_connected=True, linked_to_mac=self._CANONICAL_MAC,
+            ))
+
+    async def test_live_update_for_a_linked_away_mac_refreshes_the_canonical_row_instead(self):
+        await self._seed()
+
+        async with get_session() as session:
+            await _upsert_devices(session, [
+                _wifi_snapshot(self._OLD_MAC, 'Redmi-Note-13-Pro-5G', '10.0.0.51'),
+            ])
+
+        async with get_session() as session:
+            canonical = await session.get(Device, self._CANONICAL_MAC)
+            assert canonical.is_online is True
+            assert canonical.hostname == 'Redmi-Note-13-Pro-5G'
+            assert canonical.ip_address == '10.0.0.51'
+
+    async def test_the_hidden_row_itself_is_left_untouched(self):
+        """Its own fields stay exactly as they were when it got linked away
+        — it's a frozen historical record now, not a live one."""
+        await self._seed()
+
+        async with get_session() as session:
+            await _upsert_devices(session, [
+                _wifi_snapshot(self._OLD_MAC, 'Redmi-Note-13-Pro-5G', '10.0.0.51'),
+            ])
+
+        async with get_session() as session:
+            old = await session.get(Device, self._OLD_MAC)
+            assert old.ip_address == '10.0.0.50'  # unchanged, not '10.0.0.51'
+
+    async def test_missing_canonical_row_falls_back_to_updating_the_reported_mac(self):
+        """Defensive edge case — linked_to_mac pointing at a row that no
+        longer exists (shouldn't normally happen) must not crash or
+        silently drop the update."""
+        async with get_session() as session:
+            session.add(Device(
+                mac_address=self._OLD_MAC, hostname='ghost', ip_address='10.0.0.50',
+                is_online=False, linked_to_mac=self._CANONICAL_MAC,  # no row at that MAC
+            ))
+
+        async with get_session() as session:
+            await _upsert_devices(session, [
+                _wifi_snapshot(self._OLD_MAC, 'Redmi-Note-13-Pro-5G', '10.0.0.51'),
+            ])
+
+        async with get_session() as session:
+            old = await session.get(Device, self._OLD_MAC)
+            assert old.is_online is True
+            assert old.ip_address == '10.0.0.51'
+
+    async def test_canonical_trust_is_not_downgraded_by_an_untrusted_reported_mac(self):
+        """The canonical row was already manually trusted before it
+        absorbed this identity; the rotated MAC itself was never
+        separately added to the trusted registry. A live poll must not use
+        that absence to flip an already-trusted device back to untrusted."""
+        await self._seed(is_trusted=True)
+
+        async with get_session() as session:
+            await _upsert_devices(session, [
+                _wifi_snapshot(self._OLD_MAC, 'Redmi-Note-13-Pro-5G', '10.0.0.51'),
+            ])
+
+        async with get_session() as session:
+            canonical = await session.get(Device, self._CANONICAL_MAC)
+            assert canonical.is_trusted is True
+
+    async def test_canonical_trust_is_picked_up_when_the_reported_mac_is_trusted(self):
+        await self._seed()
+        await TrustedMacRepository().trust(self._OLD_MAC)
+
+        async with get_session() as session:
+            await _upsert_devices(session, [
+                _wifi_snapshot(self._OLD_MAC, 'Redmi-Note-13-Pro-5G', '10.0.0.51'),
+            ])
+
+        async with get_session() as session:
+            canonical = await session.get(Device, self._CANONICAL_MAC)
+            assert canonical.is_trusted is True
+
+
+class TestUpsertDevicesPreservesHostnameOnDecay:
+    """Regression coverage for a real, confirmed-live bug (2026-09-10,
+    surfaced immediately after fixing the class above): the router's own
+    Host-table cache decays a quiet device's hostname/IP back to blank well
+    before Heimdall would ever consider it archived — the MAC entry stays,
+    but with those fields cleared. _upsert_devices used to overwrite
+    unconditionally, silently discarding an already-known-good hostname
+    every time this happened."""
+
+    _MAC = '44:44:44:44:44:01'
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup(self):
+        yield
+        async with get_session() as session:
+            await session.execute(delete(Device).where(Device.mac_address == self._MAC))
+
+    async def test_blank_hostname_from_the_router_does_not_erase_a_known_one(self):
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'Redmi-Note-14-Pro-5G', '10.0.0.60')])
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).hostname == 'Redmi-Note-14-Pro-5G'
+
+        # Device goes quiet — router's cache decays, next poll reports blank.
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, '', '', is_online=False)])
+
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).hostname == 'Redmi-Note-14-Pro-5G'
+
+    async def test_a_genuinely_new_hostname_from_the_router_still_updates(self):
+        """Not frozen forever — a real, non-blank hostname change (e.g. the
+        user renames the device) must still take effect."""
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'old-name', '10.0.0.60')])
+
+        async with get_session() as session:
+            await _upsert_devices(session, [_wifi_snapshot(self._MAC, 'new-name', '10.0.0.60')])
+
+        async with get_session() as session:
+            assert (await session.get(Device, self._MAC)).hostname == 'new-name'

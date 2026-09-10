@@ -381,19 +381,48 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             ))
             newly_seen.add(snapshot.mac_address)
         else:
-            existing.ip_address = snapshot.ip_address
-            existing.hostname = snapshot.hostname
-            existing.vendor_name = snapshot.vendor_name
-            existing.interface_name = snapshot.interface_name
-            existing.port_alias = snapshot.port_alias or None
-            existing.traffic_granularity = traffic_granularity
-            existing.signal_strength_dbm = snapshot.signal_strength_dbm
-            existing.signal_rate_mbps = snapshot.signal_rate_mbps
-            existing.device_type = snapshot.device_type or None
-            existing.ap_alias = snapshot.ap_alias or None
-            existing.is_online = snapshot.is_online
+            # If the router is still reporting this exact MAC but it's since
+            # been linked away as a stale duplicate (DeviceRepository.link()
+            # — e.g. a phone whose *next* WiFi MAC rotation got recognized
+            # before this one stopped being seen), route the live update onto
+            # the canonical row instead of the hidden one. Confirmed live
+            # 2026-09-10: without this, a linked device's real-time activity
+            # (is_online/last_seen/ip/hostname) kept landing on the hidden
+            # row forever — invisible, since list_devices() excludes it —
+            # while the canonical row the UI actually shows stayed frozen at
+            # whatever it looked like the moment it was linked, days ago.
+            # Single hop only, matching canonical_mac()/link()'s own
+            # never-multi-hop invariant — linked_to_mac always already
+            # points at a live canonical row, never another linked one.
+            target = existing
+            if existing.linked_to_mac:
+                canonical = await session.get(Device, existing.linked_to_mac)
+                if canonical is not None:
+                    target = canonical
+
+            target.ip_address = snapshot.ip_address
+            # Confirmed live 2026-09-10, immediately after the fix above: a
+            # device that's gone quiet can fall out of the router's own
+            # Host-table cache — its entry stays present, but with hostname
+            # (and ip_address above) decayed back to blank — well before
+            # Heimdall would ever consider it archived. An unconditional
+            # overwrite here was blanking out a perfectly good, already-known
+            # hostname purely because the router's memory of it faded while
+            # it was offline. Only ever move to a *real* hostname; keep
+            # whatever we already had rather than regressing to blank.
+            if snapshot.hostname:
+                target.hostname = snapshot.hostname
+            target.vendor_name = snapshot.vendor_name
+            target.interface_name = snapshot.interface_name
+            target.port_alias = snapshot.port_alias or None
+            target.traffic_granularity = traffic_granularity
+            target.signal_strength_dbm = snapshot.signal_strength_dbm
+            target.signal_rate_mbps = snapshot.signal_rate_mbps
+            target.device_type = snapshot.device_type or None
+            target.ap_alias = snapshot.ap_alias or None
+            target.is_online = snapshot.is_online
             if snapshot.is_online:
-                existing.ever_connected = True
+                target.ever_connected = True
             # Re-sync is_trusted from the persistent registry every poll, not
             # just at row creation. Without this, a row created during a
             # brief window where trusted_macs was empty (e.g. a race between
@@ -401,15 +430,18 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             # incorrectly untrusted forever, since nothing else ever
             # revisits it. trusted_macs is the source of truth; the PATCH
             # /devices/{mac} route already keeps both in sync in the other
-            # direction (see sentinel/api/routes/devices.py).
-            existing.is_trusted = await trusted_repo.is_trusted(snapshot.mac_address)
+            # direction (see sentinel/api/routes/devices.py). Checked under
+            # the *reported* MAC, not target — trust is tracked per physical
+            # radio identity, and the canonical row may have its own
+            # separate trust history from before it absorbed this one.
+            target.is_trusted = await trusted_repo.is_trusted(snapshot.mac_address) or target.is_trusted
             # Only advance last_seen while the router reports this device as
             # actually active — otherwise every device's last_seen gets
             # bumped on every poll regardless of connectivity, which is
             # exactly the bug that made the frontend's ONLINE/OFFLINE filter
             # (previously derived from last_seen recency) always say "online".
             if snapshot.is_online:
-                existing.last_seen = now
+                target.last_seen = now
 
     return newly_seen
 

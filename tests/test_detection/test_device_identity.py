@@ -22,11 +22,12 @@ pytestmark = pytest.mark.asyncio
 _MAC_A = 'ee:00:00:00:00:01'
 _MAC_B = 'ee:00:00:00:00:02'
 _MAC_C = 'ee:00:00:00:00:03'
+_MAC_D = 'ee:00:00:00:00:04'
 # Real manufacturer OUI (U/L bit clear — 0x00 & 0b10 == 0) — not a
 # randomization candidate.
 _MANUFACTURER_MAC = '00:00:00:00:00:05'
 
-_ALL_MACS = [_MAC_A, _MAC_B, _MAC_C, _MANUFACTURER_MAC]
+_ALL_MACS = [_MAC_A, _MAC_B, _MAC_C, _MAC_D, _MANUFACTURER_MAC]
 _NOW = datetime.now(timezone.utc)
 
 
@@ -292,6 +293,29 @@ class TestFindIpContinuityCandidates:
             linked_to_mac=_MAC_B,
         )
         await _add_device(_MAC_B, '', ip_address='10.0.0.18', first_seen=_NOW, last_seen=_NOW)
+
+        async with get_session() as session:
+            candidates = await linker.find_ip_continuity_candidates(session)
+
+        assert _for(candidates, _MAC_B) == []
+
+    async def test_new_mac_already_absorbed_one_device_is_excluded_from_absorbing_another(self, linker):
+        """Regression for a real, confirmed-live bug (2026-09-10): a
+        hostname-less MAC inherited a Redmi Note 13's freed IP (a genuine
+        rotation, correctly linked), then — days later, on a completely
+        unrelated IP — also inherited a Redmi Note 14's freed IP, and got
+        proposed as a link target for *that* too, merging two different
+        real phones into one identity. IP reuse across separate DHCP leases
+        says nothing about device identity by itself; a MAC that's already
+        the resolved target of one link must not be trusted as a target
+        again."""
+        await _add_device(_MAC_A, 'phone', ip_address='10.0.0.18', last_seen=_NOW - timedelta(hours=1))
+        await _add_device(_MAC_B, '', ip_address='10.0.0.19', first_seen=_NOW, last_seen=_NOW)
+        # MAC_B already absorbed a different device (MAC_D) via a prior scan.
+        await _add_device(
+            _MAC_D, 'other-phone', ip_address='10.0.0.20', last_seen=_NOW - timedelta(hours=2),
+            linked_to_mac=_MAC_B,
+        )
 
         async with get_session() as session:
             candidates = await linker.find_ip_continuity_candidates(session)

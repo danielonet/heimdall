@@ -189,6 +189,26 @@ class DeviceIdentityLinker:
             if old_mac == new_row.mac_address:
                 continue  # already resolves to the new MAC itself — nothing to do
 
+            # Confirmed live 2026-09-10: a hostname-less MAC absorbed TWO
+            # completely different phones this way, days apart — a Redmi
+            # Note 13 (whose IP it inherited first) and, later, an unrelated
+            # Redmi Note 14 (whose IP it happened to inherit next). IP reuse
+            # across separate DHCP leases is normal and says nothing about
+            # device identity on its own (see this method's own docstring on
+            # why an ARP-reachability check can't catch this either — it only
+            # confirms who holds the IP *now*, never who held it before). A
+            # real rotating phone passes through this path once per
+            # reconnect; a MAC that keeps "inheriting" different anchors
+            # across separate scans is far more likely to just be its own
+            # persistent device sitting on a churny DHCP pool. Once new_row
+            # has already been used as a link target, never trust it as one
+            # again.
+            already_absorbed_one = (await session.execute(
+                select(Device.mac_address).where(Device.linked_to_mac == new_row.mac_address).limit(1)
+            )).scalar_one_or_none()
+            if already_absorbed_one is not None:
+                continue
+
             candidates.append(IpContinuityCandidate(
                 old_mac=old_mac, new_mac=new_row.mac_address,
                 ip_address=new_row.ip_address, hostname=anchor.hostname,
