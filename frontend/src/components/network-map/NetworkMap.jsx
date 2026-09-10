@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { UNASSOCIATED_AP_GROUP } from '../../lib/apGroups'
 import { deviceDisplayName } from '../../lib/deviceDisplay'
 import { MAP_CENTER, TIER_RADIUS, OUTER_RADIUS } from '../../lib/networkMapLayout'
 
@@ -226,11 +227,17 @@ export function NetworkMap({ layout, degraded }) {
         </text>
       ))}
 
-      {/* bridges drawn before nodes so nodes sit on top */}
+      {/* bridges drawn before nodes so nodes sit on top. Skipped for
+          NOT ASSOCIATED devices — there's no real AP link to depict for a
+          device Heimdall has no live association for, and with often 50-100+
+          of them at once (see signalRadius() in networkMapLayout.js) that
+          many lines converging on the core was pure clutter, not signal. */}
       <g>
-        {nodes.map((n) => (
-          <Bridge key={n.mac} node={n} />
-        ))}
+        {nodes
+          .filter((n) => n.sector !== UNASSOCIATED_AP_GROUP)
+          .map((n) => (
+            <Bridge key={n.mac} node={n} />
+          ))}
       </g>
       <g>
         {nodes.map((n) => (
