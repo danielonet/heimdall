@@ -8,11 +8,19 @@ from sentinel.notifications.service import NotificationConfig, NotificationServi
 pytestmark = pytest.mark.asyncio
 
 
-def _alert(severity='CRITICAL', alert_type='ARP_SPOOF', description='something happened'):
-    """A plain stand-in for a persisted Alert row — notify_new_critical_alert
-    only ever reads .severity/.alert_type/.description, so a real DB row
-    isn't needed here."""
-    return SimpleNamespace(severity=severity, alert_type=alert_type, description=description)
+def _alert(
+    severity='CRITICAL', alert_type='ARP_SPOOF', description='something happened',
+    device_mac=None, mitigation=None, created_at=None,
+):
+    """A plain stand-in for a persisted Alert row. device_mac defaults to
+    None so notify_new_critical_alert's `if alert.device_mac:` guard skips
+    the DB lookup entirely — keeps most of this file's tests DB-free, same
+    as before; TestNotifyNewCriticalAlert's own DB-backed cases override it
+    explicitly with a real MAC."""
+    return SimpleNamespace(
+        severity=severity, alert_type=alert_type, description=description,
+        device_mac=device_mac, mitigation=mitigation, created_at=created_at,
+    )
 
 
 class _FakeResponse:
@@ -281,7 +289,7 @@ class TestNotifyNewCriticalAlert:
 
         assert _FakeSMTP.sent_messages == []
 
-    async def test_uses_the_alert_type_as_the_title_and_description_as_the_body(self, monkeypatch):
+    async def test_uses_the_alert_type_as_the_title_and_description_in_the_body(self, monkeypatch):
         monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
         notifier = NotificationService(NotificationConfig(
             smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
@@ -293,7 +301,9 @@ class TestNotifyNewCriticalAlert:
 
         msg = _FakeSMTP.sent_messages[0]
         assert msg['Subject'] == 'Heimdall: MALWARE_DETECTED'
-        assert msg.get_content().strip() == 'eicar.txt quarantined'
+        # Enriched body (see TestFormattedBody below), not an exact match —
+        # description is one line of several now, not the whole body.
+        assert 'eicar.txt quarantined' in msg.get_body(preferencelist=('plain',)).get_content()
 
     async def test_falls_back_to_alert_type_when_description_is_blank(self, monkeypatch):
         monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
@@ -303,4 +313,102 @@ class TestNotifyNewCriticalAlert:
 
         await notifier.notify_new_critical_alert(_alert(severity='CRITICAL', alert_type='NEW_DEVICE', description=None))
 
-        assert _FakeSMTP.sent_messages[0].get_content().strip() == 'NEW_DEVICE'
+        body = _FakeSMTP.sent_messages[0].get_body(preferencelist=('plain',)).get_content()
+        assert 'NEW_DEVICE' in body
+
+
+class TestFormattedBody:
+    """Regression coverage for a real, confirmed-live bug (2026-09-11):
+    notify_new_critical_alert never passed html_message to notify() at
+    all, so every real-time CRITICAL email went out as a bare, unformatted
+    one-line body — no device, no trust status, no mitigation, no
+    branding. See sentinel/notifications/alert_notification.py."""
+
+    async def test_html_alternative_is_now_sent(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(alert_type='ARP_SPOOF', description='spoofing suspected'))
+
+        msg = _FakeSMTP.sent_messages[0]
+        assert msg.is_multipart() is True
+        html = msg.get_body(preferencelist=('html',)).get_content()
+        assert 'spoofing suspected' in html
+        assert 'ARP_SPOOF' in html
+
+    async def test_mitigation_appears_in_both_bodies_when_present(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(mitigation='Physically find and remove it from the network.'))
+
+        msg = _FakeSMTP.sent_messages[0]
+        assert 'Physically find and remove it' in msg.get_body(preferencelist=('plain',)).get_content()
+        assert 'Physically find and remove it' in msg.get_body(preferencelist=('html',)).get_content()
+
+    async def test_no_mitigation_omits_the_section_cleanly(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(mitigation=None))
+
+        html = _FakeSMTP.sent_messages[0].get_body(preferencelist=('html',)).get_content()
+        assert 'MITIGATION' not in html
+
+    async def test_no_device_mac_skips_the_db_lookup_and_still_sends(self, monkeypatch):
+        """device_mac=None (e.g. a household-wide finding, not one scoped
+        to a single device) must never crash trying to look one up."""
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+        ))
+
+        await notifier.notify_new_critical_alert(_alert(device_mac=None))
+
+        assert len(_FakeSMTP.sent_messages) == 1
+
+    async def test_device_info_and_trust_status_appear_when_device_mac_resolves(self, monkeypatch):
+        """The actual point of the fix — device context and trust status,
+        neither of which the old bare-description body ever carried."""
+        import os
+        os.environ.setdefault('DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel')
+        from flask import Flask
+        from sqlalchemy import delete
+        from sentinel.db.models import Device
+        from sentinel.db.session import get_engine, get_session, init_db
+
+        mac = '44:44:44:44:44:03'
+        app = Flask(__name__)
+        app.config['DATABASE_URL'] = os.environ['DATABASE_URL']
+        init_db(app)
+        try:
+            async with get_session() as session:
+                session.add(Device(
+                    mac_address=mac, hostname='untrusted-cam', vendor_name='Acme IoT', is_trusted=False,
+                ))
+
+            monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+            notifier = NotificationService(NotificationConfig(
+                smtp_host='smtp.example.com', smtp_from='heimdall@example.com',
+            ))
+
+            await notifier.notify_new_critical_alert(_alert(device_mac=mac))
+
+            msg = _FakeSMTP.sent_messages[0]
+            plain = msg.get_body(preferencelist=('plain',)).get_content()
+            html = msg.get_body(preferencelist=('html',)).get_content()
+            assert 'untrusted-cam' in plain
+            assert 'UNTRUSTED' in plain
+            assert 'untrusted-cam' in html
+            assert 'UNTRUSTED' in html
+            assert 'Acme IoT' in html
+        finally:
+            async with get_session() as session:
+                await session.execute(delete(Device).where(Device.mac_address == mac))
+            await get_engine().dispose()

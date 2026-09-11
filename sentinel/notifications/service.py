@@ -15,6 +15,10 @@ from pathlib import Path
 
 import httpx
 
+from sentinel.db.models import Device
+from sentinel.db.session import get_session
+from sentinel.notifications.alert_notification import render_alert_html, render_alert_text
+
 logger = logging.getLogger(__name__)
 
 _NTFY_PRIORITY = {'CRITICAL': 'urgent', 'WARNING': 'high', 'INFO': 'default'}
@@ -106,10 +110,25 @@ class NotificationService:
         occurrence_count, and emailing on every poll it's still true would
         flood the inbox rather than inform it. Callers already have this
         distinction from AlertRepository.upsert()'s own is_new return.
+
+        Confirmed live 2026-09-11: this went out as a bare, unformatted
+        one-line body (just alert.description) — no device, no trust
+        status, no mitigation, no branding — since notify() was never
+        given an html_message here, unlike the daily digest. Now builds
+        both bodies via sentinel.notifications.alert_notification, the
+        same visual system as the digest, enriched with whichever Device
+        row alert.device_mac resolves to (None is handled gracefully —
+        some alert types aren't device-scoped at all).
         """
         if alert.severity != 'CRITICAL':
             return
-        await self.notify(title=alert.alert_type, message=alert.description or alert.alert_type, severity='CRITICAL')
+        device = None
+        if alert.device_mac:
+            async with get_session() as session:
+                device = await session.get(Device, alert.device_mac)
+        text = render_alert_text(alert, device)
+        html = render_alert_html(alert, device)
+        await self.notify(title=alert.alert_type, message=text, severity='CRITICAL', html_message=html)
 
     def _send_email(self, subject: str, body: str, html_body: str | None = None) -> None:
         try:
