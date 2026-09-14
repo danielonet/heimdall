@@ -17,6 +17,7 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'nickname': device.nickname,
         'vendor_name': device.vendor_name,
         'interface_name': device.interface_name,
+        'source_router': device.source_router,
         'traffic_granularity': device.traffic_granularity,
         'port_alias': device.port_alias,
         'signal_strength_dbm': device.signal_strength_dbm,

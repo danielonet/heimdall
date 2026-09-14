@@ -40,6 +40,16 @@ class DeviceSnapshot:
     # _propagate_block_after_link) without devices.is_blocked ever
     # reflecting that.
     is_blacklisted_at_router: bool = False
+    # Which configured router adapter produced this snapshot — 'sagemcom' |
+    # 'miwifi'. Stamped by each adapter itself (SagemcomXmoAdapter never sets
+    # this explicitly, relying on the default below) rather than by the
+    # scheduler, since a MiwifiAdapter instance is the only thing that
+    # actually knows it's a MiwifiAdapter. Persisted onto Device.source_router
+    # by _upsert_devices (sentinel/scheduler/jobs.py) and used by
+    # SentinelScheduler._adapter_for_mac to route block/unblock/quarantine
+    # actions to the router that actually owns a given MAC once more than
+    # one router is configured. See docs/router/network-topology.md.
+    source_router: str = 'sagemcom'
 
 
 @dataclass
@@ -55,6 +65,7 @@ class TrafficSample:
     granularity: TrafficGranularity = TrafficGranularity.PER_DEVICE
     port_alias: Optional[str] = None  # None=WiFi, 'PHY5'=wired
     poll_interval_s: int = 15
+    source_router: str = 'sagemcom'  # see DeviceSnapshot.source_router
 
 
 @dataclass
@@ -74,6 +85,7 @@ class PortStats:
     discards_recv: int = 0
     broadcast_recv: int = 0
     last_change_secs: int = 0
+    source_router: str = 'sagemcom'  # see DeviceSnapshot.source_router
 
 
 @dataclass
@@ -109,6 +121,7 @@ class RouterInfo:
     uptime_seconds: int = 0
     ssids: list = field(default_factory=list)
     radios: list = field(default_factory=list)  # list[WifiRadioInfo]
+    source_router: str = 'sagemcom'  # see DeviceSnapshot.source_router
 
 
 @dataclass

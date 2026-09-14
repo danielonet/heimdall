@@ -11,6 +11,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import text
 
+from sentinel.adapter.factory import SUPPORTED_ROUTERS, miwifi_configured
 from sentinel.config import settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
@@ -56,6 +57,15 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         status=status,
         router_username=data['router_username'],
         router_password_configured=bool(settings.ROUTER_PASSWORD),
+        miwifi_ip=data['miwifi_ip'],
+        miwifi_password_configured=bool(settings.MIWIFI_PASSWORD),
+        active_router=data['active_router'],
+        # Only offers 'miwifi' once it's actually configured, so the
+        # Settings-tab dropdown never lets an admin select a router with no
+        # credentials — see sentinel/adapter/factory.py:miwifi_configured.
+        available_routers=(
+            list(SUPPORTED_ROUTERS) if await miwifi_configured() else ['sagemcom']
+        ),
         ntfy_url=data['ntfy_url'],
         smtp_host=data['smtp_host'],
         smtp_port=data['smtp_port'],
@@ -141,6 +151,29 @@ async def update_settings():
             error='ROUTER_PASSWORD_FILE is not configured on this deployment — router_password '
                   'can only be changed by editing the secrets file directly and restarting.'
         ), 503
+
+    miwifi_ip = body.get('miwifi_ip')
+    if 'miwifi_ip' in body and not isinstance(miwifi_ip, str):
+        return jsonify(error='miwifi_ip must be a string'), 400
+
+    miwifi_password = body.get('miwifi_password')
+    if 'miwifi_password' in body and not isinstance(miwifi_password, str):
+        return jsonify(error='miwifi_password must be a string'), 400
+    # Same "blank = leave unchanged" convention as router_password/smtp_password.
+    change_miwifi_password = bool(miwifi_password)
+    if change_miwifi_password and not settings.MIWIFI_PASSWORD_FILE:
+        return jsonify(
+            error='MIWIFI_PASSWORD_FILE is not configured on this deployment — miwifi_password '
+                  'can only be changed by editing the secrets file directly and restarting.'
+        ), 503
+
+    active_router = body.get('active_router')
+    if 'active_router' in body:
+        available = list(SUPPORTED_ROUTERS) if await miwifi_configured() else ['sagemcom']
+        if not isinstance(active_router, str) or active_router not in available:
+            return jsonify(
+                error=f'active_router must be one of the currently configured routers: {", ".join(available)}'
+            ), 400
 
     ntfy_url = body.get('ntfy_url')
     if 'ntfy_url' in body and not isinstance(ntfy_url, str):
@@ -230,9 +263,45 @@ async def update_settings():
     if change_router_password:
         write_secret_file(settings.ROUTER_PASSWORD_FILE, router_password)
         object.__setattr__(settings, 'ROUTER_PASSWORD', router_password.strip())
-    if 'router_username' in body or change_router_password:
+
+    if 'miwifi_ip' in body:
+        await repo.set_miwifi_ip(miwifi_ip.strip())
+    if change_miwifi_password:
+        write_secret_file(settings.MIWIFI_PASSWORD_FILE, miwifi_password)
+        object.__setattr__(settings, 'MIWIFI_PASSWORD', miwifi_password.strip())
+    if 'active_router' in body:
+        await repo.set_active_router(active_router)
+
+    # Reload only the adapter(s) actually affected — NOT unconditionally
+    # both. A previous version of this reloaded the Sagemcom (primary)
+    # adapter on *any* MiWiFi-only settings change, which forced a needless
+    # full re-login there every time — confirmed live to trip the router's
+    # own login-attempt rate limit (XMO_LOGIN_RETRY_ERR) when done a few
+    # times in quick succession while iterating on MiWiFi settings, taking
+    # the real Sagemcom polling down with it. sagemcom_is_primary uses the
+    # value active_router now holds (post-write above, or the persisted one
+    # if this PATCH didn't touch it) to know which adapter each credential
+    # change actually belongs to.
+    sagemcom_creds_changed = 'router_username' in body or change_router_password
+    miwifi_creds_changed = 'miwifi_ip' in body or change_miwifi_password
+    active_router_changed = 'active_router' in body
+    if sagemcom_creds_changed or miwifi_creds_changed or active_router_changed:
+        sagemcom_is_primary = (active_router if active_router_changed else await repo.get_active_router()) == 'sagemcom'
         try:
-            get_scheduler().reload_router_credentials()
+            scheduler = get_scheduler()
+            if active_router_changed:
+                # The primary/secondary assignment itself is flipping —
+                # both adapters need to be rebuilt against their new roles
+                # regardless of which credential fields also changed.
+                scheduler.reload_router_credentials()
+                scheduler.reload_secondary_router_credentials()
+            else:
+                if sagemcom_creds_changed:
+                    (scheduler.reload_router_credentials if sagemcom_is_primary
+                     else scheduler.reload_secondary_router_credentials)()
+                if miwifi_creds_changed:
+                    (scheduler.reload_secondary_router_credentials if sagemcom_is_primary
+                     else scheduler.reload_router_credentials)()
         except RuntimeError:
             pass  # scheduler not running (e.g. tests) — takes effect on next start
 

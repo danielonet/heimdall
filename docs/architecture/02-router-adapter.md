@@ -5,6 +5,19 @@ specific router. Everything else in the system — the detection pipeline, ML
 engine, API, and frontend — depends only on the canonical data models defined
 here.
 
+## Second router — `sentinel/adapter/miwifi/`
+
+A second, optional adapter exists for a Redmi/Xiaomi router on stock MiWiFi
+firmware — see `docs/router/miwifi-api.md` for its endpoints (flagged there
+as unverified against the physical device) and
+`docs/router/network-topology.md`'s "Second router" section for how it
+interacts with the Sagemcom and what it does/doesn't cover.
+`sentinel/adapter/factory.py` builds whichever router `AppSettings.
+active_router` names as the *active* adapter (feeds detection/ML/auto-block
+— everything below on this page), plus the other configured router, if any,
+as a visibility-only *secondary* adapter (`SentinelScheduler.
+_secondary_poll_job`) — device/traffic only, no detection pipeline.
+
 ## Abstract base class — `sentinel/adapter/base.py`
 
 ```python

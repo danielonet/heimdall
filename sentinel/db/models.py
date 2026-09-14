@@ -34,6 +34,15 @@ class Device(Base):
     nickname: Mapped[str | None] = mapped_column(Text)
     vendor_name: Mapped[str | None] = mapped_column(String(255))
     interface_name: Mapped[str | None] = mapped_column(String(20))
+    # Which configured router adapter most recently reported this device —
+    # 'sagemcom' | 'miwifi'. Set by _upsert_devices (sentinel/scheduler/
+    # jobs.py) from DeviceSnapshot.source_router on every poll (last-write-
+    # wins if the same MAC is somehow seen from both, e.g. a bridged/AP-mode
+    # Redmi on the same subnet as the Sagemcom — informational, not
+    # identity-critical). Used by SentinelScheduler._adapter_for_mac to route
+    # block/unblock/quarantine actions to the router that actually owns this
+    # MAC. See docs/router/network-topology.md.
+    source_router: Mapped[str] = mapped_column(String(20), server_default='sagemcom')
     traffic_granularity: Mapped[str] = mapped_column(String(12), server_default='per_device')
     port_alias: Mapped[str | None] = mapped_column(String(10))
     signal_strength_dbm: Mapped[int] = mapped_column(Integer, server_default='0')
@@ -170,6 +179,19 @@ class AppSettings(Base):
     # keeping CLAUDE.md's "secrets via Docker secrets only" rule intact. See
     # sentinel/adapter/factory.py and SentinelScheduler.reload_router_credentials().
     router_username: Mapped[str | None] = mapped_column(String(100))
+
+    # Second router (Settings tab "REDMI ROUTER" section). Only the IP lives
+    # here — like router_username above, the password is never stored in the
+    # database; it's written straight to Settings.MIWIFI_PASSWORD_FILE on
+    # disk instead. See sentinel/adapter/factory.py and
+    # SentinelScheduler.reload_secondary_router_credentials().
+    miwifi_ip: Mapped[str | None] = mapped_column(String(45))
+    # Which configured router feeds the detection pipeline / WAN bandwidth
+    # tracking / RuleEngine auto-block / ARP-DHCP reconciliation — 'sagemcom'
+    # | 'miwifi'. The other configured router (if any) is still polled for
+    # device/traffic visibility, just without those — see
+    # SentinelScheduler._ensure_adapter vs. _ensure_secondary_adapter.
+    active_router: Mapped[str] = mapped_column(String(20), server_default='sagemcom')
 
     # Notifications tab. smtp_password is likewise never stored here — see
     # Settings.SMTP_PASSWORD_FILE.

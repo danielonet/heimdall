@@ -104,6 +104,14 @@ const columnHelperDefs = [
             {row.original.ap_alias}
           </Badge>
         )}
+        {/* Only badged once a second router is actually configured — the
+            common single-router (Sagemcom-only) case stays unbadged, same
+            "don't show it unless it's meaningful" rule as ap_alias above. */}
+        {row.original.source_router === 'miwifi' && (
+          <Badge variant="muted" title="Reported by the Redmi router, not the Sagemcom">
+            REDMI
+          </Badge>
+        )}
       </div>
     ),
   },

@@ -304,6 +304,17 @@ else
     log_skip "secrets/smtp_password.txt"
 fi
 
+# MiWiFi password: optional second router, same "blank is a real working
+# state" reasoning as smtp_password.txt above — not configuring a Redmi
+# router at all is the common case.
+if [ ! -f "${SECRETS_DIR}/miwifi_password.txt" ]; then
+    touch "${SECRETS_DIR}/miwifi_password.txt"
+    chmod 600 "${SECRETS_DIR}/miwifi_password.txt"
+    log_success "Created empty secrets/miwifi_password.txt (set it from the Settings page, or edit directly, if you add a second/Redmi router)"
+else
+    log_skip "secrets/miwifi_password.txt"
+fi
+
 chown -R "$REAL_USER:$REAL_USER" "$SECRETS_DIR"
 
 # ── 7. .env scaffold ──────────────────────────────────────────────────────────

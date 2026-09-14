@@ -23,7 +23,7 @@ from sqlalchemy import delete, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
-from sentinel.adapter.factory import create_router_adapter
+from sentinel.adapter.factory import create_router_adapter, create_secondary_router_adapter
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
@@ -46,7 +46,7 @@ from sentinel.ml.trainer import ModelTrainer
 from sentinel.notifications.digest import render_digest_html, render_digest_text
 from sentinel.notifications.digest_query import build_digest_data
 from sentinel.notifications.service import NotificationConfig, NotificationService
-from sentinel.scheduler.jobs import poll_cycle
+from sentinel.scheduler.jobs import poll_cycle, poll_secondary_router
 from sentinel.security.arp_watch import ArpWatcher
 from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
 from sentinel.security.clamav_scanner import ClamAvScanner
@@ -238,6 +238,22 @@ class SentinelScheduler:
         self._thread: threading.Thread | None = None
         self._scheduler: AsyncIOScheduler | None = None
         self._adapter: RouterAdapter | None = None
+        # Guards _ensure_adapter's lazy creation below — without this,
+        # _startup_job and the first _poll_job tick both call _ensure_adapter
+        # around the same moment at boot, both see self._adapter is None
+        # (create_router_adapter awaits a DB call and yields control before
+        # either assignment lands), and each builds its own independent
+        # SagemcomXmoAdapter/XmoClient — confirmed live: two near-simultaneous
+        # real XMO login attempts ~50ms apart on the same restart, each
+        # independently hitting XMO_LOGIN_RETRY_ERR and arming its own
+        # (then-discarded) cooldown, exactly doubling the real hits to the
+        # router at the moment we most want to be gentle with it.
+        self._adapter_lock = asyncio.Lock()
+        # The other configured router (if any) — visibility-only, never fed
+        # through the detection pipeline/RuleEngine/WAN bandwidth tracking.
+        # See _ensure_secondary_adapter/_secondary_poll_job.
+        self._secondary_adapter: RouterAdapter | None = None
+        self._secondary_adapter_lock = asyncio.Lock()
         self._redis_client: Redis | None = None
         # Built once and reused across polls: HighUploadDetector, SignalAnomalyDetector,
         # and AnomalyEngine all track state (rolling counts, last RSSI, trained
@@ -407,6 +423,13 @@ class SentinelScheduler:
             next_run_time=datetime.now(),  # fire immediately, then on the interval
         )
         self._scheduler.add_job(
+            self._secondary_poll_job,
+            'interval',
+            seconds=self._poll_interval_s,
+            id='secondary_router_poll',
+            next_run_time=datetime.now(),
+        )
+        self._scheduler.add_job(
             self._retrain_job,
             CronTrigger.from_crontab(self._ml_retrain_cron),
             id='ml_retrain',
@@ -545,6 +568,23 @@ class SentinelScheduler:
         except Exception as exc:
             logger.exception('Poll cycle failed')
             self._last_poll_error = str(exc)
+
+    async def _secondary_poll_job(self) -> None:
+        """Visibility-only poll for the second, non-active router, if one is
+        configured — see poll_secondary_router's docstring for exactly what
+        this does and doesn't do relative to _poll_job. A no-op cycle (not
+        an error) when no second router is configured, which is the common
+        case — most installs only ever have Sagemcom, and _ensure_secondary_
+        adapter() returns None for them every time without attempting a
+        connection.
+        """
+        try:
+            adapter = await self._ensure_secondary_adapter()
+            if adapter is None:
+                return
+            await poll_secondary_router(adapter, self._redis_client)
+        except Exception:
+            logger.exception('Secondary router poll cycle failed')
 
     async def _reconcile_arp_table(self, adapter: RouterAdapter) -> None:
         """Re-seed ArpWatcher's IP->MAC table from the router's live DHCP
@@ -980,7 +1020,7 @@ class SentinelScheduler:
             expiry_hours = await SettingsRepository().get_auto_block_expiry_hours()
             for mac, hostname in expired:
                 try:
-                    adapter = await self._ensure_adapter()
+                    adapter = await self._adapter_for_mac(mac)
                     unblocked = await adapter.unblock_device(mac)
                 except Exception:
                     logger.exception('Failed to auto-unblock expired block for %s', mac)
@@ -1218,7 +1258,7 @@ class SentinelScheduler:
             return f' — {old_mac} was blocked; AUTO-BLOCK DISABLED (dev override) — not propagated to {new_mac}'
 
         try:
-            adapter = await self._ensure_adapter()
+            adapter = await self._adapter_for_mac(new_mac)
             blocked_now = await adapter.block_device(new_mac)
         except Exception:
             logger.exception('Failed to propagate block from %s to %s after identity link', old_mac, new_mac)
@@ -1756,9 +1796,14 @@ class SentinelScheduler:
         """
         try:
             adapter = await self._ensure_adapter()
+            adapter.invalidate_connected_devices_cache()
         except Exception:
-            return
-        adapter.invalidate_connected_devices_cache()
+            pass
+        # The new IP/MAC pairing could equally belong to the secondary
+        # (non-active) router if one is configured — invalidate its cache
+        # too rather than assuming it's always the active router's device.
+        if self._secondary_adapter is not None:
+            self._secondary_adapter.invalidate_connected_devices_cache()
 
     async def _persist_arp_alert(self, event: dict) -> None:
         # new_mac is the attacker's MAC impersonating a known IP — attribute
@@ -1999,7 +2044,7 @@ class SentinelScheduler:
         elif mac:
             try:
                 if await SettingsRepository().get_auto_block_on_threat():
-                    adapter = await self._ensure_adapter()
+                    adapter = await self._adapter_for_mac(mac)
                     blocked_now = await adapter.block_device(mac)
                     block_failed = not blocked_now
             except Exception:
@@ -2128,9 +2173,58 @@ class SentinelScheduler:
             return fallback
 
     async def _ensure_adapter(self) -> RouterAdapter:
+        """The active/primary router's adapter — see AppSettings.active_router
+        and this module's top-of-file design note in factory.py. Feeds the
+        detection pipeline, WAN bandwidth tracking, RuleEngine auto-block,
+        and ARP/DHCP reconciliation.
+
+        Guarded by self._adapter_lock (double-checked locking) — see that
+        attribute's docstring for the concurrent-callers-at-boot race this
+        prevents. The outer check avoids acquiring the lock at all once the
+        adapter is already built, which is the overwhelmingly common case.
+        """
         if self._adapter is None:
-            self._adapter = await create_router_adapter()
+            async with self._adapter_lock:
+                if self._adapter is None:
+                    self._adapter = await create_router_adapter()
         return self._adapter
+
+    async def _ensure_secondary_adapter(self) -> RouterAdapter | None:
+        """The other configured router's adapter (visibility-only — see
+        _secondary_poll_job), or None if no second router is configured.
+        Deliberately re-checks configuration on every call while nothing is
+        built yet (None is both "not built" and "not configured" here) —
+        cheap since that path never opens a connection, and it means
+        configuring MiWiFi from the Settings tab takes effect on the very
+        next poll without a restart.
+
+        Guarded by self._secondary_adapter_lock for the same reason as
+        _ensure_adapter — concurrent callers at boot could otherwise each
+        build (and each real-login) their own independent adapter instance.
+        """
+        if self._secondary_adapter is None:
+            async with self._secondary_adapter_lock:
+                if self._secondary_adapter is None:
+                    active = await SettingsRepository().get_active_router()
+                    self._secondary_adapter = await create_secondary_router_adapter(active)
+        return self._secondary_adapter
+
+    async def _adapter_for_mac(self, mac: str) -> RouterAdapter:
+        """Resolve which configured adapter actually owns `mac`, for block/
+        unblock/quarantine actions — once a second router is configured, a
+        device most recently reported by it must be blocked through *that*
+        router, not whichever one happens to be active/primary. Falls back
+        to the active adapter if this MAC has no devices row yet, or its
+        recorded Device.source_router isn't the active router but the
+        secondary adapter isn't available either (e.g. mid-reconfiguration).
+        """
+        active = await SettingsRepository().get_active_router()
+        source_router = await DeviceRepository().get_source_router(mac)
+        if source_router and source_router != active:
+            secondary = await self._ensure_secondary_adapter()
+            if secondary is not None:
+                return secondary
+        return await self._ensure_adapter()
 
     # ── Thread-safe bridge for Flask routes ──────────────────────────────────
     #
@@ -2174,19 +2268,19 @@ class SentinelScheduler:
         return self.call_adapter(self._get_router_info(), timeout)
 
     async def _block_device(self, mac: str) -> bool:
-        adapter = await self._ensure_adapter()
+        adapter = await self._adapter_for_mac(mac)
         return await adapter.block_device(mac)
 
     async def _unblock_device(self, mac: str) -> bool:
-        adapter = await self._ensure_adapter()
+        adapter = await self._adapter_for_mac(mac)
         return await adapter.unblock_device(mac)
 
     async def _quarantine_device(self, mac: str) -> bool:
-        adapter = await self._ensure_adapter()
+        adapter = await self._adapter_for_mac(mac)
         return await adapter.quarantine_device(mac)
 
     async def _unquarantine_device(self, mac: str) -> bool:
-        adapter = await self._ensure_adapter()
+        adapter = await self._adapter_for_mac(mac)
         return await adapter.unquarantine_device(mac)
 
     async def _get_router_info(self) -> RouterInfo:
@@ -2376,6 +2470,27 @@ class SentinelScheduler:
         def _apply() -> None:
             old_adapter = self._adapter
             self._adapter = None
+            if old_adapter is None:
+                return
+            aclose = getattr(old_adapter, 'aclose', None)
+            if aclose is not None:
+                asyncio.ensure_future(aclose(), loop=self._loop)
+
+        self._loop.call_soon_threadsafe(_apply)
+
+    def reload_secondary_router_credentials(self) -> None:
+        """Thread-safe: drop the cached secondary (non-active) router
+        adapter so the next _secondary_poll_job rebuilds it from current
+        settings — mirrors reload_router_credentials() above, for
+        self._secondary_adapter. Called after the admin changes MiWiFi
+        credentials in the Settings tab, or flips AppSettings.active_router
+        (which swaps which configured router *is* "secondary")."""
+        if self._loop is None:
+            return
+
+        def _apply() -> None:
+            old_adapter = self._secondary_adapter
+            self._secondary_adapter = None
             if old_adapter is None:
                 return
             aclose = getattr(old_adapter, 'aclose', None)

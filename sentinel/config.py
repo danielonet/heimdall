@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     """
 
     # ── Router ────────────────────────────────────────────────────────────────
+    # Superseded by AppSettings.active_router (the Settings-tab PRIMARY
+    # ROUTER dropdown) now that a second router adapter exists — see
+    # sentinel/adapter/factory.py. No longer read anywhere; kept only so an
+    # existing .env/compose file setting it doesn't error out as an unknown
+    # field (Config.extra='ignore' would swallow it anyway, but leaving the
+    # field defined documents why it's still there).
     ROUTER_ADAPTER: str = 'sagemcom'
     ROUTER_IP: str = ''            # blank = auto-discover from default route
     ROUTER_PORT: int = 80
@@ -51,6 +57,20 @@ class Settings(BaseSettings):
     POLL_INTERVAL_SECONDS: int = 15
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router
     SCHEDULER_ENABLED: bool = True  # set False in tests to avoid starting the poll loop
+
+    # ── Second router (optional) ─────────────────────────────────────────────
+    # A Redmi/Xiaomi router on stock MiWiFi firmware — see
+    # sentinel/adapter/miwifi/miwifi_adapter.py and docs/router/miwifi-api.md.
+    # Entirely optional: blank MIWIFI_IP means "not configured", in which
+    # case sentinel.adapter.factory never builds a MiwifiAdapter at all and
+    # Heimdall behaves exactly as it did with only Sagemcom. Unlike
+    # ROUTER_ADAPTER (which selects the primary/active adapter — see
+    # AppSettings.active_router), there's no MIWIFI_ADAPTER selector: MiWiFi
+    # is the only supported second-router firmware for now.
+    MIWIFI_IP: str = ''
+    MIWIFI_PASSWORD: str = ''       # populated from MIWIFI_PASSWORD_FILE if blank
+    MIWIFI_PASSWORD_FILE: str = ''  # also the write target for PATCH /api/settings
+    USE_MOCK_MIWIFI: bool = False   # dev flag: use MockMiwifiAdapter instead of a real Redmi
 
     # ── Deployment ────────────────────────────────────────────────────────────
     # 'minimal' | 'intermediate' | 'full' — which optional Docker-backed
@@ -225,6 +245,9 @@ class Settings(BaseSettings):
         """Load secrets from Docker secret files when the plain value is empty."""
         if not self.ROUTER_PASSWORD and self.ROUTER_PASSWORD_FILE:
             object.__setattr__(self, 'ROUTER_PASSWORD', _read_secret_file(self.ROUTER_PASSWORD_FILE))
+
+        if not self.MIWIFI_PASSWORD and self.MIWIFI_PASSWORD_FILE:
+            object.__setattr__(self, 'MIWIFI_PASSWORD', _read_secret_file(self.MIWIFI_PASSWORD_FILE))
 
         if not self.SMTP_PASSWORD and self.SMTP_PASSWORD_FILE:
             object.__setattr__(self, 'SMTP_PASSWORD', _read_secret_file(self.SMTP_PASSWORD_FILE))

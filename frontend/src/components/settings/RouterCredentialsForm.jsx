@@ -21,7 +21,7 @@ export function RouterCredentialsForm() {
 
   return (
     <div className="mt-2 border-t border-border/50 pt-2">
-      <div className="mb-1.5 text-[8px] tracking-[3px] text-text-muted">ROUTER LOGIN</div>
+      <div className="mb-1.5 text-[8px] tracking-[3px] text-text-muted">SAGEMCOM LOGIN</div>
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label htmlFor="router-username" className="mb-1 block text-[9px] tracking-wider text-text-muted">

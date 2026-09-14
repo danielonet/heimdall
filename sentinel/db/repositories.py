@@ -59,6 +59,18 @@ class DeviceRepository:
             device = await session.get(Device, mac_address)
             return bool(device and device.ever_connected)
 
+    async def get_source_router(self, mac_address: str) -> str | None:
+        """Which configured router most recently reported this MAC —
+        'sagemcom' | 'miwifi' — or None if this MAC has no devices row yet.
+        Used by SentinelScheduler._adapter_for_mac to route block/unblock/
+        quarantine actions to the router that actually owns this device
+        rather than always assuming the active/primary one. See
+        Device.source_router.
+        """
+        async with get_session() as session:
+            device = await session.get(Device, mac_address)
+            return device.source_router if device else None
+
     async def get_first_seen(self, mac_address: str) -> datetime | None:
         """When this MAC's devices row was first created, or None if it has
         no row yet. Used by AnomalousVolumeDetector to gate alerts during the
@@ -731,6 +743,8 @@ class SettingsRepository:
                 'router_username': (
                     row.router_username if row and row.router_username else settings.ROUTER_USERNAME
                 ),
+                'miwifi_ip': row.miwifi_ip if row and row.miwifi_ip else settings.MIWIFI_IP,
+                'active_router': row.active_router if row and row.active_router else 'sagemcom',
                 'ntfy_url': row.ntfy_url if row and row.ntfy_url else settings.NTFY_URL,
                 'smtp_host': row.smtp_host if row and row.smtp_host else settings.SMTP_HOST,
                 'smtp_port': row.smtp_port if row and row.smtp_port else settings.SMTP_PORT,
@@ -780,6 +794,22 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.router_username = username
+
+    async def get_miwifi_ip(self) -> str:
+        return (await self.get_all())['miwifi_ip']
+
+    async def set_miwifi_ip(self, ip: str) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.miwifi_ip = ip
+
+    async def get_active_router(self) -> str:
+        return (await self.get_all())['active_router']
+
+    async def set_active_router(self, router: str) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.active_router = router
 
     async def get_ntfy_url(self) -> str:
         return (await self.get_all())['ntfy_url']

@@ -8,8 +8,10 @@ import { AlertLifecycleSection } from '../components/settings/AlertLifecycleSect
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DataRetentionSection } from '../components/settings/DataRetentionSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
+import { MiwifiCredentialsForm } from '../components/settings/MiwifiCredentialsForm'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
 import { NotificationsSection } from '../components/settings/NotificationsSection'
+import { PrimaryRouterSelect } from '../components/settings/PrimaryRouterSelect'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
 import heimdallLogo from '../assets/heimdall-icon.png'
@@ -108,6 +110,8 @@ export function SettingsPage() {
           </div>
         )}
         <RouterCredentialsForm />
+        <MiwifiCredentialsForm />
+        <PrimaryRouterSelect />
         <NetworkInterfaceSection />
       </div>
 

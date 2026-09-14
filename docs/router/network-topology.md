@@ -75,3 +75,60 @@ Sagemcom F@st 5670  (10.100.102.1)
 Both `Akuvox-R20K` and `0c:11:05:a6:b6:18` share Port 5 (PHY5).
 Their traffic cannot be individually measured from the router API alone.
 See `docs/router/wired-monitoring-caveat.md`.
+
+## Second router — Redmi (MiWiFi)
+
+`MiWiFi-RA67` — a Redmi/Xiaomi unit on stock MiWiFi firmware, hardware MAC
+`8c:de:f9:1a:5d:7e` — has been added to this network and is polled directly
+via its own API (see `docs/router/miwifi-api.md` and
+`sentinel/adapter/miwifi/`).
+
+✅ **Confirmed live**: it runs in **AP/bridge mode** (its own router/NAT
+disabled — `xqnetwork/mode` reports `hostip: 10.100.102.1`, the Sagemcom's
+own address), wired into the Sagemcom's LAN. Its own management IP
+(`10.100.102.3`) shows up in the Sagemcom's device list as an `Ethernet`
+host on whichever PHY port it's plugged into, and every phone connected to
+its WiFi shows up *there too* — as additional `Ethernet` hosts sharing that
+same PHY port, since from the Sagemcom's point of view their traffic simply
+arrives via that port. Heimdall dedupes those MACs by MAC address —
+`Device.source_router` reflects whichever poll (Sagemcom or MiWiFi) ran
+most recently for that device, not a duplicate row.
+
+**This has a real, unavoidable consequence for bandwidth**, not just a
+cosmetic one: per CLAUDE.md rule 5, a PHY port with more than one occupant
+never gets fabricated per-device traffic numbers from the Sagemcom side —
+and with every phone on the Redmi's WiFi now sharing one port, none of them
+qualify anymore. The Redmi's own API was expected to fill that gap, but
+confirmed live: **an AP-mode MiWiFi unit has no per-device traffic
+counters available through any endpoint** (see `docs/router/
+miwifi-api.md`'s "AP/bridge mode" section) — it only reports presence
+(which MACs are currently associated), not bytes. So for phones on this
+specific Redmi, in this specific mode: presence/identity is fully
+restored (tagged `source_router: miwifi`), but individual bandwidth is
+not, and there's no known API-level fix for that short of running the
+Redmi in router mode instead (its own DHCP/NAT, typically
+`192.168.31.0/24`) — a bigger topology change with its own tradeoffs
+(double-NAT breaks same-subnet reachability from the Sagemcom's side, and
+would need re-testing which of the caveats in this doc still apply).
+
+This distinction (bridged vs. router mode) also matters for one more
+thing:
+
+**ARP/rogue-DHCP-based detectors don't necessarily cover it.**
+`sentinel/security/liveness.py`'s `ArpLivenessProbe`, the ARP-spoof
+detector, and `DhcpWatcher` all work by sniffing traffic on the interface
+`SNIFF_IFACE` names — i.e. whatever subnet the Heimdall host's own NIC sits
+on. If the Redmi turns out to be double-NAT on a subnet the Heimdall host
+has no interface on, those specific detectors simply won't see its clients
+at all — not a false negative so much as "out of reach", the same
+documented-not-hidden posture as the wired PER_PORT gap above. Device/
+traffic visibility for the Redmi's clients is unaffected either way, since
+that comes from its own API, not from sniffing.
+
+A second, related, deliberate scope limit: only the **active** router (see
+`AppSettings.active_router`, the Settings tab's PRIMARY ROUTER dropdown)
+feeds the detection pipeline, ML anomaly scoring, and auto-block — see
+`SentinelScheduler._secondary_poll_job`'s docstring. The non-active
+configured router's devices show up in the device list, network map, and
+reports (tagged `source_router: 'miwifi'`), but don't yet get their own
+NEW_DEVICE/anomaly alerts or auto-block.

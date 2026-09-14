@@ -470,3 +470,136 @@ class MockSagemcomAdapter(RouterAdapter):
                 last_change_secs=300000,
             ),
         ]
+
+
+class MockMiwifiAdapter(RouterAdapter):
+    """Mock adapter simulating a second, MiWiFi-firmware Redmi router — a
+    small, WiFi-only device set distinct from MockSagemcomAdapter's, so dev
+    mode can exercise "two routers configured" without a physical Redmi.
+    Enable via USE_MOCK_MIWIFI=true alongside MIWIFI_IP/MIWIFI_PASSWORD (see
+    sentinel/adapter/factory.py) — same "offline dev only" posture as
+    MockSagemcomAdapter/USE_MOCK_ROUTER.
+    """
+
+    def __init__(self) -> None:
+        logger.info('MockMiwifiAdapter initialized (offline mode)')
+        self._devices = self._generate_mock_devices()
+        self._blocked_macs: set[str] = set()
+
+    async def get_connected_devices(self) -> List[DeviceSnapshot]:
+        for device in self._devices:
+            device.signal_strength_dbm = int(
+                max(-90, min(-30, device.signal_strength_dbm + random.gauss(0, 1.5)))
+            )
+        return self._devices
+
+    def invalidate_connected_devices_cache(self) -> None:
+        """No-op — see MiwifiAdapter's own no-op of the same name."""
+
+    async def get_traffic_samples(self) -> List[TrafficSample]:
+        samples: List[TrafficSample] = []
+        now = datetime.now(timezone.utc)
+        for device in self._devices:
+            if device.mac_address in self._blocked_macs:
+                continue
+            bytes_sent = random.randint(2000, 80000)
+            bytes_recv = random.randint(10000, 800000)
+            samples.append(TrafficSample(
+                mac_address=device.mac_address,
+                timestamp=now,
+                bytes_sent_delta=bytes_sent,
+                bytes_recv_delta=bytes_recv,
+                throughput_up_kbps=bytes_sent // 1000,
+                throughput_dn_kbps=bytes_recv // 1000,
+                granularity=TrafficGranularity.PER_DEVICE,
+                port_alias=None,
+                poll_interval_s=15,
+                source_router='miwifi',
+            ))
+        return samples
+
+    async def get_port_stats(self) -> List[PortStats]:
+        """MiWiFi exposes no per-port Ethernet API — see MiwifiAdapter.get_port_stats."""
+        return []
+
+    async def block_device(self, mac: str) -> bool:
+        self._blocked_macs.add(mac.lower())
+        logger.info('Mock (MiWiFi): blocked device %s', mac)
+        return True
+
+    async def unblock_device(self, mac: str) -> bool:
+        self._blocked_macs.discard(mac.lower())
+        logger.info('Mock (MiWiFi): unblocked device %s', mac)
+        return True
+
+    async def quarantine_device(self, mac: str) -> bool:
+        """Mirrors MiwifiAdapter.quarantine_device — no such tier exists on
+        this firmware, real or mocked."""
+        logger.info('Mock (MiWiFi): quarantine not supported, as on the real adapter — %s', mac)
+        return False
+
+    async def unquarantine_device(self, mac: str) -> bool:
+        return False
+
+    async def get_router_info(self) -> RouterInfo:
+        return RouterInfo(
+            model='Redmi Router (MiWiFi, Mock)',
+            firmware='3.0.35',
+            wan_ip='',  # this router is downstream of the Sagemcom in the mock topology too
+            wan_mac='',
+            wan_status='UNKNOWN',
+            uptime_seconds=456_789,
+            ssids=['Redmi-5G', 'Redmi-2.4G'],
+            source_router='miwifi',
+        )
+
+    async def get_wan_stats(self) -> Optional[WanStats]:
+        """See MiwifiAdapter.get_wan_stats — no confirmed endpoint, mocked the same way."""
+        return None
+
+    async def get_dhcp_leases(self) -> List[DhcpLease]:
+        return [
+            DhcpLease(mac_address=d.mac_address, ip_address=d.ip_address, hostname=d.hostname)
+            for d in self._devices
+            if d.is_online and d.mac_address not in self._blocked_macs
+        ]
+
+    def _generate_mock_devices(self) -> List[DeviceSnapshot]:
+        return [
+            DeviceSnapshot(
+                mac_address='9c:9d:7e:14:0b:fe',
+                ip_address='192.168.31.10',
+                hostname='xiaomi-pad',
+                vendor_name='Xiaomi',
+                interface_name='WiFi',
+                signal_strength_dbm=-52,
+                signal_rate_mbps=390,
+                is_online=True,
+                device_type='Tablet',
+                source_router='miwifi',
+            ),
+            DeviceSnapshot(
+                mac_address='64:90:c1:6c:55:45',
+                ip_address='192.168.31.11',
+                hostname='chuangmi-camera',
+                vendor_name='',
+                interface_name='WiFi',
+                signal_strength_dbm=-74,
+                signal_rate_mbps=65,
+                is_online=True,
+                device_type='IP Camera',
+                source_router='miwifi',
+            ),
+            DeviceSnapshot(
+                mac_address='da:d4:19:31:c0:e9',
+                ip_address='192.168.31.12',
+                hostname='redmi-note-13-pro',
+                vendor_name='',
+                interface_name='WiFi',
+                signal_strength_dbm=-48,
+                signal_rate_mbps=433,
+                is_online=True,
+                device_type='Smartphone',
+                source_router='miwifi',
+            ),
+        ]

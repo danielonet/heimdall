@@ -19,6 +19,13 @@ services:
       - ROUTER_USERNAME=home
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
       # - USE_MOCK_ROUTER=true   # enable for offline dev (synthetic test data)
+      # Optional second router — a Redmi/Xiaomi unit on stock MiWiFi
+      # firmware (see sentinel/adapter/miwifi/). Blank MIWIFI_IP means "not
+      # configured"; both can also be set/changed later from the Settings
+      # tab without editing this file. See docs/router/miwifi-api.md.
+      - MIWIFI_IP=
+      - MIWIFI_PASSWORD_FILE=/run/secrets/miwifi_password
+      # - USE_MOCK_MIWIFI=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
@@ -39,6 +46,7 @@ services:
       - db_pass
       - admin_password
       - smtp_password
+      - miwifi_password
     depends_on:
       - postgres
       - redis
@@ -176,6 +184,11 @@ secrets:
   # still exist as a file for Compose to mount it; scripts/install.sh
   # scaffolds it empty. See sentinel/config.py's SMTP_PASSWORD_FILE.
   smtp_password:   { file: ./secrets/smtp_password.txt }
+  # Optional second router — blank is a valid value (MiWiFi not
+  # configured). Must still exist as a file for Compose to mount it;
+  # scripts/install.sh scaffolds it empty. See sentinel/config.py's
+  # MIWIFI_PASSWORD_FILE.
+  miwifi_password: { file: ./secrets/miwifi_password.txt }
 
 volumes:
   pgdata:

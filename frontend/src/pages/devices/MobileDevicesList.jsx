@@ -36,6 +36,7 @@ function DeviceCard({ device: d, onClick }) {
           {d.ip_address || '—'}
           {d.device_type && d.device_type !== 'MISCELLANEOUS' && ` · ${d.device_type}`}
           {d.ap_alias && ` · ${d.ap_alias}`}
+          {d.source_router === 'miwifi' && ' · Redmi'}
         </div>
       </div>
       <div className="flex flex-shrink-0 flex-col items-end gap-1">

@@ -140,6 +140,48 @@ async def poll_cycle(
     )
 
 
+async def poll_secondary_router(adapter: RouterAdapter, redis_client: Redis) -> None:
+    """Lightweight visibility-only poll for a second, non-active router (see
+    SentinelScheduler._secondary_poll_job) — fetches and persists devices/
+    traffic the same way poll_cycle's own fetch+persist steps do, but
+    deliberately skips the detection pipeline, RuleEngine, anomaly scoring,
+    and WAN-bandwidth tracking that poll_cycle runs for the *active* router.
+
+    This is a deliberate v1 scope decision, not an oversight: those
+    subsystems are built around a single adapter reference (RuleEngine's
+    auto-block target, WanBandwidthDetector's household-total baseline),
+    and extending them to a second, independently-configured router is a
+    larger change than "show who is consuming WiFi on it" calls for.
+    Devices/traffic from this router still show up in the device list,
+    network map, and reports — tagged via DeviceSnapshot.source_router —
+    they just don't get NEW_DEVICE/anomaly alerts or auto-block triggered by
+    this router's own activity. redis_client is accepted for symmetry with
+    poll_cycle and future use, but this doesn't publish onto
+    REDIS_EVENTS_CHANNEL today — nothing subscribes to it yet, and doing so
+    would mean an extra get_router_info() round-trip to this router every
+    cycle purely to fill a payload field nobody reads. See
+    docs/router/network-topology.md.
+    """
+    devices = await adapter.get_connected_devices()
+    traffic_samples = await adapter.get_traffic_samples()
+    _enrich_vendor_names(devices)
+    port_stats = await adapter.get_port_stats()  # always [] for MiwifiAdapter today
+
+    async with get_session() as session:
+        newly_seen_macs = await _upsert_devices(session, devices, is_primary=False)
+        # No anomaly scores for a router that isn't run through AnomalyEngine
+        # in this pass — see this function's docstring.
+        await _insert_traffic_samples(session, traffic_samples, {})
+        await _insert_port_stats(session, port_stats)
+
+    _broadcast_updates(devices, newly_seen_macs, port_stats)
+
+    logger.info(
+        'Secondary router poll cycle complete: %d devices, %d traffic samples',
+        len(devices), len(traffic_samples),
+    )
+
+
 async def _auto_trust_new_connections_during_learning(devices: list[DeviceSnapshot]) -> None:
     """While the system is LEARNING (see SettingsRepository.get_status()),
     every device that actually connects is silently trusted instead of being
@@ -377,8 +419,16 @@ def _wired_single_occupant_macs(devices: list[DeviceSnapshot]) -> set[str]:
     return {macs[0] for macs in macs_by_port.values() if len(macs) == 1}
 
 
-async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) -> set[str]:
-    """Insert new devices / refresh known ones. Returns the set of newly-seen MACs."""
+async def _upsert_devices(
+    session: AsyncSession, devices: list[DeviceSnapshot], *, is_primary: bool = True,
+) -> set[str]:
+    """Insert new devices / refresh known ones. Returns the set of newly-seen MACs.
+
+    is_primary distinguishes poll_cycle's call (the active/primary router,
+    True) from poll_secondary_router's (the other configured router, if
+    any, False) — see the field-by-field comments below for exactly what it
+    gates and why.
+    """
     now = datetime.now(timezone.utc)
     newly_seen: set[str] = set()
     trusted_repo = TrustedMacRepository()
@@ -420,6 +470,7 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 ever_connected=snapshot.is_online,
                 first_seen=now,
                 last_seen=now,
+                source_router=snapshot.source_router,
             ))
             newly_seen.add(snapshot.mac_address)
         else:
@@ -442,7 +493,15 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
                 if canonical is not None:
                     target = canonical
 
-            target.ip_address = snapshot.ip_address
+            # Same decay problem as hostname below, confirmed live
+            # 2026-09-13 once a second (MiWiFi) adapter existed to surface
+            # it starkly: a MiWiFi AP-mode node's snapshot has no IP at all
+            # (see MiwifiAdapter._get_device_list's docstring) — an
+            # unconditional overwrite here was blanking out a perfectly
+            # good, already-known IP the Sagemcom poll had just set, every
+            # time the secondary poll ran. Only ever move to a real IP.
+            if snapshot.ip_address:
+                target.ip_address = snapshot.ip_address
             # Confirmed live 2026-09-10, immediately after the fix above: a
             # device that's gone quiet can fall out of the router's own
             # Host-table cache — its entry stays present, but with hostname
@@ -455,9 +514,29 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             if snapshot.hostname:
                 target.hostname = snapshot.hostname
             target.vendor_name = snapshot.vendor_name
-            target.interface_name = snapshot.interface_name
-            target.port_alias = snapshot.port_alias or None
-            target.traffic_granularity = traffic_granularity
+            # Physical/AP classification fields (interface_name, port_alias,
+            # traffic_granularity, device_type, ap_alias) and signal_rate_mbps
+            # are only ever written by the *primary* poll (is_primary=True —
+            # see poll_cycle vs. poll_secondary_router). Confirmed live
+            # 2026-09-13: once a second router is configured, the exact same
+            # MAC can legitimately be reported by both every single cycle
+            # (a phone bridged onto the network through an AP-mode Redmi
+            # that's itself wired into the Sagemcom) — without this guard,
+            # these fields flip-flopped between the two pollers' conflicting
+            # views every ~15s (e.g. interface_name toggling Ethernet/WiFi),
+            # since each considered its own snapshot authoritative. The
+            # primary/active router's view wins on an ongoing basis; a
+            # secondary-router snapshot only gets to set these at row
+            # *creation* (the insert branch above), when nothing else has an
+            # opinion yet — e.g. a device only ever visible via a
+            # double-NAT'd second router.
+            if is_primary:
+                target.interface_name = snapshot.interface_name
+                target.port_alias = snapshot.port_alias or None
+                target.traffic_granularity = traffic_granularity
+                target.device_type = snapshot.device_type or None
+                target.ap_alias = snapshot.ap_alias or None
+                target.signal_rate_mbps = snapshot.signal_rate_mbps
             # Confirmed live 2026-09-10: the router only ever reports a real
             # SignalStrength for a device it currently has an AP association
             # for (SagemcomXmoAdapter._to_device_snapshot sources both
@@ -475,12 +554,17 @@ async def _upsert_devices(session: AsyncSession, devices: list[DeviceSnapshot]) 
             # documented intent.
             if snapshot.signal_strength_dbm:
                 target.signal_strength_dbm = snapshot.signal_strength_dbm
-            target.signal_rate_mbps = snapshot.signal_rate_mbps
-            target.device_type = snapshot.device_type or None
-            target.ap_alias = snapshot.ap_alias or None
             target.is_online = snapshot.is_online
             if snapshot.is_online:
                 target.ever_connected = True
+            # Last-write-wins: whichever router's poll ran most recently for
+            # this MAC is what source_router reflects. Informational only
+            # (routes block/unblock actions — see DeviceRepository.
+            # get_source_router), not identity-critical, so a MAC genuinely
+            # seen from both routers (e.g. a bridged/AP-mode Redmi on the
+            # same subnet as the Sagemcom) simply tracks whichever poll last
+            # touched it rather than needing real reconciliation.
+            target.source_router = snapshot.source_router
             # Re-sync is_trusted from the persistent registry every poll, not
             # just at row creation. Without this, a row created during a
             # brief window where trusted_macs was empty (e.g. a race between
