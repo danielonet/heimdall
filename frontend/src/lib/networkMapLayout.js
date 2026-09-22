@@ -39,6 +39,7 @@ function tierFor(device, worstSeverity) {
 }
 
 function statusFor(device, worstSeverity) {
+  if (device.is_wifi_sighting) return 'nearby'
   if (device.is_blocked) return 'blocked'
   if (device.is_quarantined) return 'quarantined'
   if (worstSeverity === 'CRITICAL') return 'critical'
@@ -63,6 +64,7 @@ function nodeAt(item, angle, r) {
     hostname: item.device.hostname,
     nickname: item.device.nickname,
     ip_address: item.device.ip_address,
+    isSighting: Boolean(item.device.is_wifi_sighting),
     sector: item.sector,
     tier: item.tier,
     status: item.status,

@@ -9,6 +9,7 @@ import { DevicesPage } from './pages/DevicesPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { PortsPage } from './pages/PortsPage'
+import { WifiScanPage } from './pages/WifiScanPage'
 import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
 import { ReportsPage } from './pages/ReportsPage'
@@ -32,6 +33,7 @@ function App() {
               <Route path="/devices/:mac" element={<DeviceDetailPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/ports" element={<PortsPage />} />
+              <Route path="/wifi" element={<WifiScanPage />} />
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />
               <Route path="/reports" element={<ReportsPage />} />

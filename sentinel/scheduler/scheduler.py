@@ -28,9 +28,10 @@ from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
 from sentinel.config import settings
-from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory
+from sentinel.db.models import Alert, Device, DnsQuery, WanStatusHistory, WifiNetwork, WifiSighting
 from sentinel.db.repositories import (
     AlertRepository, DeviceRepository, PortAllowlistRepository, SettingsRepository, TrustedMacRepository,
+    WifiNetworkRepository, WifiSightingRepository,
 )
 from sentinel.db.session import get_session
 from sentinel.deployment_tiers import active_service_keys, services_for_tier
@@ -58,6 +59,7 @@ from sentinel.security.remediation import build_mitigation
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.suricata_parser import SuricataAlertIngester, SuricataEveLogReader
 from sentinel.security.threat_intel import ThreatIntelService
+from sentinel.security.wifi_monitor import WifiMonitorWatcher
 from sentinel.security.zeek_parser import (
     ZeekConnBeaconDetector,
     ZeekConnVolumeCorrelator,
@@ -274,6 +276,13 @@ class SentinelScheduler:
         self._arp_watcher: ArpWatcher | None = None
         self._dhcp_watcher: DhcpWatcher | None = None
         self._fingerprinter: PassiveFingerprinter | None = None
+        # None until _run_loop resolves a configured wifi_monitor_iface —
+        # unlike the three above, there's no env-config default to fall
+        # back to (no deployment can assume a second, monitor-capable WiFi
+        # adapter is physically present), so "not constructed at all" is
+        # this watcher's normal, common resting state. See
+        # sentinel/security/wifi_monitor.py.
+        self._wifi_monitor: WifiMonitorWatcher | None = None
         self._canary_reader: OpenCanaryLogReader | None = None
         self._canary_ingester: OpenCanaryIngester | None = None
         self._zeek_dns_reader: ZeekDnsLogReader | None = None
@@ -391,6 +400,17 @@ class SentinelScheduler:
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
         self._dhcp_watcher = DhcpWatcher(self._on_dhcp_alert, self._sniff_iface, self._router_ip)
         self._fingerprinter = PassiveFingerprinter(self._on_fingerprint, self._sniff_iface)
+        # Only constructed if an admin has actually configured a monitor-
+        # capable adapter (WiFi Monitor tab, Settings) — see this
+        # attribute's own docstring above. _wifi_monitor stays None
+        # otherwise, same "no container/feature present, nothing to build"
+        # posture as the Docker-tier-gated integrations just below.
+        wifi_iface, wifi_ssids, wifi_bssids = self._loop.run_until_complete(self._resolve_wifi_monitor_config())
+        if wifi_iface:
+            self._wifi_monitor = WifiMonitorWatcher(
+                self._on_wifi_alert, self._on_wifi_sighting, wifi_iface, wifi_ssids, wifi_bssids,
+                network_callback=self._on_wifi_network,
+            )
         # Docker-backed integrations only get built for tiers that actually
         # deploy their container — see sentinel/deployment_tiers.py. Each
         # attribute stays None (its __init__ default) otherwise, and the
@@ -822,6 +842,12 @@ class SentinelScheduler:
             logger.exception('Failed to start DHCP watcher')
 
         try:
+            if self._wifi_monitor is not None:
+                self._wifi_monitor.start()
+        except Exception:
+            logger.exception('Failed to start WiFi monitor watcher')
+
+        try:
             await self._threat_intel.refresh_feeds()
         except Exception:
             logger.exception('Initial threat feed refresh failed')
@@ -975,6 +1001,11 @@ class SentinelScheduler:
         history, and pruning them would risk re-triggering NEW_DEVICE alerts
         for a device that's simply been offline (e.g. a seasonal device) for
         longer than the retention window.
+
+        wifi_sightings prunes the same way as alerts (plain DELETE, same
+        cutoff/setting) — reuses data_retention_days rather than a
+        dedicated knob, since a neighbor's device not seen in that long is
+        exactly the same "stale, roll it off" judgment call as an old alert.
         """
         try:
             days = await SettingsRepository().get_data_retention_days()
@@ -988,6 +1019,8 @@ class SentinelScheduler:
                 )
                 await session.execute(delete(WanStatusHistory).where(WanStatusHistory.changed_at < cutoff))
                 await session.execute(delete(Alert).where(Alert.created_at < cutoff))
+                await session.execute(delete(WifiSighting).where(WifiSighting.last_seen < cutoff))
+                await session.execute(delete(WifiNetwork).where(WifiNetwork.last_seen < cutoff))
             logger.info('Data retention cleanup complete (cutoff: %s, retention: %d days)', cutoff, days)
         except Exception:
             logger.exception('Data retention cleanup failed')
@@ -1960,6 +1993,50 @@ class SentinelScheduler:
                 raw_data={'ip': ip, 'mac': mac, 'previous_os': previous, 'new_os': os_guess},
             )
 
+    def _on_wifi_alert(self, event: dict) -> None:
+        """Sync callback invoked from WifiMonitorWatcher's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_wifi_alert(event), self._loop)
+
+    async def _persist_wifi_alert(self, event: dict) -> None:
+        # mac=None — the rogue AP's BSSID isn't a Device we track/could ever
+        # block (see _raise_threat_alert's `elif mac:` branch, which cleanly
+        # skips the auto-block attempt entirely for a falsy mac); the BSSID/
+        # SSID live in raw_data/description instead.
+        await self._raise_threat_alert(
+            None, event['type'], event['severity'], event['description'], raw_data=event,
+        )
+
+    def _on_wifi_sighting(self, event: dict) -> None:
+        """Sync callback invoked from WifiMonitorWatcher's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_wifi_sighting(event), self._loop)
+
+    def _on_wifi_network(self, event: dict) -> None:
+        """Sync callback invoked from WifiMonitorWatcher's own daemon thread."""
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._persist_wifi_network(event), self._loop)
+
+    async def _persist_wifi_network(self, event: dict) -> None:
+        """A nearby access point — passive inventory, never an alert."""
+        try:
+            await WifiNetworkRepository().upsert(
+                event['bssid'], ssid=event['ssid'], channel=event.get('channel'),
+                signal=event.get('signal'), secured=event.get('secured', True),
+            )
+        except Exception:
+            logger.exception('Failed to persist WiFi network %s', event.get('bssid'))
+
+    async def _persist_wifi_sighting(self, event: dict) -> None:
+        """Passive inventory, not an attack signal — never routes through
+        _raise_threat_alert/AlertRepository. See WifiSightingRepository."""
+        try:
+            await WifiSightingRepository().upsert(
+                event['mac'], signal=event.get('signal'), probed_ssid=event.get('ssid'),
+            )
+        except Exception:
+            logger.exception('Failed to persist WiFi sighting for %s', event.get('mac'))
+
     async def _raise_threat_alert(
         self, mac: str | None, alert_type: str, severity: str, description: str,
         raw_data: dict | None = None, dedup_key: str | None = None,
@@ -1969,7 +2046,7 @@ class SentinelScheduler:
         armed, blocks the device via the router adapter first so the alert
         description can note it — the single
         choke point every attack-signal source (ArpWatcher, DhcpWatcher,
-        PassiveFingerprinter, NetworkScanner, Zeek DNS/beaconing/file-
+        PassiveFingerprinter, WifiMonitorWatcher, NetworkScanner, Zeek DNS/beaconing/file-
         extraction, Suricata, OpenCanary) routes through, so all of them
         respond the same way. Deliberately NOT used by the ML/statistical
         detector pipeline (sentinel/detection/pipeline.py) or its own alerts
@@ -2134,6 +2211,20 @@ class SentinelScheduler:
                 self._sniff_iface,
             )
             return self._sniff_iface
+
+    async def _resolve_wifi_monitor_config(self) -> tuple[str | None, list[str], list[str]]:
+        """(wifi_monitor_iface, protected_ssids, trusted_bssids) from
+        SettingsRepository. Unlike _resolve_sniff_iface, a DB read failure
+        here falls back to (None, [], []) — disabled — rather than any env
+        default, since (see AppSettings.wifi_monitor_iface's docstring)
+        there is no env-config fallback for a second, monitor-capable
+        adapter to assume exists."""
+        try:
+            data = await SettingsRepository().get_all()
+            return data['wifi_monitor_iface'], data['wifi_protected_ssids'], data['wifi_trusted_bssids']
+        except Exception:
+            logger.exception('Failed to read WiFi monitor config from SettingsRepository — disabling it')
+            return None, [], []
 
     async def _resolve_router_ip(self) -> str:
         """The router's LAN-side IP, same resolution create_router_adapter()
@@ -2328,6 +2419,7 @@ class SentinelScheduler:
             'dhcp_watch_active': self._dhcp_watcher.is_active if self._dhcp_watcher else False,
             'fingerprint_active': self._fingerprinter.is_active if self._fingerprinter else False,
             'sniff_iface': self._sniff_iface,
+            'wifi_monitor_active': self._wifi_monitor.is_active if self._wifi_monitor else False,
             'nmap_last_scan_at': (
                 self._last_nmap_scan_at.isoformat() if self._last_nmap_scan_at else None
             ),
@@ -2454,6 +2546,36 @@ class SentinelScheduler:
             self._dhcp_watcher.restart(iface)
         if self._fingerprinter is not None:
             self._fingerprinter.restart(iface)
+
+    def reload_wifi_monitor(self, iface: str | None, protected_ssids: list[str], trusted_bssids: list[str]) -> None:
+        """Applies a WiFi Monitor settings change immediately — called
+        after POST /api/settings changes wifi_monitor_iface/
+        wifi_protected_ssids/wifi_trusted_bssids. Unlike restart_sniffers,
+        this watcher may not have existed at all yet (no monitor-capable
+        adapter was ever configured), so this also covers first-time
+        enable/disable, not just a live interface swap.
+
+        Same "safe to call from the Flask request thread directly" posture
+        as restart_sniffers — WifiMonitorWatcher manages its own thread and
+        never touches the asyncio loop.
+        """
+        if not iface:
+            if self._wifi_monitor is not None:
+                self._wifi_monitor.stop()
+                self._wifi_monitor = None
+            return
+
+        if self._wifi_monitor is None:
+            self._wifi_monitor = WifiMonitorWatcher(
+                self._on_wifi_alert, self._on_wifi_sighting, iface, protected_ssids, trusted_bssids,
+                network_callback=self._on_wifi_network,
+            )
+            self._wifi_monitor.start()
+            return
+
+        if self._wifi_monitor.iface != iface:
+            self._wifi_monitor.restart(iface)
+        self._wifi_monitor.update_targets(protected_ssids, trusted_bssids)
 
     def reload_router_credentials(self) -> None:
         """Thread-safe: drop the cached router adapter so the next call to

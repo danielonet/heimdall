@@ -38,6 +38,7 @@ const NAV_ITEMS = [
   { to: '/devices', label: 'DEVICES' },
   { to: '/alerts', label: 'ALERTS' },
   { to: '/ports', label: 'PORTS' },
+  { to: '/wifi', label: 'WIFI' },
   { to: '/threats', label: 'THREATS' },
   { to: '/rules', label: 'RULES' },
   { to: '/reports', label: 'REPORTS' },

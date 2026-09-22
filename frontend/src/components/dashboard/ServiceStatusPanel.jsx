@@ -19,6 +19,7 @@ import {
   ShieldIcon,
   SirenIcon,
   TagIcon,
+  WifiIcon,
 } from './ServiceIcons'
 
 // Which alert_type(s) each service row can be blamed for — see
@@ -43,6 +44,7 @@ const ALERT_TYPES_BY_SERVICE = {
   zeek_beacon: new Set(['C2_BEACONING', 'MALICIOUS_TRAFFIC_DESTINATION']),
   clamav: new Set(['MALWARE_DETECTED']),
   suricata: new Set(['IDS_SIGNATURE_MATCH']),
+  wifi_monitor: new Set(['ROGUE_AP']),
 }
 
 function Field({ label, value }) {
@@ -239,6 +241,13 @@ function buildRows(health, openAlerts) {
       label: 'Suricata IDS',
       ok: !!sec.suricata_last_check_at,
       detail: sec.suricata_last_check_at ? <TimeAgo iso={sec.suricata_last_check_at} /> : 'PENDING',
+    },
+    {
+      key: 'wifi_monitor',
+      icon: WifiIcon,
+      label: 'WiFi Monitor',
+      ok: sec.wifi_monitor_active,
+      detail: sec.wifi_monitor_active ? 'ACTIVE' : 'OFF',
     },
   ]
 

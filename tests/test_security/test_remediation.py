@@ -62,6 +62,14 @@ class TestBuildMitigation:
         assert '203.0.113.10' in text
         assert 'high upload' in text.lower()
 
+    def test_rogue_ap_names_the_ssid_and_bssid(self):
+        text = build_mitigation('ROGUE_AP', {'ssid': 'MyHomeWiFi', 'bssid': 'aa:bb:cc:dd:ee:ff'})
+        assert 'MyHomeWiFi' in text
+        assert 'aa:bb:cc:dd:ee:ff' in text
+
+    def test_rogue_ap_degrades_to_fallback_wording_with_no_raw_data(self):
+        assert build_mitigation('ROGUE_AP', None) is not None
+
     def test_malicious_traffic_destination_degrades_with_no_raw_data(self):
         assert build_mitigation('MALICIOUS_TRAFFIC_DESTINATION', None) is not None
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
@@ -19,6 +20,7 @@ from sentinel.ml.model_store import ModelStore
 from sentinel.notifications.service import NotificationConfig
 from sentinel.scheduler.scheduler import get_scheduler
 from sentinel.security.interfaces import list_network_interfaces
+from sentinel.security.wifi_iface import list_monitor_capable_interfaces
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,9 @@ MIN_DEVICE_ARCHIVE_AFTER_DAYS = 7
 MAX_DEVICE_ARCHIVE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DataRetentionSection.jsx
 MIN_DEVICE_PURGE_AFTER_DAYS = 7
 MAX_DEVICE_PURGE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DataRetentionSection.jsx
+MAX_WIFI_SSIDS = 20
+MAX_WIFI_BSSIDS = 20
+_MAC_RE = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 
 async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False) -> dict:
@@ -79,6 +84,9 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         alert_auto_resolve_hours=data['alert_auto_resolve_hours'],
         device_archive_after_days=data['device_archive_after_days'],
         device_purge_after_days=data['device_purge_after_days'],
+        wifi_monitor_iface=data['wifi_monitor_iface'],
+        wifi_protected_ssids=data['wifi_protected_ssids'],
+        wifi_trusted_bssids=data['wifi_trusted_bssids'],
     )
     if include_db_size:
         payload['db_size_mb'] = await _get_db_size_mb()
@@ -246,6 +254,42 @@ async def update_settings():
                   f'{MIN_DEVICE_PURGE_AFTER_DAYS} and {MAX_DEVICE_PURGE_AFTER_DAYS}'
         ), 400
 
+    wifi_monitor_iface = body.get('wifi_monitor_iface')
+    if 'wifi_monitor_iface' in body:
+        # None/'' explicitly means "disable the feature" — unlike sniff_iface,
+        # there's no reason this must always be some real interface.
+        if wifi_monitor_iface not in (None, '') and (
+            not isinstance(wifi_monitor_iface, str)
+            or wifi_monitor_iface not in list_monitor_capable_interfaces()
+        ):
+            available = list_monitor_capable_interfaces()
+            return jsonify(
+                error='wifi_monitor_iface must be blank/null (disabled) or one of the monitor-capable WiFi '
+                      f'adapters detected on this host: {", ".join(available) or "(none detected)"}'
+            ), 400
+
+    wifi_protected_ssids = body.get('wifi_protected_ssids')
+    if 'wifi_protected_ssids' in body:
+        if (
+            not isinstance(wifi_protected_ssids, list) or len(wifi_protected_ssids) > MAX_WIFI_SSIDS
+            or not all(isinstance(s, str) and 0 < len(s) <= 32 for s in wifi_protected_ssids)
+        ):
+            return jsonify(
+                error=f'wifi_protected_ssids must be a list of up to {MAX_WIFI_SSIDS} non-empty '
+                      f'strings, each at most 32 characters'
+            ), 400
+
+    wifi_trusted_bssids = body.get('wifi_trusted_bssids')
+    if 'wifi_trusted_bssids' in body:
+        if (
+            not isinstance(wifi_trusted_bssids, list) or len(wifi_trusted_bssids) > MAX_WIFI_BSSIDS
+            or not all(isinstance(b, str) and _MAC_RE.match(b) for b in wifi_trusted_bssids)
+        ):
+            return jsonify(
+                error=f'wifi_trusted_bssids must be a list of up to {MAX_WIFI_BSSIDS} MAC addresses '
+                      f'(e.g. "aa:bb:cc:dd:ee:ff")'
+            ), 400
+
     # ── Apply ────────────────────────────────────────────────────────────────
     if 'ml_learning_period_hours' in body:
         await repo.set_ml_learning_period_hours(hours)
@@ -351,6 +395,24 @@ async def update_settings():
         await repo.set_device_archive_after_days(device_archive_after_days)
     if 'device_purge_after_days' in body:
         await repo.set_device_purge_after_days(device_purge_after_days)
+
+    wifi_monitor_changed = any(
+        f in body for f in ('wifi_monitor_iface', 'wifi_protected_ssids', 'wifi_trusted_bssids')
+    )
+    if wifi_monitor_changed:
+        if 'wifi_monitor_iface' in body:
+            await repo.set_wifi_monitor_iface(wifi_monitor_iface or None)
+        if 'wifi_protected_ssids' in body:
+            await repo.set_wifi_protected_ssids(wifi_protected_ssids)
+        if 'wifi_trusted_bssids' in body:
+            await repo.set_wifi_trusted_bssids(wifi_trusted_bssids)
+        current = await repo.get_all()
+        try:
+            get_scheduler().reload_wifi_monitor(
+                current['wifi_monitor_iface'], current['wifi_protected_ssids'], current['wifi_trusted_bssids'],
+            )
+        except RuntimeError:
+            pass  # scheduler not running (e.g. tests) — takes effect on next start
 
     return jsonify(await _serialize(repo))
 

@@ -328,6 +328,56 @@ class TestDevicePurgeAfterDays:
         assert data['device_purge_after_days'] == 60
 
 
+class TestWifiMonitorSettings:
+    def test_defaults(self, client):
+        data = client.get('/api/settings').get_json()
+        assert data['wifi_monitor_iface'] is None
+        assert data['wifi_protected_ssids'] == []
+        assert data['wifi_trusted_bssids'] == []
+
+    def test_updates_ssids_and_bssids(self, client, auth_headers):
+        resp = client.patch(
+            '/api/settings',
+            json={'wifi_protected_ssids': ['MyHomeWiFi'], 'wifi_trusted_bssids': ['c4:eb:42:94:80:4c']},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['wifi_protected_ssids'] == ['MyHomeWiFi']
+        assert data['wifi_trusted_bssids'] == ['c4:eb:42:94:80:4c']  # already lowercase, unchanged
+
+    def test_bssids_are_lowercased_on_write(self, client, auth_headers):
+        resp = client.patch(
+            '/api/settings', json={'wifi_trusted_bssids': ['C4:EB:42:94:80:4C']}, headers=auth_headers,
+        )
+        assert resp.get_json()['wifi_trusted_bssids'] == ['c4:eb:42:94:80:4c']
+
+    def test_rejects_malformed_bssid(self, client, auth_headers):
+        resp = client.patch(
+            '/api/settings', json={'wifi_trusted_bssids': ['not-a-mac']}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_rejects_non_list_ssids(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'wifi_protected_ssids': 'MyHomeWiFi'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_iface_not_currently_detected(self, client, auth_headers):
+        resp = client.patch(
+            '/api/settings', json={'wifi_monitor_iface': 'not-a-real-adapter'}, headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_blank_iface_is_accepted_as_disabled(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'wifi_monitor_iface': ''}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['wifi_monitor_iface'] is None
+
+    def test_requires_auth(self, client):
+        resp = client.patch('/api/settings', json={'wifi_protected_ssids': ['MyHomeWiFi']})
+        assert resp.status_code == 401
+
+
 class TestPurge:
     def test_requires_auth(self, client):
         resp = client.post('/api/settings/purge', json={'password': TEST_ADMIN_PASSWORD})

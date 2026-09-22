@@ -14,6 +14,7 @@ import { NotificationsSection } from '../components/settings/NotificationsSectio
 import { PrimaryRouterSelect } from '../components/settings/PrimaryRouterSelect'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import { RouterCredentialsForm } from '../components/settings/RouterCredentialsForm'
+import { WifiMonitorSection } from '../components/settings/WifiMonitorSection'
 import heimdallLogo from '../assets/heimdall-icon.png'
 
 function formatUptime(seconds) {
@@ -125,6 +126,9 @@ export function SettingsPage() {
         </div>
         <div className={wideTileClass}>
           <NotificationsSection />
+        </div>
+        <div className={wideTileClass}>
+          <WifiMonitorSection />
         </div>
       </div>
 

@@ -16,6 +16,8 @@ const STATUS_COLOR = {
   quarantined: 'var(--color-accent-amber)',
   online: 'var(--color-accent-green)',
   offline: 'var(--color-text-muted)',
+  // A WiFi Monitor sighting — overheard nearby, never joined the network.
+  nearby: 'var(--color-accent-blue)',
 }
 
 function bridgeAnimClass(status) {
@@ -68,7 +70,7 @@ function Node({ node, onSelect, isHovered, onHover }) {
   const toRight = node.x > CX
   const baseR = nodeRadius(node.status)
   const r = isHovered ? baseR + 2 : baseR
-  const dim = node.status === 'offline' && !isHovered
+  const dim = (node.status === 'offline' || node.status === 'nearby') && !isHovered
   // nickname beats hostname beats bare MAC — same precedence as everywhere
   // else in the app (deviceDisplayName), not just a "no hostname" fallback:
   // a user-given name should win even when a router-reported hostname exists.
@@ -94,7 +96,7 @@ function Node({ node, onSelect, isHovered, onHover }) {
         cx={node.x}
         cy={node.y}
         r={r}
-        fill={node.status === 'online' || node.status === 'offline' ? 'var(--color-bg)' : color}
+        fill={node.status === 'online' || node.status === 'offline' || node.status === 'nearby' ? 'var(--color-bg)' : color}
         stroke={color}
         strokeWidth={isHovered ? 2.5 : 1.5}
         className={nodeAnimClass(node.status)}
@@ -168,7 +170,8 @@ export function NetworkMap({ layout, degraded }) {
   const hoveredNode = hoveredMac ? nodes.find((n) => n.mac === hoveredMac) : null
 
   function handleSelect(mac) {
-    navigate(`/devices/${mac}`)
+    // A WiFi Monitor sighting has no /devices/<mac> page (it isn't a Device).
+    navigate(nodes.find((n) => n.mac === mac)?.isSighting ? '/wifi' : `/devices/${mac}`)
   }
 
   return (

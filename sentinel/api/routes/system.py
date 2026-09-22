@@ -34,6 +34,10 @@ _SERVICE_DESCRIPTIONS: dict[str, str] = {
     'zeek_beacon': "Watches Zeek's connection logs for C2 beaconing patterns and known-malicious destinations.",
     'clamav': 'Antivirus scanning of file transfers captured off the wire.',
     'suricata': 'Network intrusion detection — matches live traffic against signature rules.',
+    'wifi_monitor': (
+        'Passive 802.11 monitor-mode sniffing for rogue/evil-twin access points and nearby '
+        'unassociated devices — only active once a monitor-capable adapter is configured.'
+    ),
 }
 
 # Mirrors ALERT_TYPES_BY_SERVICE in frontend/src/components/dashboard/
@@ -54,6 +58,7 @@ _SERVICE_ALERT_TYPES: dict[str, set[str]] = {
     'zeek_beacon': {'C2_BEACONING', 'MALICIOUS_TRAFFIC_DESTINATION'},
     'clamav': {'MALWARE_DETECTED'},
     'suricata': {'IDS_SIGNATURE_MATCH'},
+    'wifi_monitor': {'ROGUE_AP'},
 }
 
 
@@ -111,7 +116,7 @@ async def health():
         'deployment_tier': 'minimal',
         'active_services': active_service_keys('minimal'),
         'arp_watch_active': False, 'dhcp_watch_active': False, 'fingerprint_active': False,
-        'sniff_iface': '',
+        'sniff_iface': '', 'wifi_monitor_active': False,
         'nmap_last_scan_at': None, 'canary_last_check_at': None,
         'zeek_dns_last_check_at': None, 'zeek_beacon_last_scan_at': None,
         'clamav_reachable': None, 'suricata_last_check_at': None,

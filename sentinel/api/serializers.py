@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sentinel.db.models import Alert, AlertSnooze, Device, PortAllowlistEntry, PortStats, Rule, TrafficSample, WanStats
+from sentinel.db.models import (
+    Alert, AlertSnooze, Device, PortAllowlistEntry, PortStats, Rule, TrafficSample, WanStats, WifiNetwork,
+    WifiSighting,
+)
 from sentinel.notifications.digest_query import DigestData
 
 
@@ -97,6 +100,36 @@ def port_allowlist_entry_to_dict(entry: PortAllowlistEntry) -> dict[str, Any]:
         'service': entry.service,
         'note': entry.note,
         'created_at': entry.created_at.isoformat() if entry.created_at else None,
+    }
+
+
+def wifi_network_to_dict(net: WifiNetwork) -> dict[str, Any]:
+    return {
+        'bssid': net.bssid,
+        'ssid': net.ssid,
+        'vendor_name': net.vendor_name,
+        'channel': net.channel,
+        'strongest_signal_dbm': net.strongest_signal_dbm,
+        'secured': net.secured,
+        'first_seen': net.first_seen.isoformat() if net.first_seen else None,
+        'last_seen': net.last_seen.isoformat() if net.last_seen else None,
+    }
+
+
+def wifi_sighting_to_dict(sighting: WifiSighting, match: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        # How this MAC relates to a device Heimdall already knows — see
+        # routes/wifi.py:_match_known_device. None = genuinely never seen
+        # joining the network.
+        'known_device': match,
+        'mac_address': sighting.mac_address,
+        'vendor_name': sighting.vendor_name,
+        'first_seen': sighting.first_seen.isoformat() if sighting.first_seen else None,
+        'last_seen': sighting.last_seen.isoformat() if sighting.last_seen else None,
+        'strongest_signal_dbm': sighting.strongest_signal_dbm,
+        'times_seen': sighting.times_seen,
+        'last_probed_ssid': sighting.last_probed_ssid,
+        'is_mine': sighting.is_mine,
     }
 
 

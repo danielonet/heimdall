@@ -242,6 +242,84 @@ class AppSettings(Base):
     # Measured from archived_at, additive on top of device_archive_after_days.
     device_purge_after_days: Mapped[int] = mapped_column(Integer, server_default='90')
 
+    # WiFi Monitor tab (see sentinel/security/wifi_monitor.py). NULL/empty =
+    # feature disabled — no monitor-capable adapter configured. Unlike
+    # sniff_iface, there is no env-config fallback for this one: no
+    # deployment can assume a second, monitor-mode-capable WiFi adapter is
+    # physically present, so "unset" must mean "off", never a guessed
+    # default. See the c7e5b3a92f14_app_settings_wifi_monitor migration.
+    wifi_monitor_iface: Mapped[str | None] = mapped_column(String(20))
+    # SSIDs the watcher alarms on if seen from a BSSID not in
+    # wifi_trusted_bssids below — normally just your own network name(s).
+    # Empty list = watcher runs (if wifi_monitor_iface is set) but can never
+    # alert, since nothing is protected yet.
+    wifi_protected_ssids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # The real BSSIDs of your own access points broadcasting the SSIDs
+    # above — a beacon for a protected SSID from any OTHER BSSID is the
+    # rogue-AP signal. See WifiMonitorWatcher._process.
+    wifi_trusted_bssids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+
+
+class WifiSighting(Base):
+    """A WiFi MAC seen nearby via a passively-sniffed 802.11 probe request —
+    not necessarily ever associated with our network, and not a `Device`
+    (no IP, no router-reported ap_alias/traffic granularity; see
+    sentinel/security/wifi_monitor.py's module docstring for why this is a
+    separate, much smaller model rather than folded into Device). Purely
+    passive inventory, not a threat finding — see WifiMonitorWatcher._process
+    and SentinelScheduler._persist_wifi_sighting. Pruned by the existing
+    _data_retention_job alongside alerts/wan_status_history, keyed off the
+    same data_retention_days setting (no dedicated retention knob needed).
+    """
+
+    __tablename__ = 'wifi_sightings'
+
+    mac_address: Mapped[str] = mapped_column(String(17), primary_key=True)
+    # '' (not NULL) for a randomized/locally-administered MAC — see
+    # sentinel/security/mac_vendor.py:lookup_vendor(), reused here verbatim.
+    # Most sightings will have this blank; that's an honest answer, not a
+    # missing lookup.
+    vendor_name: Mapped[str] = mapped_column(String(255), server_default='')
+    first_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Strongest (least negative) signal ever observed for this MAC, not the
+    # most recent — a device that was once close but is now far away should
+    # still show how close it's actually gotten, e.g. for judging "was this
+    # briefly inside my house."
+    strongest_signal_dbm: Mapped[int | None] = mapped_column(Integer)
+    times_seen: Mapped[int] = mapped_column(Integer, server_default='1')
+    last_probed_ssid: Mapped[str | None] = mapped_column(String(32))
+    # Admin-set: "this overheard MAC is mine" — a device Heimdall has no
+    # other way to recognize (e.g. a spare phone, watch, or anything whose
+    # MAC is randomized so it can't even OUI-match a known device — see
+    # routes/wifi.py:_match_known_device). Purely a display label; unlike
+    # wifi_trusted_bssids (which actually feeds rogue-AP detection), marking
+    # a *client* sighting as mine has no detection-side effect — a client
+    # device was never a threat signal to begin with.
+    is_mine: Mapped[bool] = mapped_column(Boolean, server_default='false')
+
+
+class WifiNetwork(Base):
+    """A nearby WiFi network (access point radio) seen via a passively-
+    sniffed beacon frame — one row per BSSID, since one SSID is often
+    several radios (2.4GHz, 5GHz, guest, mesh nodes). Unlike WifiSighting
+    (a *client* device overheard probing), this is infrastructure. Pruned by
+    _data_retention_job like wifi_sightings. See WifiMonitorWatcher."""
+
+    __tablename__ = 'wifi_networks'
+
+    bssid: Mapped[str] = mapped_column(String(17), primary_key=True)
+    # '' for a hidden-SSID network (empty SSID element in the beacon).
+    ssid: Mapped[str] = mapped_column(String(32), server_default='')
+    vendor_name: Mapped[str] = mapped_column(String(255), server_default='')
+    channel: Mapped[int | None] = mapped_column(Integer)
+    # Strongest signal ever seen, same reasoning as WifiSighting.
+    strongest_signal_dbm: Mapped[int | None] = mapped_column(Integer)
+    # Beacon's capability 'privacy' bit — encrypted vs open.
+    secured: Mapped[bool] = mapped_column(Boolean, server_default='true')
+    first_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_seen: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
 
 class TrustedMac(Base):
     """A permanently-trusted MAC address, independent of the devices table's

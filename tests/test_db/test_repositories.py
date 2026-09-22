@@ -636,11 +636,11 @@ class TestSettingsRepository:
         data = await SettingsRepository().get_all()
         assert set(data.keys()) == {
             'ml_learning_period_hours', 'data_retention_days', 'baseline_established_at',
-            'armed_retrain_done', 'sniff_iface', 'router_username', 'ntfy_url', 'smtp_host',
-            'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
+            'armed_retrain_done', 'sniff_iface', 'router_username', 'miwifi_ip', 'active_router',
+            'ntfy_url', 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_to', 'smtp_username', 'smtp_use_tls',
             'auto_block_on_threat', 'auto_block_expiry_hours', 'last_digest_sent_at',
             'alert_stale_hours', 'alert_auto_resolve_hours', 'device_archive_after_days',
-            'device_purge_after_days',
+            'device_purge_after_days', 'wifi_monitor_iface', 'wifi_protected_ssids', 'wifi_trusted_bssids',
         }
 
     async def test_router_username_falls_back_to_the_env_default(self):

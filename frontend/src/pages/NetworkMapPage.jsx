@@ -4,6 +4,10 @@ import { useDevices } from '../hooks/useDevices'
 import { useAlertGroups } from '../hooks/useAlertGroups'
 import { useSettings } from '../hooks/useSettings'
 import { useHealth } from '../hooks/useHealth'
+import { useWifiSightings } from '../hooks/useWifi'
+import { useNowTick } from '../hooks/useNowTick'
+import { guessDeviceType } from '../lib/deviceGuess'
+import { visibleSightings } from '../lib/wifiSightings'
 import { NetworkMap } from '../components/network-map/NetworkMap'
 import { computeNodeLayout } from '../lib/networkMapLayout'
 import { staleBeforeIso } from '../lib/alertStaleness'
@@ -13,6 +17,7 @@ const LEGEND = [
   ['warning', 'WARNING / QUARANTINED', 'bg-accent-amber'],
   ['online', 'ONLINE', 'bg-accent-green'],
   ['offline', 'OFFLINE', 'bg-text-muted'],
+  ['nearby', 'NEARBY (NEVER JOINED)', 'bg-accent-blue'],
 ]
 
 export function NetworkMapPage() {
@@ -29,8 +34,35 @@ export function NetworkMapPage() {
   // show up instead of just vanishing.
   const { data: alertGroups } = useAlertGroups({ resolved: 'false', ...(staleFrom ? { from: staleFrom } : {}) })
   const { data: health } = useHealth()
+  const { data: sightings } = useWifiSightings()
+  const now = useNowTick()
 
-  const layout = useMemo(() => computeNodeLayout(devices || [], alertGroups || []), [devices, alertGroups])
+  // WiFi Monitor sightings shaped like devices so they land in the NOT
+  // ASSOCIATED sector (no ap_alias, WiFi interface), ranked by signal like
+  // every other unassociated node. Filtered the same way, and with the same
+  // shared logic (lib/wifiSightings.js), as the WIFI tab's own NEARBY WIFI
+  // DEVICES table — requested directly, so a device that's dropped off that
+  // list (out of range, or marked/matched as one of your own) doesn't keep
+  // sitting on the map as a "nearby" node. `known` is a belt-and-suspenders
+  // check on top of that shared logic's own exact-match test — a device
+  // already on the map as itself should never also render as a sighting.
+  const sightingNodes = useMemo(() => {
+    const known = new Set((devices || []).map((d) => d.mac_address))
+    return visibleSightings(sightings, now)
+      .filter((s) => !known.has(s.mac_address))
+      .map((s) => ({
+        mac_address: s.mac_address,
+        hostname: s.vendor_name || guessDeviceType(s.vendor_name, s.mac_address).replace('Probably a ', ''),
+        interface_name: 'WiFi',
+        ap_alias: null,
+        signal_strength_dbm: s.strongest_signal_dbm,
+        is_trusted: false,
+        is_online: false,
+        is_wifi_sighting: true,
+      }))
+  }, [devices, sightings, now])
+
+  const layout = useMemo(() => computeNodeLayout([...(devices || []), ...sightingNodes], alertGroups || []), [devices, sightingNodes, alertGroups])
   const schedulerOk = health ? health.scheduler?.scheduler_running && !health.scheduler?.last_poll_error : true
 
   // The concept this ships was explicitly framed around "wide screen
@@ -53,7 +85,7 @@ export function NetworkMapPage() {
       <div className="flex flex-shrink-0 flex-wrap items-center gap-4 border border-border bg-surface p-3">
         <div className="text-[8px] tracking-[3px] text-text-muted">NETWORK MAP</div>
         <div className="text-[9px] text-text-secondary">
-          {(devices || []).length} devices · distance from center = urgency · angle = AP segment
+          {(devices || []).length} devices{sightingNodes.length ? ` + ${sightingNodes.length} nearby` : ''} · distance from center = urgency · angle = AP segment
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-3">
           {LEGEND.map(([key, label, dotClass]) => (

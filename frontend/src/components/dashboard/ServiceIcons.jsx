@@ -153,3 +153,17 @@ export function TagIcon(props) {
     </svg>
   )
 }
+
+// Classic three-arc WiFi glyph — used for both the Services panel's WiFi
+// Monitor row and the WIFI nav tab, so the "this is about the airwaves"
+// shorthand reads consistently in both places.
+export function WifiIcon(props) {
+  return (
+    <svg {...strokeBase} {...props}>
+      <path d="M3 8.5a15 15 0 0 1 18 0" />
+      <path d="M6.2 12.2a10.5 10.5 0 0 1 11.6 0" />
+      <path d="M9.5 15.8a6 6 0 0 1 5 0" />
+      <circle cx="12" cy="19" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

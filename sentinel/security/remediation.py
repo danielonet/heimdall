@@ -5,8 +5,8 @@ what was detected.
 Built once per alert in SentinelScheduler._raise_threat_alert (see
 sentinel/db/models.py:Alert.mitigation), so every attack-signal source that
 already routes through that choke point (ArpWatcher, DhcpWatcher,
-PassiveFingerprinter, NetworkScanner, Zeek, Suricata, OpenCanary) gets
-consistent guidance for free — no per-caller wiring needed.
+PassiveFingerprinter, WifiMonitorWatcher, NetworkScanner, Zeek, Suricata,
+OpenCanary) gets consistent guidance for free — no per-caller wiring needed.
 
 Deliberately NOT wired into RuleEngine (user-authored rules have no fixed
 alert_type to key off) or the ML/statistical detector pipeline
@@ -179,6 +179,19 @@ def _honeypot_access(raw_data: dict) -> str:
     )
 
 
+def _rogue_ap(raw_data: dict) -> str:
+    ssid = raw_data.get('ssid', 'your network name')
+    bssid = raw_data.get('bssid', 'an unknown radio')
+    return (
+        f'A device at {bssid} is broadcasting "{ssid}" — your network name — but it isn\'t one of your '
+        f'known access points. This is a classic evil-twin setup: a nearby attacker impersonates your '
+        f'WiFi to trick devices into connecting to them instead. First rule out a false positive (a '
+        f'second AP/mesh node/travel router of your own not yet added to the trusted list in WiFi '
+        f'Monitor settings); if it genuinely isn\'t yours, don\'t connect any device to it, and try to '
+        f'physically locate the source.'
+    )
+
+
 _BUILDERS: dict[str, Callable[[dict], str]] = {
     'HIGH_RISK_PORT_OPENED': _high_risk_port_opened,
     'VULNERABILITY_DETECTED': _vulnerability_detected,
@@ -193,6 +206,7 @@ _BUILDERS: dict[str, Callable[[dict], str]] = {
     'IDS_SIGNATURE_MATCH': _ids_signature_match,
     'HONEYPOT_ACCESS': _honeypot_access,
     'MALICIOUS_TRAFFIC_DESTINATION': _malicious_traffic_destination,
+    'ROGUE_AP': _rogue_ap,
 }
 
 

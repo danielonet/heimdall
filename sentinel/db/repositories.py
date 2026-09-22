@@ -14,10 +14,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sentinel.config import settings
 from sentinel.db.models import (
     Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, TrafficSample,
-    TrustedMac,
+    TrustedMac, WifiNetwork, WifiSighting,
 )
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
+from sentinel.security.mac_vendor import lookup_vendor
 
 logger = logging.getLogger(__name__)
 
@@ -761,6 +762,9 @@ class SettingsRepository:
                 'alert_auto_resolve_hours': row.alert_auto_resolve_hours if row else 72,
                 'device_archive_after_days': row.device_archive_after_days if row else 90,
                 'device_purge_after_days': row.device_purge_after_days if row else 90,
+                'wifi_monitor_iface': row.wifi_monitor_iface if row else None,
+                'wifi_protected_ssids': list(row.wifi_protected_ssids or []) if row else [],
+                'wifi_trusted_bssids': list(row.wifi_trusted_bssids or []) if row else [],
             }
 
     async def get_ml_learning_period_hours(self) -> int:
@@ -945,9 +949,109 @@ class SettingsRepository:
         age = datetime.now(timezone.utc) - baseline_at
         return 'ARMED' if age >= timedelta(hours=data['ml_learning_period_hours']) else 'LEARNING'
 
+    async def get_wifi_monitor_iface(self) -> str | None:
+        return (await self.get_all())['wifi_monitor_iface']
+
+    async def set_wifi_monitor_iface(self, iface: str | None) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.wifi_monitor_iface = iface
+
+    async def get_wifi_protected_ssids(self) -> list[str]:
+        return (await self.get_all())['wifi_protected_ssids']
+
+    async def set_wifi_protected_ssids(self, ssids: list[str]) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.wifi_protected_ssids = ssids
+
+    async def get_wifi_trusted_bssids(self) -> list[str]:
+        return (await self.get_all())['wifi_trusted_bssids']
+
+    async def set_wifi_trusted_bssids(self, bssids: list[str]) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.wifi_trusted_bssids = [b.lower() for b in bssids]
+
     async def _get_or_create(self, session) -> AppSettings:
         row = await session.get(AppSettings, _SETTINGS_ROW_ID)
         if row is None:
             row = AppSettings(id=_SETTINGS_ROW_ID)
             session.add(row)
         return row
+
+
+class WifiSightingRepository:
+    """Read/write access to wifi_sightings — see sentinel/db/models.py:
+    WifiSighting and sentinel/security/wifi_monitor.py. Deliberately
+    separate from AlertRepository: a sighting is passive inventory, not an
+    attack signal, and has no fire/resolve lifecycle."""
+
+    async def upsert(self, mac: str, *, signal: int | None, probed_ssid: str | None) -> None:
+        """Insert on first sighting; on every later one, bump times_seen,
+        touch last_seen, update last_probed_ssid, and keep the STRONGEST
+        (least negative) signal ever seen rather than overwriting with
+        whatever this particular sighting reports — see
+        WifiSighting.strongest_signal_dbm's docstring for why."""
+        async with get_session() as session:
+            row = await session.get(WifiSighting, mac)
+            if row is None:
+                session.add(WifiSighting(
+                    mac_address=mac, vendor_name=lookup_vendor(mac),
+                    strongest_signal_dbm=signal, last_probed_ssid=probed_ssid,
+                ))
+                return
+            row.last_seen = datetime.now(timezone.utc)
+            row.times_seen += 1
+            if probed_ssid:
+                row.last_probed_ssid = probed_ssid
+            if signal is not None and (row.strongest_signal_dbm is None or signal > row.strongest_signal_dbm):
+                row.strongest_signal_dbm = signal
+
+    async def list_recent(self, limit: int = 200) -> list[WifiSighting]:
+        async with get_session() as session:
+            result = await session.execute(
+                select(WifiSighting).order_by(WifiSighting.last_seen.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
+    async def set_mine(self, mac: str, mine: bool) -> bool:
+        """Returns False if this MAC has no wifi_sightings row (nothing to
+        mark — a sighting is only ever created by the watcher itself, never
+        by this endpoint)."""
+        async with get_session() as session:
+            row = await session.get(WifiSighting, mac)
+            if row is None:
+                return False
+            row.is_mine = mine
+            return True
+
+
+class WifiNetworkRepository:
+    """Read/write access to wifi_networks — see WifiNetwork. Passive
+    inventory like WifiSightingRepository, not a threat finding (rogue-AP
+    detection happens separately, in WifiMonitorWatcher._process)."""
+
+    async def upsert(
+        self, bssid: str, *, ssid: str, channel: int | None, signal: int | None, secured: bool,
+    ) -> None:
+        async with get_session() as session:
+            row = await session.get(WifiNetwork, bssid)
+            if row is None:
+                session.add(WifiNetwork(
+                    bssid=bssid, ssid=ssid, vendor_name=lookup_vendor(bssid), channel=channel,
+                    strongest_signal_dbm=signal, secured=secured,
+                ))
+                return
+            row.last_seen = datetime.now(timezone.utc)
+            row.ssid = ssid
+            row.secured = secured
+            if channel is not None:
+                row.channel = channel
+            if signal is not None and (row.strongest_signal_dbm is None or signal > row.strongest_signal_dbm):
+                row.strongest_signal_dbm = signal
+
+    async def list_recent(self, limit: int = 300) -> list[WifiNetwork]:
+        async with get_session() as session:
+            result = await session.execute(select(WifiNetwork).order_by(WifiNetwork.last_seen.desc()).limit(limit))
+            return list(result.scalars().all())

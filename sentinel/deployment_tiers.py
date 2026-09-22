@@ -23,9 +23,17 @@ TIER_SERVICES: dict[str, dict[str, bool]] = {
 
 # Always active regardless of tier — no Docker container required for any
 # of these. Mirrors ServiceStatusPanel.jsx's row keys 1:1.
+#
+# wifi_monitor included here for the same reason as arp_watch/dhcp_watch/
+# fingerprint: it's Python-library-based (Scapy monitor-mode sniffing), no
+# extra container. Its *actual* on/off state isn't tier-gated at all — it
+# only ever runs if an admin has configured a monitor-capable WiFi adapter
+# in Settings (wifi_monitor_iface), same "only starts if it has something
+# to work with" posture as DhcpWatcher's router_ip guard. See
+# sentinel/security/wifi_monitor.py and SentinelScheduler.
 ALWAYS_ON_SERVICES: list[str] = [
     'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch',
-    'fingerprint', 'nmap', 'threat_intel',
+    'fingerprint', 'nmap', 'threat_intel', 'wifi_monitor',
 ]
 
 # Which ServiceStatusPanel row keys a given Docker-gated flag turns on.
