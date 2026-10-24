@@ -16,6 +16,34 @@ jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    # The test suite expects the same services docker-compose provides:
+    # PostgreSQL + TimescaleDB (migrations call create_hypertable) and Redis.
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: sentinel
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: sentinel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sentinel -d sentinel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://sentinel:pass@localhost:5432/sentinel
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +54,8 @@ jobs:
       - name: System packages (Scapy / nmap)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libpcap-dev nmap
       - run: pip install -r sentinel/requirements.txt
-      # Tests that need PostgreSQL skip themselves when it isn't reachable.
+      - name: Apply database migrations
+        run: alembic upgrade head
       - run: pytest -q
 
   frontend:

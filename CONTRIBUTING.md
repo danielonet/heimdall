@@ -61,9 +61,11 @@ pip install -r sentinel/requirements.txt
 pytest -q
 ```
 
-Tests that need PostgreSQL skip themselves when the database isn't reachable;
-to run them, start Postgres (`docker compose up -d postgres`), apply the
-migrations (`alembic upgrade head`) and set `DATABASE_URL`.
+The suite needs PostgreSQL/TimescaleDB and Redis (CI starts both as service
+containers). Locally: `docker compose up -d postgres redis`, then
+`export DATABASE_URL=postgresql+asyncpg://sentinel:<db_pass>@localhost/sentinel`
+(the password is in `secrets/db_pass.txt`), `alembic upgrade head`, and run
+`pytest -q`. Without a database most tests error rather than skip.
 
 Frontend:
 
