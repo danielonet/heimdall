@@ -1,0 +1,23 @@
+name: New router / switch support
+description: Request or offer support for a router or switch model
+labels: [adapter, help wanted]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        See `docs/router-and-switch-expansion-plan.md` for the roadmap. **Redact MACs, SSIDs, serials and credentials** from anything you attach.
+  - type: input
+    id: model
+    attributes: { label: "Router / switch model and firmware version" }
+    validations: { required: true }
+  - type: textarea
+    id: protocol
+    attributes:
+      label: How is it managed?
+      description: "API type (REST / JSON-RPC / SOAP / SNMP / web UI only), auth method, links to docs or an existing library."
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Can you help implement or test it?
+      options: ["I can write the adapter", "I can test / capture scrubbed responses", "Just requesting"]
+    validations: { required: true }

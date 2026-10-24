@@ -37,6 +37,11 @@
 
 Alerts and a daily security digest reach you through the dashboard, ntfy push or email.
 
+> **Status: alpha.** Built and tested on one home network with the routers listed under [Supported routers](#supported-routers). It monitors and can block devices on your LAN — read [Known, documented limits](#known-documented-limits) and [`SECURITY.md`](SECURITY.md) before relying on it. No router? Try it with the built-in [mock router](MOCK-ROUTER-SETUP.md). Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+<!-- TODO: add a dashboard screenshot/GIF here, e.g. docs/images/dashboard.png (scrub MACs/SSIDs first):
+![Heimdall dashboard](docs/images/dashboard.png) -->
+
 ---
 
 ## Defenses & Capabilities
@@ -141,8 +146,6 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 | Sagemcom F@st 5670 | ✅ Fully implemented (proprietary XMO JSON API) — the primary, most-tested router |
 | Redmi / Xiaomi (stock MiWiFi firmware, e.g. RA67) | ✅ Implemented — optional second router, visibility-only unless selected as primary (see [`docs/router/miwifi-api.md`](docs/router/miwifi-api.md)) |
 | Anything else | ❌ Not yet — add a router by implementing one Python abstract class, `RouterAdapter` (`sentinel/adapter/base.py`). Planned adapters (OpenWrt, MikroTik, UniFi, OPNsense/pfSense, FRITZ!Box, …) are laid out in [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md) — contributions welcome |
-
-> **Project status: alpha.** Developed and tested against the two routers above on one home network. Expect rough edges on other setups.
 
 ---
 

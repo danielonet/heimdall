@@ -1,0 +1,35 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste real MAC addresses, SSIDs, serial numbers, tokens or passwords.** Redact them first.
+  - type: textarea
+    id: what
+    attributes: { label: "What happened?", description: "What did you expect instead?" }
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: "Steps to reproduce" }
+    validations: { required: true }
+  - type: input
+    id: router
+    attributes: { label: "Router model + firmware (or \"mock router\")" }
+    validations: { required: true }
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Deployment tier
+      options: [minimal, intermediate, full, dev (run.sh / dev.sh), not sure]
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: "Heimdall commit (git rev-parse --short HEAD)" }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (redacted)
+      description: "`docker compose logs sentinel-backend --tail=100`"
+      render: shell

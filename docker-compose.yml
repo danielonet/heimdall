@@ -110,7 +110,7 @@ services:
 
   # full tier only — see sentinel/deployment_tiers.py
   suricata:
-    image: jasonish/suricata:latest
+    image: ${SURICATA_IMAGE:-jasonish/suricata:latest}
     profiles: ["full"]
     network_mode: host
     cap_add:
@@ -126,7 +126,7 @@ services:
   # to actually scan (see _zeek_file_scan_job in sentinel/scheduler/scheduler.py),
   # so it's never meaningful in intermediate without zeek alongside it.
   clamav:
-    image: clamav/clamav:stable
+    image: ${CLAMAV_IMAGE:-clamav/clamav:stable}
     profiles: ["full"]
     ports:
       - "3310:3310"             # TCP socket for pyclamd
@@ -138,7 +138,7 @@ services:
   # container: idle socket listeners only, no packet inspection, no
   # signature database. See docs/deployment-tiers-plan.md.
   opencanary:
-    image: thinkst/opencanary:latest
+    image: ${OPENCANARY_IMAGE:-thinkst/opencanary:latest}
     profiles: ["intermediate", "full"]
     network_mode: host          # must appear as a real LAN device
     volumes:
@@ -148,7 +148,7 @@ services:
 
   # full tier only — see sentinel/deployment_tiers.py
   zeek:
-    image: zeek/zeek:latest
+    image: ${ZEEK_IMAGE:-zeek/zeek:latest}
     profiles: ["full"]
     network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
     cap_add:
