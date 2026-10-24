@@ -44,7 +44,7 @@ log_info "Starting Postgres + Redis..."
 docker_compose up -d postgres redis
 
 echo ""
-echo "📊 Dashboard:    http://localhost:5173"
+echo "📊 Dashboard:    http://${FRONTEND_HOST:-localhost}:5173   (FRONTEND_HOST=0.0.0.0 to reach it from another machine)"
 echo "🔌 API:          http://localhost:5000"
 echo "📚 Docs:         docs/architecture/10-mock-router.md"
 echo ""

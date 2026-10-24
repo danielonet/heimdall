@@ -48,7 +48,9 @@ sudo ./scripts/install-minimal.sh     # one-off: packages, secrets/, .env
 ./scripts/mock-router-start.sh        # synthetic router data, backend + frontend on this console
 ```
 
-The dashboard is at `http://localhost:3000` (user `admin`, password in
+The dashboard is at `http://localhost:5173` (the Vite dev server; run with
+`FRONTEND_HOST=0.0.0.0` to reach it from another machine. The containerised
+build is on port 3000). Log in as `admin`, password in
 `secrets/admin_password.txt`). See [`MOCK-ROUTER-SETUP.md`](MOCK-ROUTER-SETUP.md)
 for details; the available flags are documented at the top of
 [`scripts/dev.sh`](scripts/dev.sh) and [`scripts/run.sh`](scripts/run.sh).

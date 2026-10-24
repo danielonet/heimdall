@@ -10,6 +10,7 @@
 #   ./scripts/run.sh --no-backend         # infra + frontend only; attach VS Code debugger to backend
 #   ./scripts/run.sh --full               # all Docker services including suricata, opencanary, etc.
 #   ./scripts/run.sh --full-with-wiremock # same as --full plus the WireMock router stub service
+#   FRONTEND_HOST=0.0.0.0 ./scripts/run.sh # expose the Vite dev server (:5173) to the LAN
 #   ./scripts/run.sh --stop               # stop all Docker infra services and exit
 #
 # Prerequisites: run scripts/install.sh once first.
@@ -265,7 +266,10 @@ else
     fi
 
     FRONTEND_LOG="${LOG_DIR}/frontend.log"
-    log_info "Vite dev server → http://localhost:5173"
+    # Vite binds to localhost by default; set FRONTEND_HOST=0.0.0.0 to reach
+    # the dev server from another machine (e.g. a headless home-lab box).
+    export VITE_HOST="${FRONTEND_HOST:-localhost}"
+    log_info "Vite dev server → http://${FRONTEND_HOST:-localhost}:5173"
     log_info "Logs also at    → ${FRONTEND_LOG}"
 
     npm --prefix "$FRONTEND_DIR" run dev \

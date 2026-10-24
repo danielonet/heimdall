@@ -439,6 +439,11 @@ else
     echo "     Full container deployment (tier: ${BOLD}${TIER}${NC}): ${BOLD}${_compose_cmd}${NC}"
 fi
 echo ""
+echo "  Where to open the dashboard:"
+echo "    Container deployment  → ${BOLD}http://<this-host>:3000${NC}"
+echo "    Dev mode (run.sh)     → ${BOLD}http://localhost:5173${NC}  (FRONTEND_HOST=0.0.0.0 ./scripts/run.sh to reach it from another machine)"
+echo "  This installer only prepares the host — nothing is listening until you start the stack."
+echo ""
 if id -nG "$REAL_USER" | grep -qw docker; then
     true
 else

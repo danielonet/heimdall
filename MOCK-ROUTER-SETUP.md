@@ -66,8 +66,10 @@ bash scripts/mock-router-start.sh
 ### 3. Access the Dashboard
 
 ```
-http://localhost:3000
+http://localhost:5173      # dev server started by mock-router-start.sh
 ```
+
+On a headless box, start it with `FRONTEND_HOST=0.0.0.0 bash scripts/mock-router-start.sh` and browse to `http://<host-ip>:5173`. (Port 3000 is the nginx-served container build, not the dev server.)
 
 ✅ **Done!** You're now polling synthetic router data with no real modem required.
 

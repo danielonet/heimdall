@@ -12,6 +12,7 @@
 #   ./scripts/dev.sh                 # backend + frontend
 #   ./scripts/dev.sh --no-backend    # frontend only; attach VS Code debugger to backend
 #   ./scripts/dev.sh --no-frontend   # backend only
+#   FRONTEND_HOST=0.0.0.0 ./scripts/dev.sh   # expose the Vite dev server (:5173) to the LAN
 #   ./scripts/dev.sh --no-auto-block # every detector/rule still raises its
 #                                     alert normally — none of them call
 #                                     block_device() or flip is_blocked.
@@ -281,7 +282,10 @@ else
     fi
 
     FRONTEND_LOG="${LOG_DIR}/frontend.log"
-    log_info "Vite dev server → http://localhost:${FRONTEND_PORT}"
+    # Vite binds to localhost by default; set FRONTEND_HOST=0.0.0.0 to reach
+    # the dev server from another machine (e.g. a headless home-lab box).
+    export VITE_HOST="${FRONTEND_HOST:-localhost}"
+    log_info "Vite dev server → http://${FRONTEND_HOST:-localhost}:${FRONTEND_PORT}"
     log_info "Logs also at    → ${FRONTEND_LOG}"
     # See the backend block above for why this isn't a plain trailing pipe.
     npm --prefix "$FRONTEND_DIR" run dev \
