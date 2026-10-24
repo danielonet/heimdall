@@ -1,8 +1,41 @@
+<p align="center">
+  <img src="frontend/src/assets/heimdall-icon.png" alt="Heimdall logo" width="160">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
+  <img alt="Flask 3" src="https://img.shields.io/badge/Flask-3-000000?logo=flask&logoColor=white">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white">
+  <img alt="Tailwind CSS" src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white">
+  <img alt="scikit-learn" src="https://img.shields.io/badge/scikit--learn-F7931E?logo=scikitlearn&logoColor=white">
+</p>
+
+<p align="center">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker_Compose-2496ED?logo=docker&logoColor=white">
+  <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white">
+  <img alt="TimescaleDB" src="https://img.shields.io/badge/TimescaleDB-FDB515?logo=timescale&logoColor=black">
+  <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?logo=redis&logoColor=white">
+  <img alt="Suricata" src="https://img.shields.io/badge/Suricata-IDS%2FIPS-EF3B2D">
+  <img alt="Zeek" src="https://img.shields.io/badge/Zeek-network_analysis-0B3D91">
+  <img alt="OpenCanary" src="https://img.shields.io/badge/OpenCanary-honeypot-F5A800">
+  <img alt="ClamAV" src="https://img.shields.io/badge/ClamAV-antivirus-6BA539">
+  <img alt="WireMock" src="https://img.shields.io/badge/WireMock-mock_router-5C2D91">
+  <img alt="Nginx" src="https://img.shields.io/badge/Nginx-009639?logo=nginx&logoColor=white">
+</p>
+
 # Heimdall 🛡️
 
-**Home Network Sentinel** — a self-hosted, containerised network security monitor for your home LAN, with real-time detection, per-device ML anomaly detection, and an automated response tier from a live dashboard.
+<p align="center"><strong>A home SOC and NOC in one box.</strong><br>
+<em>Security operations and network operations for your LAN — self-hosted, containerised, and watching every device.</em></p>
 
-Heimdall connects to your router via its native API, watches every connected device, cross-references live traffic against passive/active detectors and threat-intel feeds, and lets you respond — block, quarantine, or just get notified — from a live dashboard, ntfy push, or email.
+**Heimdall** brings the workflow of a Security Operations Center (SOC) and a Network Operations Center (NOC) to your home network. Built on a Sagemcom router API and a stack of open-source sensors, it gives you one live dashboard for both halves of the job:
+
+- **SOC — detect and respond.** Real-time detectors, per-device ML anomaly detection, Suricata IDS, Zeek traffic inspection, an OpenCanary honeypot and threat-intel feeds raise alerts you can act on — block, quarantine, or just get notified.
+- **NOC — see and understand.** A full device inventory, WiFi access-point and radio visibility, and per-device traffic show what is connected, where, and how it behaves.
+
+Alerts and a daily security digest reach you through the dashboard, ntfy push or email.
 
 ---
 
