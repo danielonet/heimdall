@@ -30,7 +30,7 @@
 #
 # --pull: for a new machine that isn't building from source — skips the
 # Python/Node toolchain setup entirely and expects `docker compose pull`
-# (after `docker login registry.gitlab.com`) to fetch pre-built images
+# (after setting HEIMDALL_REGISTRY in .env and `docker login`-ing to it) to fetch pre-built images
 # published by scripts/build-and-push.sh. Secrets/.env are still scaffolded
 # fresh, so every machine still gets its own unique passwords.
 
@@ -431,7 +431,7 @@ case "$TIER" in
     full)         _compose_cmd="docker compose --profile full up -d" ;;
 esac
 if $PULL_MODE; then
-    echo "  4. Log in to the registry: ${BOLD}docker login registry.gitlab.com${NC}"
+    echo "  4. Log in to the registry: ${BOLD}docker login <your registry>${NC} (and set HEIMDALL_REGISTRY in .env)"
     echo "  5. Pull the published images: ${BOLD}IMAGE_TAG=latest docker compose pull${NC}"
     echo "  6. Start the stack (tier: ${BOLD}${TIER}${NC}): ${BOLD}${_compose_cmd}${NC}"
 else

@@ -185,7 +185,7 @@ wrappers) writes it into `.env` for you.
 
 ```bash
 # 1. Clone the repository
-git clone https://gitlab.com/yourname/heimdall.git
+git clone https://github.com/danielonet/heimdall.git
 cd heimdall
 
 # 2. Scaffold secrets/.env/config dirs for your chosen tier

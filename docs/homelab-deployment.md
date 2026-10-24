@@ -95,14 +95,14 @@ Confirm before moving on: `ip addr show` shows the new address, and
 
 Do this from a machine with the source checked out and Docker installed —
 this dev workstation works. **Not yet done on this machine** (no
-`registry.gitlab.com/...` image is built locally here and `docker login`
-hasn't been run) — needs a one-time GitLab Deploy Token or personal access
-token with `write_registry` scope from
-`gitlab.com/danielonnet-group/heimdall` → Settings → Repository → Deploy
-tokens (or a PAT under your account).
+registry image is built locally here and `docker login` hasn't been run) —
+needs a registry you control (GitLab, GHCR, a self-hosted one…) and a deploy
+token or PAT with push scope. Set `HEIMDALL_REGISTRY=<registry>/<group>/heimdall`
+in `.env` — it's the image name prefix `docker-compose.yml` uses; unset, it
+defaults to the local-only `localhost/heimdall`.
 
 ```bash
-docker login registry.gitlab.com
+docker login <your registry>
 ./scripts/build-and-push.sh          # tags :latest and :<git-short-sha>
 ```
 
@@ -119,7 +119,7 @@ script, and the `secrets/`/config scaffolding still come from the repo
 itself — only the backend/frontend *images* are skipped from a local build.
 
 ```bash
-git clone https://gitlab.com/danielonnet-group/heimdall.git heimdall
+git clone https://github.com/danielonet/heimdall.git heimdall
 cd heimdall
 sudo ./scripts/install.sh --tier=intermediate --pull
 ```
@@ -164,7 +164,7 @@ nano .env
 ## 6. Pull the images and start the stack
 
 ```bash
-docker login registry.gitlab.com     # read access is enough here
+docker login <your registry>     # read access is enough here (HEIMDALL_REGISTRY must be set in .env)
 IMAGE_TAG=latest docker compose pull
 docker compose --profile intermediate up -d
 ```

@@ -2,12 +2,12 @@ services:
 
   sentinel-backend:
     build: ./sentinel
-    # Pre-built image on GitLab Container Registry — `docker compose pull`
-    # fetches this instead of building from source (see
-    # scripts/build-and-push.sh); `docker compose up`/`build` still builds
-    # locally from ./sentinel and tags it the same way when you have the
-    # source and want to. Not wired into CI on purpose — pushed manually.
-    image: registry.gitlab.com/danielonnet-group/heimdall/sentinel-backend:${IMAGE_TAG:-latest}
+    # By default this is built from source (`docker compose build`) and
+    # tagged under the local-only `localhost/heimdall` namespace, which can't
+    # be pulled from anywhere. To publish/pull pre-built images instead, set
+    # HEIMDALL_REGISTRY in .env to a registry you control (see
+    # scripts/build-and-push.sh and docs/homelab-deployment.md).
+    image: ${HEIMDALL_REGISTRY:-localhost/heimdall}/sentinel-backend:${IMAGE_TAG:-latest}
     network_mode: host          # must reach router AND sniff ARP on LAN
     cap_add:
       - NET_RAW                 # required by Scapy for ARP packet sniffing
@@ -60,7 +60,7 @@ services:
 
   frontend:
     build: ./frontend
-    image: registry.gitlab.com/danielonnet-group/heimdall/frontend:${IMAGE_TAG:-latest}
+    image: ${HEIMDALL_REGISTRY:-localhost/heimdall}/frontend:${IMAGE_TAG:-latest}
     network_mode: host          # so nginx can proxy /api + /socket.io to
                                  # sentinel-backend at 127.0.0.1:5000 without
                                  # CORS (see frontend/nginx.conf) — nginx

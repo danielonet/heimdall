@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-and-push.sh — Build sentinel-backend and frontend images and push
-# them to GitLab Container Registry, so a new machine can install with
+# them to a container registry you control (HEIMDALL_REGISTRY), so a new machine can install with
 # `docker compose pull` instead of building from source.
 #
 # Manual/on-demand ONLY — this is deliberately not wired into CI. Run it
@@ -11,9 +11,10 @@
 #   ./scripts/build-and-push.sh v1.2.0        # also tags :v1.2.0
 #
 # Prerequisites:
-#   docker login registry.gitlab.com
-#   (a GitLab Deploy Token or personal access token with `write_registry`
-#   scope — never hardcode credentials into this script or docker-compose.yml)
+#   export HEIMDALL_REGISTRY=registry.example.com/your-group/heimdall
+#   docker login registry.example.com
+#   (a deploy token or personal access token with push scope — never
+#   hardcode credentials into this script or docker-compose.yml)
 
 set -euo pipefail
 
@@ -21,7 +22,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/utils.sh
 source "${REPO_ROOT}/scripts/lib/utils.sh"
 
-REGISTRY="registry.gitlab.com/danielonnet-group/heimdall"
+REGISTRY="${HEIMDALL_REGISTRY:-}"
+if [ -z "$REGISTRY" ]; then
+    log_error "HEIMDALL_REGISTRY is not set (e.g. registry.example.com/your-group/heimdall)"
+    exit 1
+fi
 IMAGES=(sentinel-backend frontend)
 EXTRA_TAG="${1:-}"
 
@@ -34,7 +39,7 @@ fi
 
 if ! grep -q "\"${REGISTRY%%/*}\"" "${HOME}/.docker/config.json" 2>/dev/null; then
     log_error "Not logged in to ${REGISTRY%%/*} — run: docker login ${REGISTRY%%/*}"
-    log_error "(use a GitLab Deploy Token or personal access token with 'write_registry' scope)"
+    log_error "(use a deploy token or personal access token with push scope)"
     exit 1
 fi
 

@@ -138,8 +138,11 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 
 | Router | Status |
 |---|---|
-| Sagemcom F@st 5670 | ✅ Fully implemented (proprietary XMO JSON API) |
-| Anything else | ❌ Not yet — add a router by implementing one Python abstract class, `RouterAdapter` (`sentinel/adapter/base.py`) |
+| Sagemcom F@st 5670 | ✅ Fully implemented (proprietary XMO JSON API) — the primary, most-tested router |
+| Redmi / Xiaomi (stock MiWiFi firmware, e.g. RA67) | ✅ Implemented — optional second router, visibility-only unless selected as primary (see [`docs/router/miwifi-api.md`](docs/router/miwifi-api.md)) |
+| Anything else | ❌ Not yet — add a router by implementing one Python abstract class, `RouterAdapter` (`sentinel/adapter/base.py`). Planned adapters (OpenWrt, MikroTik, UniFi, OPNsense/pfSense, FRITZ!Box, …) are laid out in [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md) — contributions welcome |
+
+> **Project status: alpha.** Developed and tested against the two routers above on one home network. Expect rough edges on other setups.
 
 ---
 
@@ -168,13 +171,15 @@ container. The tier only decides which of Zeek/ClamAV/OpenCanary/Suricata
 actually run. See [`docs/deployment-tiers-plan.md`](docs/deployment-tiers-plan.md).
 
 ```bash
-git clone <this-repo-url> heimdall
+git clone https://github.com/danielonet/heimdall.git heimdall
 cd heimdall
 sudo ./scripts/install-full.sh      # or install-minimal.sh / install-intermediate.sh
 ```
 
 Each is a thin wrapper around `sudo ./scripts/install.sh --tier=<minimal|intermediate|full>`,
 which is idempotent (safe to re-run) and handles: system packages (Docker, nmap, libpcap, Node), Python/Node dependencies, a `secrets/` scaffold with dev placeholders, an `.env` scaffold (including `DEPLOYMENT_TIER`) with safe dev defaults, and only the config directories the chosen tier's containers actually need (`suricata/` for full, `opencanary/` for intermediate/full).
+
+> **What the installer changes on your machine** (it needs `sudo`, so read [`scripts/install.sh`](scripts/install.sh) first): installs apt packages (Docker Engine + compose plugin, nmap, libpcap, build tools, Node.js, …), adds your user to the `docker` group, and creates `secrets/` (mode 700) and `.env` in the repo directory with randomly generated passwords. It does not touch your router or network configuration. Several containers run with host networking and `NET_RAW`/`NET_ADMIN` capabilities to sniff LAN traffic — see [`SECURITY.md`](SECURITY.md).
 
 ### 2. Fill in real secrets and configuration
 
@@ -231,4 +236,4 @@ kept in [`docs/capability-review.md`](docs/capability-review.md).
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).
