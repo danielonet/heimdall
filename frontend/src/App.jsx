@@ -14,6 +14,7 @@ import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { EquipmentPage } from './pages/EquipmentPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -33,6 +34,7 @@ function App() {
               <Route path="/devices/:mac" element={<DeviceDetailPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/ports" element={<PortsPage />} />
+              <Route path="/equipment" element={<EquipmentPage />} />
               <Route path="/wifi" element={<WifiScanPage />} />
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />

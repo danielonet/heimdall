@@ -8,7 +8,7 @@ const ROUTER_LABELS = {
 
 // Which configured router is "active" — feeds the detection pipeline, WAN
 // bandwidth tracking, auto-block, and the ROUTER panel above this one on
-// the Settings page. Only ever offers routers useSettings().available_routers
+// the Equipment page. Only ever offers routers useSettings().available_routers
 // actually lists (i.e. never 'miwifi' before it has credentials) — see
 // sentinel/api/routes/settings.py's `available_routers`.
 export function PrimaryRouterSelect() {

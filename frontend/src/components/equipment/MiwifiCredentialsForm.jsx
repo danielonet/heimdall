@@ -5,7 +5,7 @@ import { useSettings, useUpdateSettings } from '../../hooks/useSettings'
 // firmware (see sentinel/adapter/miwifi/). Entirely optional: leaving
 // MIWIFI IP blank means Heimdall behaves exactly as it did with only the
 // Sagemcom. Same field shape and "leave blank to keep current" convention
-// as RouterCredentialsForm right above it — MiWiFi login only needs a
+// as RouterCredentialsForm right above it (Equipment page) — MiWiFi login only needs a
 // password, not a username, hence IP+password instead of username+password.
 export function MiwifiCredentialsForm() {
   const { data } = useSettings()
