@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/auth",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.login"
+      },
+      {
+        "matchesJsonPath": "$.password"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "keenetic-session",
+  "requiredScenarioState": "Started",
+  "newScenarioState": "Authed"
+}

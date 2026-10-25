@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "mac": "aa:bb:cc:ff:00:01",
+      "model": "UDR",
+      "version": "4.0.6",
+      "type": "udm",
+      "uptime": 864000,
+      "name": "sim-udr"
+    }
+  ]
+}

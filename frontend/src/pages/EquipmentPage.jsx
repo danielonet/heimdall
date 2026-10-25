@@ -3,9 +3,8 @@ import { useHealth } from '../hooks/useHealth'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { Badge } from '../components/Badge'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
-import { MiwifiCredentialsForm } from '../components/equipment/MiwifiCredentialsForm'
 import { PrimaryRouterSelect } from '../components/equipment/PrimaryRouterSelect'
-import { RouterCredentialsForm } from '../components/equipment/RouterCredentialsForm'
+import { RouterSelector } from '../components/equipment/RouterSelector'
 
 function formatUptime(seconds) {
   if (!seconds) return '—'
@@ -77,8 +76,7 @@ export function EquipmentPage() {
             </div>
           </div>
         )}
-        <RouterCredentialsForm />
-        <MiwifiCredentialsForm />
+        <RouterSelector />
         <PrimaryRouterSelect />
         <NetworkInterfaceSection />
       </div>

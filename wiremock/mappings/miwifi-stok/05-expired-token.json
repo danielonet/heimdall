@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/cgi-bin/luci/;stok=.*/api/.*"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html"
+    },
+    "body": "<html><body>Login required</body></html>",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 10
+}

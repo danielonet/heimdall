@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/;stok=/login",
+    "queryParameters": {
+      "form": {
+        "equalTo": "login"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "contains": "sign="
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Set-Cookie": "sysauth=simsysauth; path=/; HttpOnly"
+    },
+    "jsonBody": {
+      "success": true,
+      "data": "SIMENCRYPTED"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

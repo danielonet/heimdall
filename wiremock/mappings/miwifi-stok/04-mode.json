@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/cgi-bin/luci/;stok=deadbeefstok0123456789/api/xqnetwork/mode"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "code": 0,
+      "mode": 2,
+      "hostip": "192.168.0.1",
+      "hostname": "MiWiFi-SIM"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

@@ -526,3 +526,19 @@ class WanStatusHistory(Base):
     status: Mapped[str] = mapped_column(String(10))  # 'UP' | 'DOWN'
     wan_mode: Mapped[str | None] = mapped_column(String(30))
     duration_s: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class RouterProfile(Base):
+    """A router family picked on the Equipment tab — non-secret fields only.
+    The password lives in a per-router secret file under
+    Settings.ROUTER_SECRETS_DIR (CLAUDE.md rule 6), never in this table.
+    Row present = router selected. Sagemcom/MiWiFi keep their original
+    AppSettings columns instead of a row here."""
+
+    __tablename__ = 'router_profiles'
+
+    router_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    host: Mapped[str] = mapped_column(String(255), server_default='')
+    username: Mapped[str] = mapped_column(String(100), server_default='')
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

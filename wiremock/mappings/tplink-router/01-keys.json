@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/;stok=/login",
+    "queryParameters": {
+      "form": {
+        "equalTo": "keys"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "success": true,
+      "data": {
+        "password": [
+          "SIMMODULUSHEX",
+          "010001"
+        ],
+        "mode": "router",
+        "username": ""
+      }
+    },
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

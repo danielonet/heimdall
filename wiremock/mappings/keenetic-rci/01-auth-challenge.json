@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/auth"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "X-NDM-Realm": "Keenetic",
+      "X-NDM-Challenge": "SIMCHALLENGE0123",
+      "Set-Cookie": "sim_session=abc; Path=/"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "keenetic-session",
+  "requiredScenarioState": "Started"
+}

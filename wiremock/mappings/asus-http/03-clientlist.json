@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/appGet.cgi",
+    "queryParameters": {
+      "hook": {
+        "contains": "get_clientlist"
+      }
+    },
+    "cookies": {
+      "asus_token": {
+        "matches": ".+"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "asus-http/clientlist.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

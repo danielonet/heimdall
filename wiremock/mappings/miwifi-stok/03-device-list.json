@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/cgi-bin/luci/;stok=deadbeefstok0123456789/api/xqnetwork/wifi_connect_devices"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "code": 0,
+      "list": [
+        {
+          "mac": "42:95:72:12:49:26",
+          "wifiIndex": 1,
+          "signal": 46
+        },
+        {
+          "mac": "8C:85:90:AA:BB:01",
+          "wifiIndex": 2,
+          "signal": 38
+        }
+      ]
+    },
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

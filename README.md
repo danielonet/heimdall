@@ -155,11 +155,27 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 
 ## Supported routers
 
-| Router | Status |
-|---|---|
-| Sagemcom F@st 5670 | ✅ Fully implemented (proprietary XMO JSON API) — the primary, most-tested router |
-| Redmi / Xiaomi (stock MiWiFi firmware, e.g. RA67) | ✅ Implemented — optional second router, visibility-only unless selected as primary (see [`docs/router/miwifi-api.md`](docs/router/miwifi-api.md)) |
-| Anything else | ❌ Not yet — add a router by implementing one Python abstract class, `RouterAdapter` (`sentinel/adapter/base.py`). Planned adapters (OpenWrt, MikroTik, UniFi, OPNsense/pfSense, FRITZ!Box, …) are laid out in [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md) — contributions welcome |
+Pick your router family on the **Equipment** tab and add its login there (stored in a secret file, never the database).
+**Tested on real hardware** means someone ran Heimdall against that physical router; it is the only column that proves an adapter works.
+
+| Router family | Adapter | Tested on real hardware | Simulator |
+|---|---|---|---|
+| Sagemcom F@st 5670 (XMO API) | ✅ Implemented | ✅ Yes — primary, most-tested | WireMock (partial) |
+| Xiaomi / Redmi, stock MiWiFi firmware (e.g. RA67) | ✅ Implemented | ✅ Yes — optional second router | WireMock |
+| OpenWrt (ubus) | 🛠️ Planned | ❌ No | Real OpenWrt in Docker (`tests/simulators/`) |
+| MikroTik RouterOS 7 (REST) | 🛠️ Planned | ❌ No | RouterOS CHR in Docker (`tests/simulators/`) |
+| Ubiquiti UniFi Network | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| OPNsense | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| pfSense (REST API package) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| AVM FRITZ!Box (TR-064) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| ASUS / Asuswrt-Merlin | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| TP-Link Archer / Deco | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| Netgear Nighthawk / Orbi | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| Keenetic (RCI) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
+| Anything else | ❌ Not yet | ❌ No | — |
+
+"Planned" routers can already be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. Their simulators are hand-written from public API docs, so they prove nothing about a real device.
+**Own one of these routers? You can help — see [Help test your router](CONTRIBUTING.md#help-test-your-router).** Roadmap: [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md); stubs: [`wiremock/`](wiremock/README.md).
 
 ---
 

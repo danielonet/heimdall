@@ -25,6 +25,7 @@ services:
       # tab without editing this file. See docs/router/miwifi-api.md.
       - MIWIFI_IP=
       - MIWIFI_PASSWORD_FILE=/run/secrets/miwifi_password
+      - ROUTER_SECRETS_DIR=/run/secrets/routers
       # - USE_MOCK_MIWIFI=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379
@@ -61,6 +62,7 @@ services:
       - ./secrets/router_password.txt:/run/secrets/router_password
       - ./secrets/smtp_password.txt:/run/secrets/smtp_password
       - ./secrets/miwifi_password.txt:/run/secrets/miwifi_password
+      - ./secrets/routers:/run/secrets/routers   # one <router-id>.txt per router picked on the Equipment tab
       - ./secrets/abusech_auth_key.txt:/run/secrets/abusech_auth_key   # entered from the Threats tab
       - threat-feeds:/data/feeds      # last good copy of the URLhaus export (cache)
       - ml-models:/data/models        # persist trained ML models across restarts
@@ -113,9 +115,12 @@ services:
       - "8080:8080"             # Admin API + stub responses
     volumes:
       - ./wiremock:/home/wiremock  # stubs, mappings, recordings
+    # Stubs live in mappings/<router-id>/ and __files__/<router-id>/ — one
+    # folder per router, all served from this one instance (see wiremock/README.md).
     command:
       - --root-dir=/home/wiremock
       - --port=8080
+      - --global-response-templating
       - --disable-request-logging
     restart: unless-stopped
 

@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/login.cgi"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html"
+    },
+    "body": "<script>location.href=\"Main_Login.asp?error_status=7\"</script>",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 9
+}

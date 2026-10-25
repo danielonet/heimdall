@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/proxy/network/api/s/default/stat/device"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "unifi-network/stat_device.json",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 5
+}

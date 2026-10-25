@@ -1,0 +1,21 @@
+# Real router operating systems for adapter integration tests.
+#   docker compose -f tests/simulators/docker-compose.yml up --build -d openwrt-ubus
+# Run from the repo root. HTTP-only routers use the WireMock server instead
+# (docker compose --profile dev up wiremock).
+services:
+  openwrt-ubus:
+    build: ./openwrt-ubus
+    ports:
+      - "8081:80"          # POST http://localhost:8081/ubus  (root / sim-password)
+    environment:
+      - SIM_PASSWORD=sim-password
+
+  mikrotik-rest:
+    build: ./mikrotik-rest
+    ports:
+      - "8082:80"          # GET http://localhost:8082/rest/system/resource  (admin / empty password)
+      - "8443:443"
+    devices:
+      - /dev/kvm
+    cap_add:
+      - NET_ADMIN

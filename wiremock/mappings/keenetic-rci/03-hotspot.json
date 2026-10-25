@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/rci/show/ip/hotspot"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "keenetic-rci/hotspot.json",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "keenetic-session",
+  "requiredScenarioState": "Authed"
+}

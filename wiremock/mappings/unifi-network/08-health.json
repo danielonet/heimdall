@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/proxy/network/api/s/default/stat/health"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "unifi-network/stat_health.json",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 5
+}

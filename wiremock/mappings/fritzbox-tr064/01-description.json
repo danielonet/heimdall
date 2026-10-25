@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/tr64desc.xml"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/xml; charset=\"utf-8\""
+    },
+    "bodyFileName": "fritzbox-tr064/tr64desc.xml",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

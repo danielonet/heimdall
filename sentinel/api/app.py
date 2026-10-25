@@ -10,8 +10,8 @@ from sentinel.db.session import init_db
 from sentinel.scheduler.scheduler import init_scheduler
 
 from sentinel.api.routes import (
-    alerts, auth, debug, device_type_profiles, devices, metrics, port_allowlist, ports, reports, rules, system,
-    threats, wifi,
+    alerts, auth, debug, device_type_profiles, devices, metrics, port_allowlist, ports, reports, routers, rules,
+    system, threats, wifi,
 )
 from sentinel.api.routes import settings as settings_routes
 
@@ -63,6 +63,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(metrics.bp, url_prefix='/api/metrics')
     app.register_blueprint(reports.bp, url_prefix='/api/reports')
     app.register_blueprint(settings_routes.bp, url_prefix='/api/settings')
+    app.register_blueprint(routers.bp, url_prefix='/api/routers')
     app.register_blueprint(wifi.bp,    url_prefix='/api/wifi')
     app.register_blueprint(debug.bp,   url_prefix='/api/debug')
 

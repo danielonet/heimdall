@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/status/dhcp_server/leases",
+    "headers": {
+      "X-API-Key": {
+        "equalTo": "sim-api-key"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "pfsense-rest/leases.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

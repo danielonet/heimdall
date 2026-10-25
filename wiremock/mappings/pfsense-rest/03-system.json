@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/status/system",
+    "headers": {
+      "X-API-Key": {
+        "equalTo": "sim-api-key"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "pfsense-rest/system.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/upnp/control/.*"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "WWW-Authenticate": "Digest realm=\"F!Box SOAP-Auth\", nonce=\"SIMNONCE0123456789\", algorithm=MD5, qop=\"auth\""
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 20
+}

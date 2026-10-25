@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/api/xqsystem/login",
+    "headers": {
+      "X-Heimdall-Sim": {
+        "equalTo": "bad-password"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "code": 401,
+      "msg": "not auth"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 1
+}

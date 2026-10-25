@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/upnp/control/hosts",
+    "headers": {
+      "SOAPAction": {
+        "contains": "#GetGenericHostEntry"
+      },
+      "Authorization": {
+        "matches": "Digest .*"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/xml; charset=\"utf-8\""
+    },
+    "bodyFileName": "fritzbox-tr064/host_entry.xml",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

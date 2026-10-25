@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/appGet.cgi"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html"
+    },
+    "body": "<script>top.location.href=\"Main_Login.asp\"</script>",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 20
+}

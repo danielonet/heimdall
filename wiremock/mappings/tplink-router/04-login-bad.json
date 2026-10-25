@@ -1,0 +1,29 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/;stok=/login",
+    "queryParameters": {
+      "form": {
+        "equalTo": "login"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "success": false,
+      "errorcode": "login failed",
+      "data": {
+        "errorcode": "login failed",
+        "attemptsAllowed": 9
+      }
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 9
+}

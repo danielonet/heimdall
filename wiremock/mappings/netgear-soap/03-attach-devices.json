@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/soap/server_sa",
+    "headers": {
+      "SOAPAction": {
+        "contains": "DeviceInfo:1#GetAttachDevice"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/xml; charset=\"utf-8\""
+    },
+    "bodyFileName": "netgear-soap/attach.xml",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

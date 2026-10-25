@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/appGet.cgi",
+    "queryParameters": {
+      "hook": {
+        "contains": "netdev"
+      }
+    },
+    "cookies": {
+      "asus_token": {
+        "matches": ".+"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "asus-http/netdev.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

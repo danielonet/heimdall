@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/rci/show/version"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "model": "Keenetic Giga",
+      "release": "4.1.4",
+      "hw_id": "KN-1010",
+      "device": "Giga"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "keenetic-session",
+  "requiredScenarioState": "Authed"
+}

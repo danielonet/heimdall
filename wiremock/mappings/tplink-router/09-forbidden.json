@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "ANY",
+    "urlPathPattern": "/cgi-bin/luci/;stok=.*/admin/.*"
+  },
+  "response": {
+    "status": 403,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "success": false,
+      "errorcode": "-40401"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 20
+}

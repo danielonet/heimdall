@@ -1,0 +1,8 @@
+{
+  "netdev": {
+    "INTERNET_rx": "0x{{now format='unix'}}",
+    "INTERNET_tx": "0x{{now format='unix'}}",
+    "WIRED_rx": "0x1A2B3C",
+    "WIRED_tx": "0x4D5E6F"
+  }
+}

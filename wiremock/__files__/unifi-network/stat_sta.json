@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "mac": "aa:bb:cc:00:00:01",
+      "ip": "192.168.1.20",
+      "hostname": "laptop",
+      "is_wired": false,
+      "essid": "Home",
+      "rssi": 42,
+      "signal": -54,
+      "rx_bytes": {{now format='unix'}}000,
+      "tx_bytes": {{now format='unix'}}500
+    },
+    {
+      "mac": "aa:bb:cc:00:00:02",
+      "ip": "192.168.1.21",
+      "hostname": "nas",
+      "is_wired": true,
+      "rx_bytes": 52428800,
+      "tx_bytes": 10485760
+    }
+  ]
+}

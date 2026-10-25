@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/v2/diagnostics/arp_table",
+    "headers": {
+      "X-API-Key": {
+        "equalTo": "sim-api-key"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "pfsense-rest/arp.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

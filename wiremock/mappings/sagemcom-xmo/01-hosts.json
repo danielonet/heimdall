@@ -16,7 +16,7 @@
   },
   "response": {
     "status": 200,
-    "bodyFileName": "device_list.json",
+    "bodyFileName": "sagemcom-xmo/device_list.json",
     "headers": {
       "Content-Type": "application/json"
     }

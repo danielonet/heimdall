@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/api/auth/login",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.password == 'sim-password')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Set-Cookie": "TOKEN=sim.jwt.token; Path=/; HttpOnly",
+      "X-CSRF-Token": "sim-csrf"
+    },
+    "jsonBody": {
+      "unique_id": "sim-user",
+      "username": "admin"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "unifi-session",
+  "requiredScenarioState": "Expired",
+  "newScenarioState": "Started",
+  "priority": 1
+}

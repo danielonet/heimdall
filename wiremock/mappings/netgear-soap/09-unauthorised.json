@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/soap/server_sa"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "WWW-Authenticate": "Basic realm=\"NETGEAR sim\""
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 20
+}

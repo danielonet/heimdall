@@ -110,17 +110,15 @@ Existing state: `wiremock/` holds `mappings/01-hosts.json` and two
 `router_info.json`, which do not exist in the tree — the README and tree have
 drifted. Fix that as part of Phase 0.
 
-**Layout** — one directory per adapter so stubs can't collide:
+**Layout** — *implemented as a single server with one folder per router* (see
+`wiremock/README.md`); stubs must therefore keep URL paths unique per router:
 
 ```
 wiremock/
   README.md
-  sagemcom-xmo/{mappings,__files__}/
-  openwrt-ubus/…        # only if the real-container approach proves flaky
-  unifi-network/…
-  opnsense-rest/…
-  fritzbox-tr064/…
-  …
+  mappings/<router-id>/…     # sagemcom-xmo, miwifi-stok, unifi-network, opnsense-rest, …
+  __files__/<router-id>/…
+tests/simulators/<router-id>/Dockerfile   # openwrt-ubus, mikrotik-rest (real OS)
 ```
 
 Compose: one WireMock service per adapter under a `sim` profile, each on its
@@ -202,7 +200,8 @@ Real-container sims and WireMock sims run the *same* suite.
 
 ## 1.5 Frontend
 
-- Replace `PrimaryRouterSelect` + `MiwifiCredentialsForm` with a single
+- (Partly done: the Equipment tab now has `RouterSelector` — multi-select dropdown plus per-router
+  login popup — fed by `GET /api/routers/catalog`.) Replace `PrimaryRouterSelect` with a single
   `RouterSlotForm` rendered for each slot: dropdown from the catalog →
   dynamic fields → **Test connection** button → Save.
 - Show the adapter's capability badges (per-device traffic ✔/✘, blocking

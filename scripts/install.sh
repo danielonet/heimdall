@@ -326,6 +326,12 @@ else
     log_skip "secrets/miwifi_password.txt"
 fi
 
+# Per-router password files for routers picked on the Equipment tab — the
+# backend creates <router-id>.txt inside this directory on first save.
+# Must exist up front or Docker creates the bind-mount source as root.
+mkdir -p "${SECRETS_DIR}/routers"
+chmod 700 "${SECRETS_DIR}/routers"
+
 chown -R "$REAL_USER:$REAL_USER" "$SECRETS_DIR"
 
 # ── 7. .env scaffold ──────────────────────────────────────────────────────────

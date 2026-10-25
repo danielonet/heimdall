@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "ANY",
+    "urlPathPattern": "/rci/.*"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "priority": 20
+}

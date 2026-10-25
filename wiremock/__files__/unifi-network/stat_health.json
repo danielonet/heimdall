@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "rc": "ok"
+  },
+  "data": [
+    {
+      "subsystem": "wan",
+      "status": "ok",
+      "wan_ip": "203.0.113.7",
+      "rx_bytes-r": 1200,
+      "tx_bytes-r": 800
+    }
+  ]
+}

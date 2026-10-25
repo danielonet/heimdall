@@ -1,0 +1,13 @@
+{
+  "code": 200,
+  "status": "ok",
+  "data": [
+    {
+      "ip_address": "192.168.1.20",
+      "mac_address": "aa:bb:cc:00:00:01",
+      "hostname": "laptop",
+      "interface": "lan",
+      "dnsresolve": "laptop.lan"
+    }
+  ]
+}

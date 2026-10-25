@@ -65,7 +65,7 @@ export function PrimaryRouterSelect() {
       )}
 
       {options.length < 2 && (
-        <p className="mt-1.5 text-[9px] text-text-muted">Configure the Redmi router below to enable switching.</p>
+        <p className="mt-1.5 text-[9px] text-text-muted">Add the Redmi router in the Routers list above to enable switching.</p>
       )}
       {mutation.isError && <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>}
     </div>

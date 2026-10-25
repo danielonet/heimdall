@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/soap/server_sa",
+    "headers": {
+      "SOAPAction": {
+        "contains": "DeviceConfig:1#GetTrafficMeterStatistics"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/xml; charset=\"utf-8\""
+    },
+    "bodyFileName": "netgear-soap/traffic.xml",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/proxy/network/.*"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "meta": {
+        "rc": "error",
+        "msg": "api.err.LoginRequired"
+      },
+      "data": []
+    },
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "unifi-session",
+  "requiredScenarioState": "Expired"
+}

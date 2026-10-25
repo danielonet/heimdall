@@ -1,96 +1,56 @@
-# WireMock Stubs for Sagemcom Router Simulator
+# WireMock router simulators
 
-This directory contains WireMock stub mappings that simulate a Sagemcom F@st 5670 router's XMO JSON API responses. Use this for **offline development and testing** when the physical router is unavailable.
-
-## Structure
+One WireMock server (`docker compose --profile dev up wiremock -d`, port 8080) serves stubs for
+every router that has no container-friendly OS. Each router has its **own folder**, named after
+its adapter id in `sentinel/adapter/catalog.py`:
 
 ```
 wiremock/
-├── README.md                    ← you are here
-├── __files__/                   ← response body templates
-│   ├── device_list.json        ← connected devices
-│   ├── port_stats.json         ← Ethernet port statistics
-│   └── router_info.json        ← router metadata
-└── mappings/                    ← request→response mappings
-    ├── login.json              ← XMO session establishment
-    └── queries.json            ← getValue/getValues queries
+├── mappings/<router-id>/NN-name.json   request → response stubs
+└── __files__/<router-id>/…             response bodies, plus NOTES.md (fidelity + quirks)
 ```
 
-## How It Works
+Routers whose real OS runs in Docker (OpenWrt, MikroTik CHR) are **not** here — see
+[`tests/simulators/`](../tests/simulators/README.md).
 
-The mock router adapter (`sentinel/adapter/mock/mock_adapter.py`) returns synthetic data **directly** without making HTTP calls. If you want to use WireMock instead to test against actual XMO API-shaped responses, set `USE_WIREMOCK=true` to redirect the XMO client to WireMock.
+| Router id | Auth modelled | Failure behaviour modelled | Fidelity |
+|---|---|---|---|
+| `sagemcom-xmo` | none | — | recorded shape (hosts only) |
+| `miwifi-stok` | stok token | HTML page with HTTP 200 on a stale token | from `docs/router/miwifi-api.md` |
+| `unifi-network` | cookie session | session expires after 2 polls (401), re-login resets; bad login → 403 | synthetic |
+| `opnsense-rest` | Basic (`sim-key`/`sim-secret`) | 401 | synthetic |
+| `pfsense-rest` | `X-API-Key: sim-api-key` | 401 | synthetic |
+| `fritzbox-tr064` | Digest header presence | 401 digest challenge | synthetic |
+| `asus-http` | `login.cgi` cookie | HTML redirect with HTTP 200 when logged out | synthetic |
+| `tplink-router` | `stok` + `sysauth` | `success:false` login, 403 | synthetic, crypto not real |
+| `netgear-soap` | SOAPAction routing | 401 for unknown calls | synthetic |
+| `keenetic-rci` | challenge → login scenario | 401 until logged in | synthetic |
 
-## Enabling Mock Mode
+**Synthetic** means hand-written from public API docs and reference libraries, not recorded from a
+device; each folder's `__files__/<router-id>/NOTES.md` lists what to verify. Replace stubs with
+scrubbed recordings as soon as someone has the hardware.
 
-### Option 1: Use the Direct Mock Adapter (Recommended for Development)
+Counters (`rx_bytes`, …) use WireMock response templating (`{{now format='unix'}}`) so they grow
+between polls; the server is started with `--global-response-templating`.
 
-Fastest for offline development:
+## Use
 
 ```bash
-export USE_MOCK_ROUTER=true
-# Flask API will use synthetic test data directly
+docker compose --profile dev up wiremock -d
+curl -s http://localhost:8080/proxy/network/api/s/default/stat/sta   # 401 until you POST /api/auth/login
 ```
 
-### Option 2: Use WireMock HTTP Server (Advanced)
+Point an adapter at `http://localhost:8080` (host `localhost`, port `8080`). All routers share one
+port, so paths must stay unique per router; prefix scenario names with the router id.
 
-For testing against realistic XMO API response formats:
+## Adding a router
 
-```bash
-# Start WireMock container (see docker-compose.yml)
-docker-compose up wiremock -d
+1. Add it to `sentinel/adapter/catalog.py` with `simulator=SimulatorKind.WIREMOCK`.
+2. Create `mappings/<router-id>/` and `__files__/<router-id>/` (reference bodies as `<router-id>/file`).
+3. `tests/test_adapter/test_catalog.py` fails until the folder has at least one valid mapping.
 
-# Redirect the XMO client to WireMock
-export USE_MOCK_ROUTER=false
-export ROUTER_IP=wiremock
-export ROUTER_PORT=8080
+## Recording real traffic
 
-# Now the Sagemcom adapter connects to WireMock instead of a real router
-```
-
-WireMock listens on `:8080` and the real Sagemcom adapter will make HTTP calls against these stubs.
-
-## Recording Real Traffic
-
-To populate these stubs with real data from your actual router:
-
-```bash
-# With real router running and accessible:
-docker-compose up wiremock -d
-
-# Enable WireMock recording mode (via admin endpoint)
-curl -X POST http://localhost:8080/__admin/recordings/start
-
-# Run your Sagemcom adapter normally
-export USE_MOCK_ROUTER=false
-export ROUTER_IP=192.168.1.1
-# ... run the app ...
-
-# Stop recording
-curl -X POST http://localhost:8080/__admin/recordings/stop
-
-# Recordings saved to wiremock/mappings/ automatically
-```
-
-See: [WireMock Recording](https://wiremock.org/docs/record-playback/)
-
-## XMO API Endpoints Being Mocked
-
-The XMO API is a POST-only protocol:
-
-| Request | Purpose |
-|---------|---------|
-| `POST /cgi/json-req` (login envelope) | Establish session |
-| `POST /cgi/json-req` (getValue "Device/Hosts/Host") | List connected devices |
-| `POST /cgi/json-req` (getValue "Device/Ethernet/Interfaces/...") | Port statistics |
-| `POST /cgi/json-req` (getValue "Device/DeviceInfo") | Router metadata |
-| `POST /cgi/json-req` (addObject firewall chain) | Block device by MAC |
-| `POST /cgi/json-req` (deleteObject firewall rule) | Unblock device |
-
-All requests are URL-encoded JSON wrapped in `req=<JSON>`.
-
-## Status
-
-- ✅ Mock adapter fully functional
-- ⏳ WireMock stubs (see templates in `__files__/`)
-- ⏳ Recording script for real router traffic
-
+Use WireMock's recorder against the real router (`POST /__admin/recordings/start` with
+`targetBaseUrl`), then move the generated files into the router's folder and **scrub MACs, IPs,
+serials and tokens** before committing.

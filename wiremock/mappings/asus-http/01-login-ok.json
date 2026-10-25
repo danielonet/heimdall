@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/login.cgi",
+    "bodyPatterns": [
+      {
+        "contains": "login_authorization=YWRtaW46c2ltLXBhc3N3b3Jk"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Set-Cookie": "asus_token=simtoken0123456789; HttpOnly",
+      "Content-Type": "text/html"
+    },
+    "body": "<script>top.location.href=\"index.asp\"</script>",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

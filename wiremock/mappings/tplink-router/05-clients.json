@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/;stok=simstok/admin/status",
+    "queryParameters": {
+      "form": {
+        "equalTo": "client_status"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "tplink-router/clients.json",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

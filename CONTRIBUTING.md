@@ -6,6 +6,28 @@ are **new router adapters** and **web-UI fixtures for switches** — see
 [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md)
 for the roadmap.
 
+## Help test your router
+
+Heimdall has only ever run on the maintainer's own Sagemcom and Redmi routers.
+Every other family in the [supported routers table](README.md#supported-routers)
+is built against simulators written from public docs, so **real-hardware
+testers are the most valuable contribution you can make** — no coding needed.
+
+If you own a UniFi, OpenWrt, MikroTik, OPNsense, pfSense, FRITZ!Box, ASUS,
+TP-Link, Netgear or Keenetic device (or any other router):
+
+1. Open an issue titled `Router test: <vendor> <model> <firmware>`.
+2. Say what you tried: selecting it on the Equipment tab, saving the login,
+   and (once its adapter exists) whether devices and traffic showed up.
+3. Optionally attach a **scrubbed** capture of the router's API responses
+   (WireMock recorder or browser HAR) — see [`wiremock/README.md`](wiremock/README.md#recording-real-traffic).
+   Remove MACs, IPs, serials, SSIDs and tokens first (see the ground rules below).
+
+A router moves to "Tested on real hardware" in the README once someone
+reports it working on a physical unit. If you'd rather write the adapter,
+the roadmap is in
+[`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md).
+
 ## Ground rules
 
 - Be kind. Assume good faith.

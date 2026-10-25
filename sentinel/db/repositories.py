@@ -13,8 +13,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
 from sentinel.db.models import (
-    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, TrafficSample,
-    TrustedMac, WifiNetwork, WifiSighting,
+    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, RouterProfile,
+    TrafficSample, TrustedMac, WifiNetwork, WifiSighting,
 )
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
@@ -979,6 +979,33 @@ class SettingsRepository:
             row = AppSettings(id=_SETTINGS_ROW_ID)
             session.add(row)
         return row
+
+
+class RouterProfileRepository:
+    """Read/write access to router_profiles — the routers picked on the
+    Equipment tab (non-secret fields only; see RouterProfile)."""
+
+    async def list_all(self) -> list[RouterProfile]:
+        async with get_session() as session:
+            rows = await session.scalars(select(RouterProfile).order_by(RouterProfile.created_at))
+            return list(rows)
+
+    async def upsert(self, router_id: str, *, host: str | None, username: str | None) -> None:
+        """Create the profile, or update only the fields that are not None."""
+        async with get_session() as session:
+            row = await session.get(RouterProfile, router_id)
+            if row is None:
+                session.add(RouterProfile(router_id=router_id, host=host or '', username=username or ''))
+                return
+            if host is not None:
+                row.host = host
+            if username is not None:
+                row.username = username
+            row.updated_at = datetime.now(timezone.utc)
+
+    async def delete(self, router_id: str) -> None:
+        async with get_session() as session:
+            await session.execute(delete(RouterProfile).where(RouterProfile.router_id == router_id))
 
 
 class WifiSightingRepository:

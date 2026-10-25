@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/cgi-bin/luci/api/xqsystem/login",
+    "bodyPatterns": [
+      {
+        "contains": "password="
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "code": 0,
+      "token": "deadbeefstok0123456789",
+      "url": "/cgi-bin/luci/;stok=deadbeefstok0123456789/web/home"
+    },
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

@@ -17,7 +17,7 @@ export function NetworkInterfaceSection() {
   const isDirty = data && selected !== data.sniff_iface
 
   // No own border/bg — embedded as a sub-section of the ROUTER panel
-  // (SettingsPage), same nested pattern as RouterCredentialsForm right
+  // (SettingsPage), same nested pattern as RouterSelector right
   // above it. Was previously its own standalone tile in the main grid;
   // folded in here as part of the compact-settings-page consolidation
   // since it's the same "this machine's network configuration" domain.

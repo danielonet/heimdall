@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/proxy/network/api/s/default/stat/sta",
+    "cookies": {
+      "TOKEN": {
+        "contains": "sim"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "unifi-network/stat_sta.json",
+    "transformers": [
+      "response-template"
+    ]
+  },
+  "scenarioName": "unifi-session",
+  "requiredScenarioState": "Started",
+  "newScenarioState": "Polled-1"
+}

@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/upnp/control/wancommonifconfig1",
+    "headers": {
+      "SOAPAction": {
+        "contains": "#GetTotalBytesSent"
+      },
+      "Authorization": {
+        "matches": "Digest .*"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/xml; charset=\"utf-8\""
+    },
+    "bodyFileName": "fritzbox-tr064/bytes_sent.xml",
+    "transformers": [
+      "response-template"
+    ]
+  }
+}

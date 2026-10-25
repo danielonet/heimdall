@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     MIWIFI_IP: str = ''
     MIWIFI_PASSWORD: str = ''       # populated from MIWIFI_PASSWORD_FILE if blank
     MIWIFI_PASSWORD_FILE: str = ''  # also the write target for PATCH /api/settings
+    # Directory holding one <router-id>.txt password file per router picked
+    # on the Equipment tab (routers other than Sagemcom/MiWiFi, which keep
+    # their dedicated files above). Bind-mounted read-write in compose.
+    ROUTER_SECRETS_DIR: str = ''
     USE_MOCK_MIWIFI: bool = False   # dev flag: use MockMiwifiAdapter instead of a real Redmi
 
     # ── Deployment ────────────────────────────────────────────────────────────
