@@ -1,0 +1,10 @@
+{
+  "code": 200,
+  "status": "ok",
+  "data": {
+    "platform": "pfSense",
+    "version": "2.7.2",
+    "uptime": "10 Days 02 Hours",
+    "netgate_id": "sim"
+  }
+}

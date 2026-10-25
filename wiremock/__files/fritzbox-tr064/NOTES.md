@@ -1,0 +1,1 @@
+fidelity: synthetic, shaped after AVM TR-064 service descriptions (Hosts, WANCommonInterfaceConfig). Digest auth is only checked for presence of an Authorization header (WireMock cannot verify digests). verify against a real box.

@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><m:GetInfoResponse xmlns:m="urn:NETGEAR-ROUTER:service:DeviceInfo:1"><ResponseCode>200</ResponseCode><ModelName>R7000</ModelName><Firmwareversion>V1.0.11.136_10.2.120</Firmwareversion><SerialNumber>SIM123</SerialNumber></m:GetInfoResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>

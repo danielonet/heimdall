@@ -1,0 +1,14 @@
+{
+  "interfaces": {
+    "wan": {
+      "name": "igb0",
+      "bytes received": {{now format='unix'}}000,
+      "bytes transmitted": {{now format='unix'}}200
+    },
+    "lan": {
+      "name": "igb1",
+      "bytes received": {{now format='unix'}}000,
+      "bytes transmitted": {{now format='unix'}}200
+    }
+  }
+}

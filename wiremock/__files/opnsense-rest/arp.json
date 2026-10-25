@@ -1,0 +1,13 @@
+[
+  {
+    "mac": "aa:bb:cc:00:00:01",
+    "ip": "192.168.1.20",
+    "intf": "igb1",
+    "expired": false,
+    "permanent": false,
+    "type": "ethernet",
+    "manufacturer": "Sim",
+    "hostname": "laptop",
+    "intf_description": "LAN"
+  }
+]

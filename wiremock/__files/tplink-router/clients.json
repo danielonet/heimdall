@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "data": [
+    {
+      "mac": "AA-BB-CC-00-00-01",
+      "ip": "192.168.0.20",
+      "hostname": "laptop",
+      "type": "wireless",
+      "up_speed": 120,
+      "down_speed": 3400,
+      "traffic_usage": "{{now format='unix'}}"
+    }
+  ]
+}
