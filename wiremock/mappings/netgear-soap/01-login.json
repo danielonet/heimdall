@@ -6,16 +6,18 @@
       "SOAPAction": {
         "contains": "DeviceConfig:1#SOAPLogin"
       }
-    }
+    },
+    "bodyPatterns": [
+      {
+        "contains": "<Password>sim-password</Password>"
+      }
+    ]
   },
   "response": {
     "status": 200,
     "headers": {
       "Content-Type": "text/xml; charset=\"utf-8\""
     },
-    "bodyFileName": "netgear-soap/login.xml",
-    "transformers": [
-      "response-template"
-    ]
+    "bodyFileName": "netgear-soap/login.xml"
   }
 }

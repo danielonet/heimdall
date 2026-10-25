@@ -95,7 +95,7 @@ CATALOG: tuple[RouterSpec, ...] = (
     ),
     RouterSpec(
         id='asus-http', label='ASUS / Asuswrt-Merlin', family='ASUS',
-        protocol='HTTP login.cgi + appGet.cgi', simulator=SimulatorKind.WIREMOCK,
+        protocol='HTTP login.cgi + appGet.cgi', simulator=SimulatorKind.WIREMOCK, implemented=True,
         default_username='admin', default_port=80,
     ),
     RouterSpec(
@@ -105,7 +105,7 @@ CATALOG: tuple[RouterSpec, ...] = (
     ),
     RouterSpec(
         id='netgear-soap', label='Netgear Nighthawk / Orbi', family='Netgear',
-        protocol='SOAP /soap/server_sa', simulator=SimulatorKind.WIREMOCK,
+        protocol='SOAP /soap/server_sa', simulator=SimulatorKind.WIREMOCK, implemented=True,
         default_username='admin', default_port=80,
     ),
     RouterSpec(

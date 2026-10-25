@@ -21,9 +21,9 @@ Routers whose real OS runs in Docker (OpenWrt, MikroTik CHR) are **not** here â€
 | `opnsense-rest` | Basic (`sim-key`/`sim-secret`) | 401 | synthetic |
 | `pfsense-rest` | `X-API-Key: sim-api-key` | 401 | synthetic |
 | `fritzbox-tr064` | Digest header presence | 401 digest challenge | synthetic |
-| `asus-http` | `login.cgi` cookie | HTML redirect with HTTP 200 when logged out | synthetic |
+| `asus-http` | `login.cgi` cookie (base64 `admin:sim-password`) | HTML redirect with HTTP 200 when logged out | synthetic |
 | `tplink-router` | `stok` + `sysauth` | `success:false` login, 403 | synthetic, crypto not real |
-| `netgear-soap` | SOAPAction routing | 401 for unknown calls | synthetic |
+| `netgear-soap` | `SOAPLogin` with `sim-password` (ResponseCode 000 / 401) | 401 for unknown calls | synthetic |
 | `keenetic-rci` | challenge â†’ login scenario | 401 until logged in | synthetic |
 
 **Synthetic** means hand-written from public API docs and reference libraries, not recorded from a

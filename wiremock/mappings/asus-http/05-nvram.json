@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/appGet.cgi",
+    "queryParameters": {
+      "hook": {
+        "contains": "nvram_get"
+      }
+    },
+    "cookies": {
+      "asus_token": {
+        "matches": ".+"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyFileName": "asus-http/nvram.json"
+  }
+}

@@ -15,6 +15,8 @@ import pytest_asyncio
 
 from sentinel.adapter.http_adapter import AdapterAuthError, norm_mac
 from sentinel.adapter.models import DeviceSnapshot, DhcpLease, RouterInfo, TrafficGranularity, TrafficSample, WanStats
+from sentinel.adapter.asus.asus_adapter import AsusAdapter, parse_hex_counter
+from sentinel.adapter.netgear.netgear_adapter import NetgearAdapter, parse_attached_devices
 from sentinel.adapter.opnsense.opnsense_adapter import OpnsenseAdapter
 from sentinel.adapter.pfsense.pfsense_adapter import PfsenseAdapter, parse_uptime
 from sentinel.adapter.unifi.unifi_adapter import UnifiAdapter
@@ -36,11 +38,15 @@ FACTORIES = {
     'unifi': lambda: UnifiAdapter(HOST, 'admin', 'sim-password', scheme='http'),
     'opnsense': lambda: OpnsenseAdapter(HOST, 'sim-key', 'sim-secret', scheme='http'),
     'pfsense': lambda: PfsenseAdapter(HOST, 'sim-api-key', scheme='http'),
+    'netgear': lambda: NetgearAdapter(HOST, 'admin', 'sim-password'),
+    'asus': lambda: AsusAdapter(HOST, 'admin', 'sim-password'),
 }
 BAD_FACTORIES = {
     'unifi': lambda: UnifiAdapter(HOST, 'admin', 'WRONG', scheme='http'),
     'opnsense': lambda: OpnsenseAdapter(HOST, 'sim-key', 'WRONG', scheme='http'),
     'pfsense': lambda: PfsenseAdapter(HOST, 'WRONG', scheme='http'),
+    'netgear': lambda: NetgearAdapter(HOST, 'admin', 'WRONG'),
+    'asus': lambda: AsusAdapter(HOST, 'admin', 'WRONG'),
 }
 
 
@@ -205,3 +211,91 @@ class TestOpnsense:
 def test_pfsense_uptime_parser():
     assert parse_uptime('10 Days 02 Hours') == 10 * 86400 + 2 * 3600
     assert parse_uptime('') == 0
+
+
+def test_netgear_attached_device_parser():
+    raw = '2@1;192.168.1.20;laptop;AA:BB:CC:00:00:01;wireless;1000;100;--@2;192.168.1.21;--;AA:BB:CC:00:00:02;wired;1000;100;--'
+    devices = parse_attached_devices(raw)
+    assert [(d['ip'], d['name'], d['type']) for d in devices] == [
+        ('192.168.1.20', 'laptop', 'wireless'), ('192.168.1.21', '--', 'wired')]
+    assert parse_attached_devices('') == []
+
+
+def test_asus_hex_counters():
+    assert parse_hex_counter('0x1A2B') == 0x1A2B
+    assert parse_hex_counter('garbage') == 0 and parse_hex_counter(None) == 0
+
+
+class TestAsus:
+    @pytest.mark.asyncio
+    async def test_wifi_vs_wired_and_bookkeeping_keys_ignored(self):
+        a = FACTORIES['asus']()
+        try:
+            devices = {d.mac_address: d for d in await a.get_connected_devices()}
+            assert set(devices) == {'aa:bb:cc:00:00:01', 'aa:bb:cc:00:00:02'}
+            assert devices['aa:bb:cc:00:00:01'].interface_name == 'WiFi'
+            assert devices['aa:bb:cc:00:00:01'].signal_strength_dbm == -52
+            assert devices['aa:bb:cc:00:00:02'].interface_name == 'Ethernet'
+        finally:
+            await a.aclose()
+
+    @pytest.mark.asyncio
+    async def test_html_login_page_with_http_200_triggers_one_relogin(self):
+        a = FACTORIES['asus']()
+        try:
+            assert await a.get_connected_devices()
+            a._http.cookies.clear()          # the router forgets us: next call gets the HTML redirect
+            assert await a.get_connected_devices()
+            logins = httpx.post(f'{WIREMOCK}/__admin/requests/count',
+                                json={'method': 'POST', 'url': '/login.cgi'}).json()['count']
+            assert logins == 2
+        finally:
+            await a.aclose()
+
+    @pytest.mark.asyncio
+    async def test_router_info_parses_model_firmware_and_uptime(self):
+        a = FACTORIES['asus']()
+        try:
+            info = await a.get_router_info()
+            assert (info.model, info.firmware, info.uptime_seconds) == ('RT-AX88U', '3.0.0.4.388', 86400)
+        finally:
+            await a.aclose()
+
+    @pytest.mark.asyncio
+    async def test_bad_login_is_not_retried_in_a_loop(self):
+        a = BAD_FACTORIES['asus']()
+        try:
+            for _ in range(4):
+                with pytest.raises(AdapterAuthError):
+                    await a.get_connected_devices()
+            logins = httpx.post(f'{WIREMOCK}/__admin/requests/count',
+                                json={'method': 'POST', 'url': '/login.cgi'}).json()['count']
+            assert logins == 1
+        finally:
+            await a.aclose()
+
+
+class TestNetgear:
+    @pytest.mark.asyncio
+    async def test_devices_and_hostname_placeholder(self):
+        a = FACTORIES['netgear']()
+        try:
+            devices = {d.mac_address: d for d in await a.get_connected_devices()}
+            assert devices['aa:bb:cc:00:00:01'].interface_name == 'WiFi' and devices['aa:bb:cc:00:00:01'].hostname == 'laptop'
+            assert devices['aa:bb:cc:00:00:02'].interface_name == 'Ethernet'
+        finally:
+            await a.aclose()
+
+    @pytest.mark.asyncio
+    async def test_bad_login_is_not_retried_in_a_loop(self):
+        a = BAD_FACTORIES['netgear']()
+        try:
+            for _ in range(4):
+                with pytest.raises(AdapterAuthError):
+                    await a.get_connected_devices()
+            logins = httpx.post(f'{WIREMOCK}/__admin/requests/count',
+                                json={'method': 'POST', 'url': '/soap/server_sa',
+                                      'headers': {'SOAPAction': {'contains': 'SOAPLogin'}}}).json()['count']
+            assert logins == 1
+        finally:
+            await a.aclose()

@@ -26,7 +26,8 @@ SUPPORTED_ROUTERS = ('sagemcom', 'miwifi')
 
 # Routers picked on the Equipment tab (router_profiles + a per-router secret
 # file) rather than the original sagemcom/miwifi settings columns.
-PROFILE_ROUTERS = ('unifi-network', 'opnsense-rest', 'pfsense-rest', 'openwrt-ubus', 'mikrotik-rest')
+PROFILE_ROUTERS = ('unifi-network', 'opnsense-rest', 'pfsense-rest', 'openwrt-ubus', 'mikrotik-rest',
+                   'netgear-soap', 'asus-http')
 
 
 async def miwifi_configured() -> bool:
@@ -102,6 +103,12 @@ async def create_profile_adapter(router_id: str) -> RouterAdapter:
     if router_id == 'mikrotik-rest':
         from sentinel.adapter.mikrotik.mikrotik_adapter import MikrotikAdapter
         return MikrotikAdapter(profile.host, profile.username, secret, poll_interval_s=poll)
+    if router_id == 'netgear-soap':
+        from sentinel.adapter.netgear.netgear_adapter import NetgearAdapter
+        return NetgearAdapter(profile.host, profile.username, secret, poll_interval_s=poll)
+    if router_id == 'asus-http':
+        from sentinel.adapter.asus.asus_adapter import AsusAdapter
+        return AsusAdapter(profile.host, profile.username, secret, poll_interval_s=poll)
     from sentinel.adapter.pfsense.pfsense_adapter import PfsenseAdapter
     return PfsenseAdapter(profile.host, secret, poll_interval_s=poll)
 

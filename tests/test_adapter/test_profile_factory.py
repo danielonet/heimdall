@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from sentinel.adapter import factory
+from sentinel.adapter.asus.asus_adapter import AsusAdapter
+from sentinel.adapter.netgear.netgear_adapter import NetgearAdapter
 from sentinel.adapter.mikrotik.mikrotik_adapter import MikrotikAdapter
 from sentinel.adapter.openwrt.openwrt_adapter import OpenwrtAdapter
 from sentinel.adapter.opnsense.opnsense_adapter import OpnsenseAdapter
@@ -28,6 +30,7 @@ def _profile(monkeypatch, host='10.0.0.1', username='admin'):
 @pytest.mark.parametrize('router_id,cls', [
     ('unifi-network', UnifiAdapter), ('opnsense-rest', OpnsenseAdapter), ('pfsense-rest', PfsenseAdapter),
     ('openwrt-ubus', OpenwrtAdapter), ('mikrotik-rest', MikrotikAdapter),
+    ('netgear-soap', NetgearAdapter), ('asus-http', AsusAdapter),
 ])
 async def test_builds_the_right_adapter(router_id, cls, secrets, monkeypatch):
     (secrets / f'{router_id}.txt').write_text('s3cret\n')

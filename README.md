@@ -168,13 +168,13 @@ Pick your router family on the **Equipment** tab and add its login there (stored
 | OPNsense | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
 | pfSense (REST API package) | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
 | AVM FRITZ!Box (TR-064) | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
-| ASUS / Asuswrt-Merlin | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| ASUS / Asuswrt-Merlin | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
 | TP-Link Archer / Deco | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
-| Netgear Nighthawk / Orbi | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| Netgear Nighthawk / Orbi | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
 | Keenetic (RCI) | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
 | Anything else | ❌ Not yet | ❌ No | — | — |
 
-**Implemented (simulator-tested only)** means the adapter builds from your Equipment-tab login and passes automated tests against a simulator — hand-written WireMock stubs for UniFi, OPNsense and pfSense, and the real OpenWrt / RouterOS operating systems running in Docker for those two — but it has never touched a physical router, so expect quirks and please report them. OpenWrt, OPNsense and pfSense cannot block or quarantine devices, and none of the implemented non-Sagemcom/Redmi routers except UniFi report per-device traffic (their APIs have no per-client counters). MikroTik can block via a firewall rule, but whether it enforces is unverified because the simulator carries no traffic. Selecting one of these as the *primary* router for threat detection is not wired into the scheduler yet.
+**Implemented (simulator-tested only)** means the adapter builds from your Equipment-tab login and passes automated tests against a simulator — hand-written WireMock stubs for UniFi, OPNsense and pfSense, and the real OpenWrt / RouterOS operating systems running in Docker for those two — but it has never touched a physical router, so expect quirks and please report them. OpenWrt, OPNsense, pfSense, Netgear and ASUS cannot block or quarantine devices, and none of the implemented non-Sagemcom/Redmi routers except UniFi report per-device traffic (their APIs have no per-client counters). MikroTik can block via a firewall rule, but whether it enforces is unverified because the simulator carries no traffic. Selecting one of these as the *primary* router for threat detection is not wired into the scheduler yet.
 
 **Planned** routers can be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. The WireMock stubs are hand-written from public API docs, so they prove nothing about a real device.
 **Own one of these routers? You can help — see [Help test your router](CONTRIBUTING.md#help-test-your-router).** Roadmap: [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md); stubs: [`wiremock/`](wiremock/README.md).

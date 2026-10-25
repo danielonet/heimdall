@@ -1,1 +1,1 @@
-fidelity: synthetic, shaped after pynetgear. Auth is not enforced by the stubs (any request is answered); the 401 stub only fires for non-SOAP-matching calls. verify field order of NewAttachDevice per firmware.
+fidelity: synthetic, shaped after pynetgear. Only SOAPLogin enforces credentials (Password must be sim-password, else ResponseCode 401); later calls are answered without checking a session. verify field order of NewAttachDevice per firmware.
