@@ -1,2 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><m:GetTrafficMeterStatisticsResponse xmlns:m="urn:NETGEAR-ROUTER:service:DeviceConfig:1"><ResponseCode>200</ResponseCode><NewTodayUpload>{{now format='unix'}}</NewTodayUpload><NewTodayDownload>{{now format='unix'}}9</NewTodayDownload></m:GetTrafficMeterStatisticsResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>

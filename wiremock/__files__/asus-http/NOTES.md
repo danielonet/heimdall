@@ -1,1 +1,0 @@
-fidelity: synthetic, shaped after asusrouter/aioasuswrt. Login body is login_authorization=base64(admin:sim-password). Not-logged-in returns an HTML redirect with HTTP 200 (the quirk adapters must detect). verify hook names per firmware.

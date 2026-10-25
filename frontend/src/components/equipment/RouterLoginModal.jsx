@@ -39,7 +39,7 @@ export function RouterLoginModal({ spec, current, onClose }) {
         {spec.fields.map((field) => (
           <div key={field}>
             <label htmlFor={`router-${field}`} className="mb-1 block text-[9px] tracking-wider text-text-muted">
-              {FIELD_LABELS[field] || field.toUpperCase()}
+              {spec.field_labels?.[field] || FIELD_LABELS[field] || field.toUpperCase()}
             </label>
             <input
               id={`router-${field}`}

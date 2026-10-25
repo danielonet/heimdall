@@ -4,13 +4,10 @@
     "urlPath": "/cgi/json-req",
     "bodyPatterns": [
       {
-        "matchesJsonPath": "$.request.id == 0"
+        "matchesJsonPath": "$.request[?(@.id == 0)]"
       },
       {
-        "matchesJsonPath": "$.request.actions[0].method == 'getValue'"
-      },
-      {
-        "matchesJsonPath": "$.request.actions[0].xpath == 'Device/Hosts/Host'"
+        "matchesJsonPath": "$.request.actions[?(@.method == 'getValue' && @.xpath == 'Device/Hosts/Host')]"
       }
     ]
   },

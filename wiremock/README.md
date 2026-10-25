@@ -7,7 +7,7 @@ its adapter id in `sentinel/adapter/catalog.py`:
 ```
 wiremock/
 ├── mappings/<router-id>/NN-name.json   request → response stubs
-└── __files__/<router-id>/…             response bodies, plus NOTES.md (fidelity + quirks)
+└── __files/<router-id>/…             response bodies, plus NOTES.md (fidelity + quirks)
 ```
 
 Routers whose real OS runs in Docker (OpenWrt, MikroTik CHR) are **not** here — see
@@ -27,8 +27,10 @@ Routers whose real OS runs in Docker (OpenWrt, MikroTik CHR) are **not** here �
 | `keenetic-rci` | challenge → login scenario | 401 until logged in | synthetic |
 
 **Synthetic** means hand-written from public API docs and reference libraries, not recorded from a
-device; each folder's `__files__/<router-id>/NOTES.md` lists what to verify. Replace stubs with
+device; each folder's `__files/<router-id>/NOTES.md` lists what to verify. Replace stubs with
 scrubbed recordings as soon as someone has the hardware.
+
+Adapter tests that run against these stubs: `tests/test_adapter/test_wiremock_adapters.py` (skipped when WireMock is down).
 
 Counters (`rx_bytes`, …) use WireMock response templating (`{{now format='unix'}}`) so they grow
 between polls; the server is started with `--global-response-templating`.
@@ -46,7 +48,7 @@ port, so paths must stay unique per router; prefix scenario names with the route
 ## Adding a router
 
 1. Add it to `sentinel/adapter/catalog.py` with `simulator=SimulatorKind.WIREMOCK`.
-2. Create `mappings/<router-id>/` and `__files__/<router-id>/` (reference bodies as `<router-id>/file`).
+2. Create `mappings/<router-id>/` and `__files/<router-id>/` (reference bodies as `<router-id>/file`).
 3. `tests/test_adapter/test_catalog.py` fails until the folder has at least one valid mapping.
 
 ## Recording real traffic

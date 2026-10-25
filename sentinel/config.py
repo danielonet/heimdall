@@ -32,6 +32,15 @@ def write_secret_file(path: str, value: str) -> None:
         f.write(value.strip() + '\n')
 
 
+def router_secret_path(router_id: str) -> str:
+    """Password file for a router picked on the Equipment tab ('' if
+    ROUTER_SECRETS_DIR is unset). `router_id` must be a catalog id — callers
+    validate it, so it cannot traverse out of the directory."""
+    if not settings.ROUTER_SECRETS_DIR:
+        return ''
+    return os.path.join(settings.ROUTER_SECRETS_DIR, f'{router_id}.txt')
+
+
 def secret_file_writable(path: str) -> bool:
     """True if write_secret_file(path, ...) can succeed — checked up front so
     the Settings API can refuse cleanly (503 + explanation) instead of hitting

@@ -1,1 +1,0 @@
-fidelity: synthetic, shaped after the OPNsense API reference (core/firmware, diagnostics/interface/getArp, dhcpv4/leases). Basic auth key=sim-key secret=sim-secret. verify field names on a real box (OPNsense VM).

@@ -106,7 +106,7 @@ for this plan, so those default to WireMock.
 ## 1.3 WireMock plan (where no simulator exists)
 
 Existing state: `wiremock/` holds `mappings/01-hosts.json` and two
-`__files__`; its README describes `login.json`, `queries.json` and
+`__files`; its README describes `login.json`, `queries.json` and
 `router_info.json`, which do not exist in the tree — the README and tree have
 drifted. Fix that as part of Phase 0.
 
@@ -117,7 +117,7 @@ drifted. Fix that as part of Phase 0.
 wiremock/
   README.md
   mappings/<router-id>/…     # sagemcom-xmo, miwifi-stok, unifi-network, opnsense-rest, …
-  __files__/<router-id>/…
+  __files/<router-id>/…
 tests/simulators/<router-id>/Dockerfile   # openwrt-ubus, mikrotik-rest (real OS)
 ```
 

@@ -1,1 +1,0 @@
-fidelity: synthetic, loosely after the tplinkrouterc6u (Archer C6U/AX series) flow. RSA/AES payloads are NOT real: the stub only checks that a sign= field is present. Other generations differ. verify per generation.

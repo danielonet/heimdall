@@ -42,11 +42,14 @@ class RouterSpec:
     # ('settings', Sagemcom + MiWiFi only) or router_profiles + the
     # per-router secret file ('profile').
     credential_store: str = 'profile'
+    # Popup label overrides, e.g. OPNsense calls username/password its API key/secret.
+    field_labels: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         data = asdict(self)
         data['simulator'] = self.simulator.value
         data['fields'] = list(self.fields)
+        data['field_labels'] = dict(self.field_labels)
         return data
 
 
@@ -63,25 +66,28 @@ CATALOG: tuple[RouterSpec, ...] = (
     ),
     RouterSpec(
         id='openwrt-ubus', label='OpenWrt (ubus)', family='OpenWrt',
-        protocol='JSON-RPC 2.0 /ubus', simulator=SimulatorKind.DOCKER,
+        protocol='JSON-RPC 2.0 /ubus', simulator=SimulatorKind.DOCKER, implemented=True,
         default_username='root', default_port=80,
     ),
     RouterSpec(
         id='mikrotik-rest', label='MikroTik RouterOS 7 (REST)', family='MikroTik',
-        protocol='HTTPS REST, Basic auth', simulator=SimulatorKind.DOCKER,
+        protocol='HTTPS REST, Basic auth', simulator=SimulatorKind.DOCKER, implemented=True,
         default_username='admin', default_port=443,
     ),
     RouterSpec(
         id='unifi-network', label='Ubiquiti UniFi Network', family='Ubiquiti',
-        protocol='HTTPS REST, cookie session', simulator=SimulatorKind.WIREMOCK, default_port=443,
+        protocol='HTTPS REST, cookie session', simulator=SimulatorKind.WIREMOCK, implemented=True,
+        fields=('host', 'username', 'password'), default_port=443,
     ),
     RouterSpec(
         id='opnsense-rest', label='OPNsense', family='OPNsense',
-        protocol='HTTPS REST, API key + secret', simulator=SimulatorKind.WIREMOCK, default_port=443,
+        protocol='HTTPS REST, API key + secret', simulator=SimulatorKind.WIREMOCK, implemented=True,
+        default_port=443, field_labels={'username': 'API KEY', 'password': 'API SECRET'},
     ),
     RouterSpec(
         id='pfsense-rest', label='pfSense (REST API package)', family='pfSense',
-        protocol='HTTPS REST, API key', simulator=SimulatorKind.WIREMOCK, default_port=443,
+        protocol='HTTPS REST, API key', simulator=SimulatorKind.WIREMOCK, implemented=True,
+        fields=('host', 'password'), default_port=443, field_labels={'password': 'API KEY'},
     ),
     RouterSpec(
         id='fritzbox-tr064', label='AVM FRITZ!Box (TR-064)', family='AVM',

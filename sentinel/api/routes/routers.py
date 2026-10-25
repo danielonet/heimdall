@@ -16,7 +16,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from sentinel.adapter.catalog import CATALOG, RouterSpec, get_spec
-from sentinel.config import _read_secret_file, secret_file_writable, settings, write_secret_file
+from sentinel.config import _read_secret_file, router_secret_path, secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import RouterProfileRepository, SettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -28,16 +28,8 @@ MAX_USERNAME_LENGTH = 100
 _HOST_RE = re.compile(r'^[A-Za-z0-9.\-:\[\]]+$')  # host or IP, optional :port — no scheme/path
 
 
-def _secret_path(router_id: str) -> str:
-    """Password file for a profile-stored router. `router_id` is always a
-    catalog id (validated by the caller), so it cannot traverse out of the dir."""
-    if not settings.ROUTER_SECRETS_DIR:
-        return ''
-    return os.path.join(settings.ROUTER_SECRETS_DIR, f'{router_id}.txt')
-
-
 def _password_configured(router_id: str) -> bool:
-    path = _secret_path(router_id)
+    path = router_secret_path(router_id)
     return bool(path) and os.path.isfile(path) and bool(_read_secret_file(path))
 
 
@@ -110,7 +102,7 @@ async def save_router(router_id: str):
         return jsonify(error='password must be a string'), 400
 
     if password:
-        path = _secret_path(router_id)
+        path = router_secret_path(router_id)
         if not path:
             return jsonify(error='ROUTER_SECRETS_DIR is not configured on this deployment — password cannot be saved'), 503
         if not secret_file_writable(path):
@@ -133,7 +125,7 @@ async def remove_router(router_id: str):
     if spec.credential_store != 'profile':
         return jsonify(error=f'{router_id} is managed through the Settings API and cannot be removed here'), 400
     await RouterProfileRepository().delete(router_id)
-    path = _secret_path(router_id)
+    path = router_secret_path(router_id)
     if path and os.path.isfile(path) and secret_file_writable(path):
         write_secret_file(path, '')
     return jsonify(ok=True)

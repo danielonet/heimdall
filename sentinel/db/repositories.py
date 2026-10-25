@@ -990,6 +990,10 @@ class RouterProfileRepository:
             rows = await session.scalars(select(RouterProfile).order_by(RouterProfile.created_at))
             return list(rows)
 
+    async def get(self, router_id: str) -> RouterProfile | None:
+        async with get_session() as session:
+            return await session.get(RouterProfile, router_id)
+
     async def upsert(self, router_id: str, *, host: str | None, username: str | None) -> None:
         """Create the profile, or update only the fields that are not None."""
         async with get_session() as session:

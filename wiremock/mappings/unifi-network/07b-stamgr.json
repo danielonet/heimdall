@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/proxy/network/api/s/default/cmd/stamgr",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.cmd == 'block-sta' || @.cmd == 'unblock-sta')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "meta": {
+        "rc": "ok"
+      },
+      "data": []
+    }
+  },
+  "priority": 5
+}

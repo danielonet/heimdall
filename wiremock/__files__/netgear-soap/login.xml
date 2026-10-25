@@ -1,2 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><m:SOAPLoginResponse xmlns:m="urn:NETGEAR-ROUTER:service:DeviceConfig:1"><ResponseCode>200</ResponseCode></m:SOAPLoginResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>

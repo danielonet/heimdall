@@ -1,1 +1,0 @@
-fidelity: synthetic, shaped after pynetgear. Auth is not enforced by the stubs (any request is answered); the 401 stub only fires for non-SOAP-matching calls. verify field order of NewAttachDevice per firmware.

@@ -109,7 +109,7 @@ services:
   # never started by `docker compose up`, `--profile intermediate`, or
   # `--profile full`; only an explicit `--profile dev` brings it up.
   wiremock:
-    image: wiremock/wiremock:3.x-alpine
+    image: wiremock/wiremock:3.13.0-alpine
     profiles: ["dev"]
     ports:
       - "8080:8080"             # Admin API + stub responses

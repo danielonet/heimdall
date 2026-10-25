@@ -1,2 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><m:GetAttachDeviceResponse xmlns:m="urn:NETGEAR-ROUTER:service:DeviceInfo:1"><ResponseCode>200</ResponseCode><NewAttachDevice>2@1;192.168.1.20;laptop;AA:BB:CC:00:00:01;wireless;1000;100;--@2;192.168.1.21;nas;AA:BB:CC:00:00:02;wired;1000;100;--</NewAttachDevice></m:GetAttachDeviceResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>

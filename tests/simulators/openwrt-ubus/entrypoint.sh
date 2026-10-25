@@ -5,10 +5,13 @@
 set -e
 
 SIM_PASSWORD="${SIM_PASSWORD:-sim-password}"
-echo "root:${SIM_PASSWORD}" | chpasswd 2>/dev/null || {
-    HASH="$(openssl passwd -1 "${SIM_PASSWORD}" 2>/dev/null || true)"
-    [ -n "$HASH" ] && sed -i "s|^root:[^:]*:|root:${HASH}:|" /etc/shadow
-}
+# The rootfs image ships root with an EMPTY password, which rpcd accepts for
+# any input — so set a real one, or a "wrong password" test would pass login.
+printf '%s\n%s\n' "${SIM_PASSWORD}" "${SIM_PASSWORD}" | passwd root >/dev/null
+if grep -q '^root::' /etc/shadow; then
+    echo "FATAL: could not set the root password" >&2
+    exit 1
+fi
 
 mkdir -p /tmp/dhcp.leases.d
 cat > /tmp/dhcp.leases <<LEASES

@@ -17,5 +17,6 @@ services:
       - "8443:443"
     devices:
       - /dev/kvm
+      - /dev/net/tun
     cap_add:
       - NET_ADMIN

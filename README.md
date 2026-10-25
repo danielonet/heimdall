@@ -158,23 +158,25 @@ See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification
 Pick your router family on the **Equipment** tab and add its login there (stored in a secret file, never the database).
 **Tested on real hardware** means someone ran Heimdall against that physical router; it is the only column that proves an adapter works.
 
-| Router family | Adapter | Tested on real hardware | Simulator |
-|---|---|---|---|
-| Sagemcom F@st 5670 (XMO API) | ✅ Implemented | ✅ Yes — primary, most-tested | WireMock (partial) |
-| Xiaomi / Redmi, stock MiWiFi firmware (e.g. RA67) | ✅ Implemented | ✅ Yes — optional second router | WireMock |
-| OpenWrt (ubus) | 🛠️ Planned | ❌ No | Real OpenWrt in Docker (`tests/simulators/`) |
-| MikroTik RouterOS 7 (REST) | 🛠️ Planned | ❌ No | RouterOS CHR in Docker (`tests/simulators/`) |
-| Ubiquiti UniFi Network | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| OPNsense | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| pfSense (REST API package) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| AVM FRITZ!Box (TR-064) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| ASUS / Asuswrt-Merlin | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| TP-Link Archer / Deco | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| Netgear Nighthawk / Orbi | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| Keenetic (RCI) | 🛠️ Planned | ❌ No | WireMock (synthetic) |
-| Anything else | ❌ Not yet | ❌ No | — |
+| Router family | Adapter | Tested on real hardware | Automated tests (as of 2026-10-25) | Simulator |
+|---|---|---|---|---|
+| Sagemcom F@st 5670 (XMO API) | ✅ Implemented | ✅ Yes — primary, most-tested | ✅ Unit tests | WireMock (partial) |
+| Xiaomi / Redmi, stock MiWiFi firmware (e.g. RA67) | ✅ Implemented | ✅ Yes — optional second router | ✅ Unit tests | WireMock |
+| OpenWrt (ubus) | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Tests against the real OS in Docker | Real OpenWrt in Docker (`tests/simulators/`) |
+| MikroTik RouterOS 7 (REST) | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Tests against the real OS in Docker | Real RouterOS CHR in Docker (`tests/simulators/`) |
+| Ubiquiti UniFi Network | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
+| OPNsense | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
+| pfSense (REST API package) | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
+| AVM FRITZ!Box (TR-064) | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| ASUS / Asuswrt-Merlin | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| TP-Link Archer / Deco | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| Netgear Nighthawk / Orbi | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| Keenetic (RCI) | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
+| Anything else | ❌ Not yet | ❌ No | — | — |
 
-"Planned" routers can already be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. Their simulators are hand-written from public API docs, so they prove nothing about a real device.
+**Implemented (simulator-tested only)** means the adapter builds from your Equipment-tab login and passes automated tests against a simulator — hand-written WireMock stubs for UniFi, OPNsense and pfSense, and the real OpenWrt / RouterOS operating systems running in Docker for those two — but it has never touched a physical router, so expect quirks and please report them. OpenWrt, OPNsense and pfSense cannot block or quarantine devices, and none of the implemented non-Sagemcom/Redmi routers except UniFi report per-device traffic (their APIs have no per-client counters). MikroTik can block via a firewall rule, but whether it enforces is unverified because the simulator carries no traffic. Selecting one of these as the *primary* router for threat detection is not wired into the scheduler yet.
+
+**Planned** routers can be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. The WireMock stubs are hand-written from public API docs, so they prove nothing about a real device.
 **Own one of these routers? You can help — see [Help test your router](CONTRIBUTING.md#help-test-your-router).** Roadmap: [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md); stubs: [`wiremock/`](wiremock/README.md).
 
 ---
