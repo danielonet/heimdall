@@ -39,8 +39,22 @@ Alerts and a daily security digest reach you through the dashboard, ntfy push or
 
 > **Status: alpha.** Built and tested on one home network with the routers listed under [Supported routers](#supported-routers). It monitors and can block devices on your LAN — read [Known, documented limits](#known-documented-limits) and [`SECURITY.md`](SECURITY.md) before relying on it. No router? Try it with the built-in [mock router](MOCK-ROUTER-SETUP.md). Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-<!-- TODO: add a dashboard screenshot/GIF here, e.g. docs/images/dashboard.png (scrub MACs/SSIDs first):
-![Heimdall dashboard](docs/images/dashboard.png) -->
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="Heimdall dashboard: connected hosts, bandwidth, open alerts, service status and router ports" width="900">
+</p>
+<p align="center"><sub>The live dashboard (demo data).</sub></p>
+
+---
+
+## Screenshots
+
+All screenshots use synthetic demo data — no real devices, addresses or network names.
+
+| | |
+|---|---|
+| ![Network map](docs/images/map.png)<br>**Network map** — devices by urgency (distance from centre) and AP segment (angle) | ![Devices](docs/images/devices.png)<br>**Devices** — inventory with traffic, signal, trust and block controls |
+| ![Alerts](docs/images/alerts.png)<br>**Alerts** — grouped by device and type, with ack / resolve | ![Threat intel](docs/images/threats.png)<br>**Threats** — feed status, URLhaus key setup, IP reputation lookup |
+| ![Equipment](docs/images/equipment.png)<br>**Equipment** — router details, credentials, primary-router and sniffing-interface settings | |
 
 ---
 
