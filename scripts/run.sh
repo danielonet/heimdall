@@ -158,7 +158,7 @@ for svc in "${SERVICES_TO_START[@]}"; do
         log_skip "Docker service: $svc (already running)"
     else
         log_info "Starting $svc..."
-        docker_compose up -d "$svc"
+        compose_up "$svc"
         log_success "Started $svc"
     fi
 done

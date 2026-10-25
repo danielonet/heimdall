@@ -100,6 +100,24 @@ docker_compose() {
     fi
 }
 
+# compose_up SERVICE...  →  `docker compose up -d`, but a host port that is
+# already taken (e.g. a native postgres/redis, or a leftover container) only
+# produces a warning instead of aborting the script. Any other failure still
+# returns non-zero.
+compose_up() {
+    local output rc=0
+    output=$(docker_compose up -d "$@" 2>&1) || rc=$?
+    [ -n "$output" ] && echo "$output"
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+    if echo "$output" | grep -qiE "port is already allocated|address already in use"; then
+        log_warn "Port already in use while starting: $* — continuing (assuming the port is served by an existing service)"
+        return 0
+    fi
+    return "$rc"
+}
+
 # ── Secrets helpers ───────────────────────────────────────────────────────────
 
 # read_secret FILE_PATH  →  prints the secret value, or empty string

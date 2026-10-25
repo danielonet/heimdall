@@ -41,7 +41,7 @@ fi
 export DB_PASS
 DB_PASS=$(read_secret "${REPO_ROOT}/secrets/db_pass.txt")
 log_info "Starting Postgres + Redis..."
-docker_compose up -d postgres redis
+compose_up postgres redis
 
 echo ""
 echo "📊 Dashboard:    http://${FRONTEND_HOST:-localhost}:5173   (FRONTEND_HOST=0.0.0.0 to reach it from another machine)"
