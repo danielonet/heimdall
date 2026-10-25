@@ -31,6 +31,8 @@ services:
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+      - ABUSECH_AUTH_KEY_FILE=/run/secrets/abusech_auth_key
+      - THREAT_FEED_CACHE_DIR=/data/feeds
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
@@ -40,18 +42,27 @@ services:
       # scripts/install.sh --tier.
       - DEPLOYMENT_TIER=${DEPLOYMENT_TIER:-full}
     secrets:
-      - router_password
       - jwt_secret
       - otx_api_key
       - db_pass
       - admin_password
-      - smtp_password
-      - miwifi_password
     depends_on:
       - postgres
       - redis
     restart: unless-stopped
     volumes:
+      # The three secrets an admin can change from the Settings tab are
+      # bind-mounted read-write at the same /run/secrets/ paths instead of
+      # going through Docker's `secrets:` (which is always read-only, so
+      # saving a password there failed with a 500). Still file-based, still
+      # never in the database or environment. scripts/install.sh creates all
+      # three files up front — if one were missing Docker would create a
+      # *directory* at that path.
+      - ./secrets/router_password.txt:/run/secrets/router_password
+      - ./secrets/smtp_password.txt:/run/secrets/smtp_password
+      - ./secrets/miwifi_password.txt:/run/secrets/miwifi_password
+      - ./secrets/abusech_auth_key.txt:/run/secrets/abusech_auth_key   # entered from the Threats tab
+      - threat-feeds:/data/feeds      # last good copy of the URLhaus export (cache)
       - ml-models:/data/models        # persist trained ML models across restarts
       - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
       - zeek-logs:/var/log/zeek:ro              # read by zeek_parser.py (dns.log/conn.log)
@@ -175,24 +186,18 @@ services:
     restart: unless-stopped
 
 secrets:
-  router_password: { file: ./secrets/router_password.txt }
   jwt_secret:      { file: ./secrets/jwt_secret.txt }
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
-  # Optional — blank is a valid value (unauthenticated/local relay). Must
-  # still exist as a file for Compose to mount it; scripts/install.sh
-  # scaffolds it empty. See sentinel/config.py's SMTP_PASSWORD_FILE.
-  smtp_password:   { file: ./secrets/smtp_password.txt }
-  # Optional second router — blank is a valid value (MiWiFi not
-  # configured). Must still exist as a file for Compose to mount it;
-  # scripts/install.sh scaffolds it empty. See sentinel/config.py's
-  # MIWIFI_PASSWORD_FILE.
-  miwifi_password: { file: ./secrets/miwifi_password.txt }
+  # router_password, smtp_password, miwifi_password and abusech_auth_key are
+  # deliberately NOT here: the Settings / Threats tabs rewrite them, so
+  # sentinel-backend bind-mounts them read-write instead (see its `volumes:`).
 
 volumes:
   pgdata:
   ml-models:
+  threat-feeds:
   suricata-logs:
   clamav-db:
   opencanary-logs:

@@ -119,3 +119,71 @@ class TestLookupIpCaching:
         service._ip_block.clear()
         second = await service.lookup_ip('198.51.100.10')
         assert second == first
+
+
+class TestUrlhausAuthKey:
+    def test_without_a_key_urlhaus_is_not_an_error_but_asks_for_one(self, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr('sentinel.security.threat_intel.FEED_URLS', {})  # no real network in tests
+        service = ThreatIntelService()
+        asyncio.run(service.refresh_feeds())
+        status = service.feed_status()['urlhaus']
+        assert status['error'] is None
+        assert status['needs_key'] is True
+        assert status['key_configured'] is False
+        assert status['entry_count'] == 0
+
+    def test_key_is_placed_in_the_export_url(self):
+        service = ThreatIntelService(abusech_auth_key='  s3cretkey  ')
+        assert service._feed_urls()['urlhaus'].endswith('/exports/s3cretkey/recent.csv')
+
+    def test_key_is_never_in_feed_status(self):
+        service = ThreatIntelService(abusech_auth_key='s3cretkey')
+        assert 's3cretkey' not in repr(service.feed_status())
+        assert service.feed_status()['urlhaus']['key_configured'] is True
+
+    def test_key_is_redacted_from_error_text(self):
+        service = ThreatIntelService(abusech_auth_key='s3cretkey')
+        assert 's3cretkey' not in service._redact("Client error for url 'https://x/exports/s3cretkey/recent.csv'")
+
+    def test_parse_handles_quoted_commas_in_urls(self):
+        service = ThreatIntelService()
+        text = '"1","2026-01-01","http://evil.example.com/a,b.exe","online"\n'
+        assert service._parse_feed('urlhaus', text) == 1
+        assert service.is_domain_malicious('evil.example.com') is True
+
+    def test_auth_key_pattern_rejects_url_breaking_characters(self):
+        from sentinel.security.threat_intel import AUTH_KEY_PATTERN
+        assert AUTH_KEY_PATTERN.match('abcDEF123456-_.~')
+        for bad in ('short', 'has/slash12345', 'has?query12345', 'has space12345', 'x' * 129, ''):
+            assert not AUTH_KEY_PATTERN.match(bad)
+
+
+class TestUrlhausCache:
+    def test_import_populates_domains_and_persists_a_cache(self, tmp_path):
+        service = ThreatIntelService(cache_dir=str(tmp_path))
+        assert service.import_urlhaus_csv(_URLHAUS_SAMPLE) == 2
+        assert service.is_domain_malicious('evil.example.com') is True
+        status = service.feed_status()['urlhaus']
+        assert status['source'] == 'import' and status['entry_count'] == 2
+
+        # A restart (new service, same cache dir) serves it immediately.
+        restarted = ThreatIntelService(cache_dir=str(tmp_path))
+        assert restarted.is_domain_malicious('bad.example.net') is True
+        assert restarted.feed_status()['urlhaus']['source'] == 'cache'
+
+    def test_import_of_a_wrong_file_is_rejected_and_keeps_the_cache(self, tmp_path):
+        import pytest
+
+        service = ThreatIntelService(cache_dir=str(tmp_path))
+        service.import_urlhaus_csv(_URLHAUS_SAMPLE)
+        with pytest.raises(ValueError):
+            service.import_urlhaus_csv('<html>not a csv</html>')
+        assert (tmp_path / 'urlhaus.csv').read_text() == _URLHAUS_SAMPLE
+
+    def test_unwritable_cache_dir_does_not_break_import(self, tmp_path):
+        blocker = tmp_path / 'file'
+        blocker.write_text('x')  # a file where the cache directory should be
+        service = ThreatIntelService(cache_dir=str(blocker / 'sub'))
+        assert service.import_urlhaus_csv(_URLHAUS_SAMPLE) == 2

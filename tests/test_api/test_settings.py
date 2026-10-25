@@ -515,6 +515,29 @@ class TestRouterCredentials:
             object.__setattr__(config_module.settings, 'ROUTER_PASSWORD_FILE', original)
             object.__setattr__(config_module.settings, 'ROUTER_PASSWORD', '')
 
+    def test_read_only_password_file_is_refused_cleanly_not_a_500(self, client, auth_headers, tmp_path):
+        """Docker-native `secrets:` mounts are read-only — the route must say
+        so (503) before touching anything, instead of failing mid-PATCH."""
+        import os
+
+        import pytest
+
+        import sentinel.config as config_module
+        if os.geteuid() == 0:
+            pytest.skip('root bypasses file permissions')
+        pw_file = tmp_path / 'router_password.txt'
+        pw_file.write_text('old\n')
+        pw_file.chmod(0o444)
+        original = config_module.settings.ROUTER_PASSWORD_FILE
+        object.__setattr__(config_module.settings, 'ROUTER_PASSWORD_FILE', str(pw_file))
+        try:
+            resp = client.patch('/api/settings', json={'router_password': 'hunter2'}, headers=auth_headers)
+            assert resp.status_code == 503
+            assert 'not writable' in resp.get_json()['error']
+            assert pw_file.read_text().strip() == 'old'
+        finally:
+            object.__setattr__(config_module.settings, 'ROUTER_PASSWORD_FILE', original)
+
 
 class TestSmtpSettings:
     def test_get_never_includes_the_password_only_whether_one_is_set(self, client):

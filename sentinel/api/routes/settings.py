@@ -13,7 +13,7 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import text
 
 from sentinel.adapter.factory import SUPPORTED_ROUTERS, miwifi_configured
-from sentinel.config import settings, write_secret_file
+from sentinel.config import secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.ml.model_store import ModelStore
@@ -159,6 +159,12 @@ async def update_settings():
             error='ROUTER_PASSWORD_FILE is not configured on this deployment — router_password '
                   'can only be changed by editing the secrets file directly and restarting.'
         ), 503
+    if change_router_password and not secret_file_writable(settings.ROUTER_PASSWORD_FILE):
+        return jsonify(
+            error=f'router_password cannot be saved: {settings.ROUTER_PASSWORD_FILE} is not writable by the backend '
+                  '(a Docker-native `secrets:` mount is read-only — bind-mount the file read-write, '
+                  'see docker-compose.yml). Edit the secrets file directly and restart instead.'
+        ), 503
 
     miwifi_ip = body.get('miwifi_ip')
     if 'miwifi_ip' in body and not isinstance(miwifi_ip, str):
@@ -173,6 +179,12 @@ async def update_settings():
         return jsonify(
             error='MIWIFI_PASSWORD_FILE is not configured on this deployment — miwifi_password '
                   'can only be changed by editing the secrets file directly and restarting.'
+        ), 503
+    if change_miwifi_password and not secret_file_writable(settings.MIWIFI_PASSWORD_FILE):
+        return jsonify(
+            error=f'miwifi_password cannot be saved: {settings.MIWIFI_PASSWORD_FILE} is not writable by the backend '
+                  '(a Docker-native `secrets:` mount is read-only — bind-mount the file read-write, '
+                  'see docker-compose.yml). Edit the secrets file directly and restart instead.'
         ), 503
 
     active_router = body.get('active_router')
@@ -209,6 +221,12 @@ async def update_settings():
         return jsonify(
             error='SMTP_PASSWORD_FILE is not configured on this deployment — smtp_password '
                   'can only be changed by editing the secrets file directly and restarting.'
+        ), 503
+    if change_smtp_password and not secret_file_writable(settings.SMTP_PASSWORD_FILE):
+        return jsonify(
+            error=f'smtp_password cannot be saved: {settings.SMTP_PASSWORD_FILE} is not writable by the backend '
+                  '(a Docker-native `secrets:` mount is read-only — bind-mount the file read-write, '
+                  'see docker-compose.yml). Edit the secrets file directly and restart instead.'
         ), 503
 
     if 'auto_block_on_threat' in body and not isinstance(body.get('auto_block_on_threat'), bool):

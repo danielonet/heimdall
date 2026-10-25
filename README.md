@@ -82,7 +82,7 @@ A signature-based IDS, running as a sidecar and tailed into Heimdall's own alert
 
 ### Threat intelligence
 
-Nightly-refreshed IP/domain reputation feeds — **Feodo Tracker** (botnet C2 IPs), **Tor exit nodes**, **Spamhaus DROP** (hijacked/spam netblocks), and **URLhaus** (malware-hosting domains) — plus on-demand IP lookups via **AlienVault OTX**.
+Nightly-refreshed IP/domain reputation feeds — **Feodo Tracker** (botnet C2 IPs), **Tor exit nodes**, **Spamhaus DROP** (hijacked/spam netblocks), and **URLhaus** (malware-hosting domains; needs a free [abuse.ch](https://auth.abuse.ch/) key you paste into the Threats tab — or import a URLhaus CSV until then) — plus on-demand IP lookups via **AlienVault OTX**.
 
 ### Honeypot
 
@@ -215,6 +215,8 @@ docker compose --profile full up -d         # full
 
 Use whichever matches the tier you installed — `install.sh` prints the
 exact command at the end of step 1.
+
+The backend container applies the database migrations itself on every start (`python -m sentinel.db.migrate`), so there is no separate schema step. Dev mode (`run.sh`/`dev.sh`) runs `alembic upgrade head` for you.
 
 Dashboard: `http://<host-ip>:3000` — log in with `admin` / the password you put in `secrets/admin_password.txt`.
 

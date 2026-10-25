@@ -355,3 +355,16 @@ __pycache__/
 node_modules/
 dist/
 ```
+
+
+## Runtime-writable secrets
+
+The Settings tab can change the router, MiWiFi and SMTP passwords, and the Threats tab saves the abuse.ch Auth-Key (`abusech_auth_key`). Docker's
+native `secrets:` mount is always read-only, so those three files are instead
+**bind-mounted read-write** into `sentinel-backend` at their usual
+`/run/secrets/<name>` paths (`./secrets/<name>.txt:/run/secrets/<name>`). They
+are still plain files — never stored in the database or passed through the
+environment. The installer creates all three up front (a missing bind-mount
+source would make Docker create a directory there). `jwt_secret`, `otx_api_key`,
+`admin_password` and `db_pass` stay read-only Docker secrets. If a password file
+is not writable the API answers 503 with an explanation rather than a 500.

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from sentinel.db.models import (
     Alert,
+    AppSettings,
     Device,
     DnsQuery,
     PortStats,
@@ -170,3 +171,18 @@ class TestWanStatusHistory:
         fetched = await db_session.get(WanStatusHistory, entry.id)
         assert fetched.status == 'DOWN'
         assert fetched.changed_at is not None  # server default
+
+
+class TestAppSettings:
+    async def test_first_insert_uses_database_defaults(self, db_session):
+        """A fresh install has no singleton row; creating it must not send
+        explicit NULLs for the NOT NULL ... DEFAULT columns (regression: the
+        wifi_* array columns lacked a model-side server_default)."""
+        row = AppSettings(id=1)
+        db_session.add(row)
+        await db_session.flush()
+        await db_session.refresh(row)
+
+        assert row.wifi_protected_ssids == []
+        assert row.wifi_trusted_bssids == []
+        assert row.ml_learning_period_hours == 72

@@ -92,6 +92,7 @@ DB_PASS=$(read_secret "${REPO_ROOT}/secrets/db_pass.txt")
 JWT_SECRET_FILE="${REPO_ROOT}/secrets/jwt_secret.txt"
 ROUTER_PASSWORD_FILE="${REPO_ROOT}/secrets/router_password.txt"
 OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
+ABUSECH_AUTH_KEY_FILE="${REPO_ROOT}/secrets/abusech_auth_key.txt"
 ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
 SMTP_PASSWORD_FILE="${REPO_ROOT}/secrets/smtp_password.txt"
 MIWIFI_PASSWORD_FILE="${REPO_ROOT}/secrets/miwifi_password.txt"
@@ -108,6 +109,7 @@ export REDIS_URL="redis://localhost:6379"
 export ROUTER_PASSWORD_FILE
 export JWT_SECRET_FILE
 export OTX_API_KEY_FILE
+export ABUSECH_AUTH_KEY_FILE
 export ADMIN_PASSWORD_FILE
 export SMTP_PASSWORD_FILE
 export MIWIFI_PASSWORD_FILE

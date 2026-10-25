@@ -31,9 +31,7 @@ COPY . ./sentinel/
 # stays fixed: the scheduler must run exactly once per process, and gunicorn
 # worker processes don't share Python state, so >1 worker would each start
 # its own competing scheduler/poll loop.
-CMD ["gunicorn", \
-     "--worker-class", "gthread", \
-     "--threads", "4", \
-     "--workers", "1", \
-     "--bind", "0.0.0.0:5000", \
-     "sentinel.api.app:create_app()"]
+# Apply Alembic migrations first (retrying while Postgres comes up), then
+# exec gunicorn so it is PID 1 and receives stop signals. See
+# sentinel/db/migrate.py for why this isn't just `alembic upgrade head`.
+CMD ["sh", "-c", "python -m sentinel.db.migrate && exec gunicorn --worker-class gthread --threads 4 --workers 1 --bind 0.0.0.0:5000 'sentinel.api.app:create_app()'"]

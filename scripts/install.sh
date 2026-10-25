@@ -292,6 +292,17 @@ else
     log_skip "secrets/otx_api_key.txt"
 fi
 
+# abuse.ch Auth-Key: optional. abuse.ch retired anonymous downloads, so the
+# URLhaus feed needs a free key (https://auth.abuse.ch/); blank just disables
+# that one feed. Compose still requires the file to exist to mount it.
+if [ ! -f "${SECRETS_DIR}/abusech_auth_key.txt" ]; then
+    touch "${SECRETS_DIR}/abusech_auth_key.txt"
+    chmod 600 "${SECRETS_DIR}/abusech_auth_key.txt"
+    log_success "Created empty secrets/abusech_auth_key.txt (optional — free key from https://auth.abuse.ch/ enables the URLhaus feed)"
+else
+    log_skip "secrets/abusech_auth_key.txt"
+fi
+
 # SMTP password: optional, blank is a valid final value (unauthenticated/
 # local relay) — unlike the placeholders above, an empty file here is a
 # real working state, not a "fill this in" prompt. Compose still requires
@@ -423,7 +434,7 @@ log_section "Install Complete"
 echo ""
 echo "  Next steps:"
 echo "  1. Edit ${BOLD}secrets/router_password.txt${NC} with your router admin password"
-echo "  2. Edit ${BOLD}secrets/otx_api_key.txt${NC} with your AlienVault OTX key (optional)"
+echo "  2. Edit ${BOLD}secrets/otx_api_key.txt${NC} with your AlienVault OTX key, and ${BOLD}secrets/abusech_auth_key.txt${NC} with a free abuse.ch Auth-Key for the URLhaus feed (both optional)"
 echo "  3. Edit ${BOLD}.env${NC} — set SNIFF_IFACE to your LAN interface (ip link show)"
 case "$TIER" in
     minimal)      _compose_cmd="docker compose up -d" ;;

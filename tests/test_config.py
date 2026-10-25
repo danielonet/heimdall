@@ -1,4 +1,4 @@
-from sentinel.config import write_secret_file
+from sentinel.config import secret_file_writable, write_secret_file
 
 import pytest
 
@@ -24,3 +24,25 @@ class TestWriteSecretFile:
     def test_blank_path_raises(self):
         with pytest.raises(ValueError):
             write_secret_file('', 'value')
+
+
+class TestSecretFileWritable:
+    def test_blank_path_is_not_writable(self):
+        assert secret_file_writable('') is False
+
+    def test_existing_writable_file(self, tmp_path):
+        f = tmp_path / 'secret.txt'
+        f.write_text('x')
+        assert secret_file_writable(str(f)) is True
+
+    def test_missing_file_in_writable_directory(self, tmp_path):
+        assert secret_file_writable(str(tmp_path / 'new_secret.txt')) is True
+
+    def test_read_only_file(self, tmp_path):
+        import os
+        if os.geteuid() == 0:
+            pytest.skip('root bypasses file permissions')
+        f = tmp_path / 'secret.txt'
+        f.write_text('x')
+        f.chmod(0o444)
+        assert secret_file_writable(str(f)) is False

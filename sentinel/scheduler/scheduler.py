@@ -197,6 +197,8 @@ class SentinelScheduler:
         device_archive_sweep_interval_s: int,
         security_digest_cron: str,
         deployment_tier: str = 'full',
+        abusech_auth_key: str = '',
+        threat_feed_cache_dir: str = '',
     ) -> None:
         self._tier = deployment_tier
         self._tier_services = services_for_tier(deployment_tier)
@@ -214,6 +216,8 @@ class SentinelScheduler:
         # — see _is_own_host()/_raise_threat_alert's self-block safeguard.
         self._local_ips: set[str] = set()
         self._otx_api_key = otx_api_key
+        self._abusech_auth_key = abusech_auth_key
+        self._threat_feed_cache_dir = threat_feed_cache_dir
         self._nmap_scan_cron = nmap_scan_cron
         self._threat_feed_refresh_cron = threat_feed_refresh_cron
         self._data_retention_cron = data_retention_cron
@@ -395,7 +399,9 @@ class SentinelScheduler:
         self._correlator = CrossAlertCorrelator()
         self._identity_linker = DeviceIdentityLinker()
         self._liveness_probe = ArpLivenessProbe(self._sniff_iface)
-        self._threat_intel = ThreatIntelService(self._otx_api_key)
+        self._threat_intel = ThreatIntelService(
+            self._otx_api_key, self._abusech_auth_key, self._threat_feed_cache_dir
+        )
         self._scanner = NetworkScanner()
         self._arp_watcher = ArpWatcher(self._on_arp_alert, self._sniff_iface)
         self._dhcp_watcher = DhcpWatcher(self._on_dhcp_alert, self._sniff_iface, self._router_ip)
@@ -2675,6 +2681,8 @@ def init_scheduler(app: Flask) -> None:
         ml_retrain_cron=app.config['ML_RETRAIN_CRON'],
         sniff_iface=app.config['SNIFF_IFACE'],
         otx_api_key=app.config['OTX_API_KEY'],
+        abusech_auth_key=app.config.get('ABUSECH_AUTH_KEY', ''),
+        threat_feed_cache_dir=app.config.get('THREAT_FEED_CACHE_DIR', ''),
         nmap_scan_cron=app.config['NMAP_SCAN_CRON'],
         threat_feed_refresh_cron=app.config['THREAT_FEED_REFRESH_CRON'],
         data_retention_cron=app.config['DATA_RETENTION_CRON'],

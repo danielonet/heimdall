@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ARRAY, TIMESTAMP, BigInteger, Boolean, Float, Integer, String, Text, func
+from sqlalchemy import ARRAY, TIMESTAMP, BigInteger, Boolean, Float, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -253,11 +253,15 @@ class AppSettings(Base):
     # wifi_trusted_bssids below — normally just your own network name(s).
     # Empty list = watcher runs (if wifi_monitor_iface is set) but can never
     # alert, since nothing is protected yet.
-    wifi_protected_ssids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # server_default mirrors the migration's `NOT NULL DEFAULT '{}'` — without
+    # it SQLAlchemy sends an explicit NULL on INSERT, which the NOT NULL
+    # column rejects (every write on a fresh install, where the singleton row
+    # doesn't exist yet and is created by SettingsRepository's first write).
+    wifi_protected_ssids: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'"))
     # The real BSSIDs of your own access points broadcasting the SSIDs
     # above — a beacon for a protected SSID from any OTHER BSSID is the
     # rogue-AP signal. See WifiMonitorWatcher._process.
-    wifi_trusted_bssids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    wifi_trusted_bssids: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'"))
 
 
 class WifiSighting(Base):

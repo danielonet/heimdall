@@ -11,6 +11,17 @@ class TestFeedStatus:
         assert resp.status_code == 503
 
 
+class TestUrlhausSetup:
+    def test_key_import_and_remove_need_a_login(self, client):
+        assert client.put('/api/threats/feeds/urlhaus/key', json={'auth_key': 'abcdefgh1234'}).status_code == 401
+        assert client.delete('/api/threats/feeds/urlhaus/key').status_code == 401
+        assert client.post('/api/threats/feeds/urlhaus/import').status_code == 401
+
+    def test_return_503_without_running_scheduler(self, client, auth_headers):
+        resp = client.put('/api/threats/feeds/urlhaus/key', json={'auth_key': 'abcdefgh1234'}, headers=auth_headers)
+        assert resp.status_code == 503
+
+
 class TestLookupIp:
     def test_returns_503_without_running_scheduler(self, client):
         resp = client.get('/api/threats/lookup/198.51.100.10')

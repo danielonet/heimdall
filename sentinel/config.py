@@ -32,6 +32,20 @@ def write_secret_file(path: str, value: str) -> None:
         f.write(value.strip() + '\n')
 
 
+def secret_file_writable(path: str) -> bool:
+    """True if write_secret_file(path, ...) can succeed — checked up front so
+    the Settings API can refuse cleanly (503 + explanation) instead of hitting
+    an OSError halfway through applying a multi-field PATCH. An existing file
+    must itself be writable; a missing one needs a writable parent directory.
+    A Docker-native `secrets:` mount is read-only, so this is False there.
+    """
+    if not path:
+        return False
+    if os.path.exists(path):
+        return os.access(path, os.W_OK)
+    return os.access(os.path.dirname(path) or '.', os.W_OK)
+
+
 class Settings(BaseSettings):
     """Application configuration.
 
@@ -144,6 +158,14 @@ class Settings(BaseSettings):
 
     # ── Security services ─────────────────────────────────────────────────────
     OTX_API_KEY: str = ''          # populated from OTX_API_KEY_FILE if blank
+    # abuse.ch retired anonymous downloads (URLhaus now answers 410 Gone) —
+    # a free Auth-Key from https://auth.abuse.ch/ is required. Blank = the
+    # URLhaus feed is skipped with an explanatory status, not an error.
+    ABUSECH_AUTH_KEY: str = ''     # populated from ABUSECH_AUTH_KEY_FILE if blank
+    ABUSECH_AUTH_KEY_FILE: str = ''  # also the write target for PUT /api/threats/feeds/urlhaus/key
+    # Where the last good copy of the URLhaus export is kept (a persisted
+    # Docker volume). Empty/unwritable = no cache, feed starts empty.
+    THREAT_FEED_CACHE_DIR: str = '/data/feeds'
     SNIFF_IFACE: str = 'eth0'
     NMAP_SCAN_CRON: str = '0 2 * * *'          # 02:00 daily
     THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
@@ -261,6 +283,9 @@ class Settings(BaseSettings):
             path = os.environ.get('OTX_API_KEY_FILE', '')
             if path:
                 object.__setattr__(self, 'OTX_API_KEY', _read_secret_file(path))
+
+        if not self.ABUSECH_AUTH_KEY and self.ABUSECH_AUTH_KEY_FILE:
+            object.__setattr__(self, 'ABUSECH_AUTH_KEY', _read_secret_file(self.ABUSECH_AUTH_KEY_FILE))
 
         if not self.ADMIN_PASSWORD:
             path = os.environ.get('ADMIN_PASSWORD_FILE', '')
