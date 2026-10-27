@@ -10,7 +10,7 @@ export default defineConfig({
     starlight({
       title: 'Heimdall manual',
       description: 'How to use the Heimdall dashboard.',
-      favicon: '/favicon.svg',
+      favicon: '/images/heimdall.png',
       // The product is dark-only; the palette toggle replaces Starlight's theme select.
       components: { ThemeSelect: './src/components/PaletteToggle.astro', SiteTitle: './src/components/ManualTitle.astro' },
       customCss: ['@fontsource/jetbrains-mono/400.css', '@fontsource/jetbrains-mono/700.css', '@fontsource/rajdhani/600.css', '@fontsource/rajdhani/700.css', './src/styles/tokens.css', './src/styles/starlight.css'],

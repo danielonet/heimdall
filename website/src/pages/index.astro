@@ -4,14 +4,21 @@ import Terminal from '../components/Terminal.astro';
 import Flow from '../components/Flow.astro';
 import routers from '../data/routers.json';
 import { homeTabs } from '../data/commands';
+import { Image } from 'astro:assets';
+import logo from '../assets/heimdall.png';
 
 const chip = (r: (typeof routers)[number]) => !r.implemented ? ['off', 'planned'] : r.hardware ? ['ok', 'tested'] : r.id === 'passive' ? ['info', 'any router'] : ['info', 'simulator'];
 ---
 <Base title="Heimdall — home network sentinel" description="Self-hosted security and network operations for the LAN you own. Install with one command." current="">
   <div class="wrap hero">
-    <div class="eyebrow">Self-hosted · open source · for the LAN you own</div>
-    <h1>A home SOC and NOC<br>in one box.</h1>
-    <p class="lede">Heimdall finds every device on your network, learns what is normal for each one, and alerts you to what is not. It runs on a spare machine as a Docker stack and never leaves your LAN.</p>
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">Self-hosted · open source · for the LAN you own</div>
+        <h1>A home SOC and NOC<br>in one box.</h1>
+        <p class="lede">Heimdall finds every device on your network, learns what is normal for each one, and alerts you to what is not. It runs on a spare machine as a Docker stack and never leaves your LAN.</p>
+      </div>
+      <Image src={logo} width={256} height={256} alt="Heimdall, the watchman of the gods, in gold on dark" class="hero-logo" loading="eager" />
+    </div>
     <Terminal id="home" tabs={homeTabs} />
     <div class="after-links"><a href="/install/">Requirements &amp; what it changes</a><a href="/download/heimdall-bundle.tar.gz">Download bundle</a><a href="/install/#verify">Verify checksum</a><a href="https://github.com/danielonet/heimdall/blob/main/install/get-heimdall.sh">Read the script first</a></div>
     <p class="faint small">minimal = core stack · intermediate = + honeypot · full = + Zeek, ClamAV, Suricata (about 4 GB RAM). Installs to <code>~/heimdall</code>; does not touch your router.</p>

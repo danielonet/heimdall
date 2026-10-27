@@ -37,7 +37,8 @@
 .site-link { color: var(--primary); text-decoration: none; }
 h1, h2, h3, h4 { font-family: 'Rajdhani', 'Arial Narrow', system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; }
 .sl-markdown-content code:not(pre code) { background: var(--surface-2); border: 1px solid var(--border); }
-.manual-title { font-family: var(--nordic, 'MedievalSharp', serif); letter-spacing: .1em; text-transform: uppercase; color: var(--primary); text-decoration: none; font-size: 1.2rem; }
+.manual-title { display: inline-flex; align-items: center; gap: 10px; font-family: var(--nordic, 'MedievalSharp', serif); letter-spacing: .1em; text-transform: uppercase; color: var(--primary); text-decoration: none; font-size: 1.2rem; }
 .palette-toggle { font: inherit; font-size: 12px; background: transparent; color: var(--text-2); border: 1px solid var(--border); padding: 5px 10px; cursor: pointer; letter-spacing: .08em; text-transform: uppercase; }
 .palette-toggle:hover { border-color: var(--border-hi); color: var(--text); }
 .site-link { margin-inline-start: 1rem; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+.manual-logo { width: 28px; height: 28px; border-radius: 50%; display: block; }

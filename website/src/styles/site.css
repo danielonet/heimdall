@@ -173,3 +173,12 @@ footer a { color: var(--text-2); }
 .fbtn[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
 .docs article h1 { margin-bottom: .3em; }
 tr[hidden] { display: none; }
+
+.logo { display: inline-flex; align-items: center; gap: 10px; }
+.logo-img { width: 34px; height: 34px; border-radius: 50%; display: block; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 40px; align-items: center; }
+.hero-logo { width: 256px; height: 256px; border-radius: 50%; box-shadow: 0 0 0 1px var(--border-hi), 0 0 48px color-mix(in srgb, var(--primary) 22%, transparent); }
+@media (max-width: 760px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 20px; }
+  .hero-logo { order: -1; width: 112px; height: 112px; }
+}

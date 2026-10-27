@@ -6,6 +6,8 @@ import '@fontsource/rajdhani/700.css';
 import '@fontsource/medievalsharp/400.css';
 import '../styles/tokens.css';
 import '../styles/site.css';
+import { Image, getImage } from 'astro:assets';
+import logo from '../assets/heimdall.png';
 
 interface Props { title: string; description: string; current?: string; }
 const { title, description, current = '' } = Astro.props;
@@ -14,6 +16,7 @@ const nav = [
   ['/equipment/', 'Equipment'], ['/contribute/', 'Contribute'], ['https://github.com/danielonet/heimdall', 'GitHub'],
 ];
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const favicon = await getImage({ src: logo, width: 64, height: 64, format: 'png' });
 ---
 <!doctype html>
 <html lang="en" data-palette="amber">
@@ -23,7 +26,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
   <title>{title}</title>
   <meta name="description" content={description}>
   <link rel="canonical" href={canonical}>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href={favicon.src} type="image/png">
   <meta property="og:title" content={title}>
   <meta property="og:description" content={description}>
   <meta property="og:type" content="website">
@@ -32,7 +35,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="topbar"><div class="wrap">
-    <a class="logo" href="/">◈ Heimdall</a>
+    <a class="logo" href="/"><Image src={logo} width={34} height={34} alt="" class="logo-img" />Heimdall</a>
     <nav class="nav" aria-label="Main">
       {nav.map(([href, label]) => <a href={href} aria-current={current === label ? 'page' : undefined}>{label}</a>)}
     </nav>
