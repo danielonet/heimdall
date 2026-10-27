@@ -1,0 +1,43 @@
+/* Maps the product tokens onto Starlight's variables so /manual looks like the dashboard. */
+:root {
+  --sl-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  color-scheme: dark;
+}
+:root, :root[data-theme='dark'], :root[data-theme='light'] {
+  --sl-color-black: var(--bg);
+  --sl-color-gray-6: var(--surface);
+  --sl-color-gray-5: var(--surface-2);
+  --sl-color-gray-4: var(--text-3);
+  --sl-color-gray-3: var(--text-2);
+  --sl-color-gray-2: var(--text);
+  --sl-color-gray-1: var(--text);
+  --sl-color-white: var(--text);
+  --sl-color-bg: var(--bg);
+  --sl-color-bg-nav: var(--surface);
+  --sl-color-bg-sidebar: var(--surface);
+  --sl-color-hairline: var(--border);
+  --sl-color-hairline-light: var(--border);
+  --sl-color-hairline-shade: var(--border);
+  --sl-color-text: var(--text);
+  --sl-color-text-accent: var(--primary);
+  --sl-color-accent: var(--primary);
+  --sl-color-accent-low: var(--surface-2);
+  --sl-color-accent-high: var(--warn);
+  --sl-color-bg-accent: var(--primary);
+  --sl-color-text-invert: var(--on-primary);
+  /* Aside colours: note = info, tip = primary, caution = warn, danger = crit. */
+  --sl-color-blue-low: var(--surface-2);   --sl-color-blue: var(--info);    --sl-color-blue-high: var(--text);
+  --sl-color-green-low: var(--surface-2);  --sl-color-green: var(--primary); --sl-color-green-high: var(--text);
+  --sl-color-orange-low: var(--surface-2); --sl-color-orange: var(--warn);   --sl-color-orange-high: var(--text);
+  --sl-color-red-low: var(--surface-2);    --sl-color-red: var(--crit);      --sl-color-red-high: var(--text);
+  --sl-color-purple-low: var(--surface-2); --sl-color-purple: var(--info);   --sl-color-purple-high: var(--text);
+}
+.sl-markdown-content a:not(.sl-link-button) { color: var(--primary); }
+.site-link { color: var(--primary); text-decoration: none; }
+h1, h2, h3, h4 { font-family: 'Rajdhani', 'Arial Narrow', system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; }
+.sl-markdown-content code:not(pre code) { background: var(--surface-2); border: 1px solid var(--border); }
+.manual-title { font-family: var(--nordic, 'MedievalSharp', serif); letter-spacing: .1em; text-transform: uppercase; color: var(--primary); text-decoration: none; font-size: 1.2rem; }
+.palette-toggle { font: inherit; font-size: 12px; background: transparent; color: var(--text-2); border: 1px solid var(--border); padding: 5px 10px; cursor: pointer; letter-spacing: .08em; text-transform: uppercase; }
+.palette-toggle:hover { border-color: var(--border-hi); color: var(--text); }
+.site-link { margin-inline-start: 1rem; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }

@@ -1,0 +1,123 @@
+name: Website
+
+# Builds the site on every change to it, and deploys main to heimdall.it.com over SSH.
+# One-time setup (secrets, deploy key, host key): website/README.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'docs/images/**'
+      - 'docs/router/equipment-facts.json'
+      - 'frontend/src/index.css'
+      - 'sentinel/adapter/catalog.py'
+      - 'install/get-heimdall.sh'
+      - '.github/workflows/website.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'docs/images/**'
+      - 'docs/router/equipment-facts.json'
+      - 'frontend/src/index.css'
+      - 'sentinel/adapter/catalog.py'
+      - 'install/get-heimdall.sh'
+      - '.github/workflows/website.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        working-directory: website
+        run: npm ci
+      - name: Build
+        working-directory: website
+        run: npm run build
+      - name: Check shell snippets on the install page
+        run: |
+          grep -ho 'curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=[a-z]*' website/dist/install/index.html | sort -u
+          cmp website/public/install.sh install/get-heimdall.sh
+      - name: Check internal links
+        working-directory: website
+        run: python3 scripts/check-links.py dist
+      - name: Check the built site for private data
+        working-directory: website
+        run: python3 scripts/check-private.py dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: website/dist
+          retention-days: 7
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+
+      - name: Prepare SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_SSH_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] || { echo "::error::DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS must be set (website/README.md)"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Upload
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_PATH" in /?*/?*|[!/]?*) ;; *) echo "::error::DEPLOY_PATH looks unsafe: '$DEPLOY_PATH'"; exit 1 ;; esac
+          # --delete keeps the site an exact copy of the build; /apt/ is reserved for the package repository
+          # and is never touched. --delay-updates swaps files in at the end so visitors never see a half-upload.
+          rsync -rlptz --delete --delay-updates --exclude='/apt/' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT:-22} -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes" \
+            dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH%/}/"
+
+      - name: Smoke test the live site
+        run: |
+          set -euo pipefail
+          base=https://heimdall.it.com
+          fail() { echo "::error::$*"; exit 1; }
+          headers=$(curl -fsSI "$base/") || fail "site does not answer over HTTPS"
+          echo "$headers" | grep -qi '^strict-transport-security:' || fail "HSTS header missing (.htaccess not applied: is mod_headers enabled?)"
+          echo "$headers" | grep -qi '^content-security-policy:' || fail "CSP header missing"
+          curl -fsSI "$base/install.sh" | grep -qi '^content-type: text/plain' || fail "/install.sh is not served as text/plain"
+          curl -fsS "$base/install.sh" | cmp - install/get-heimdall.sh || fail "/install.sh differs from install/get-heimdall.sh"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/download/heimdall_all.deb")
+          [ "$code" = 302 ] || fail "/download/heimdall_all.deb should redirect (got $code; no release yet?)"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://heimdall.it.com/)
+          [ "$code" = 301 ] || fail "plain HTTP should redirect to HTTPS (got $code)"

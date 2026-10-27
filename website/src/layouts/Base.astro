@@ -1,0 +1,52 @@
+---
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/700.css';
+import '@fontsource/rajdhani/600.css';
+import '@fontsource/rajdhani/700.css';
+import '@fontsource/medievalsharp/400.css';
+import '../styles/tokens.css';
+import '../styles/site.css';
+
+interface Props { title: string; description: string; current?: string; }
+const { title, description, current = '' } = Astro.props;
+const nav = [
+  ['/install/', 'Install'], ['/manual/', 'Manual'], ['/security/', 'Security'],
+  ['/equipment/', 'Equipment'], ['/contribute/', 'Contribute'], ['https://github.com/danielonet/heimdall', 'GitHub'],
+];
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang="en" data-palette="amber">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <meta name="description" content={description}>
+  <link rel="canonical" href={canonical}>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta property="og:title" content={title}>
+  <meta property="og:description" content={description}>
+  <meta property="og:type" content="website">
+  <script is:inline>try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}</script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar"><div class="wrap">
+    <a class="logo" href="/">◈ Heimdall</a>
+    <nav class="nav" aria-label="Main">
+      {nav.map(([href, label]) => <a href={href} aria-current={current === label ? 'page' : undefined}>{label}</a>)}
+    </nav>
+    <button class="toggle" type="button" data-palette-toggle aria-label="Switch colour palette">◐ Slate</button>
+  </div></header>
+  <div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="/security/limits/">Read the limits</a> before relying on it.</span></div></div>
+  <main id="main"><slot /></main>
+  <footer><div class="wrap">
+    <span>MIT licence · <a href="https://github.com/danielonet/heimdall/blob/main/SECURITY.md">SECURITY.md</a> · <a href="https://github.com/danielonet/heimdall">GitHub</a> · <a href="https://github.com/danielonet/heimdall/discussions">Discussions</a> · <a href="/about/">About</a></span>
+    <span>heimdall.it.com · no trackers, no cookies</span>
+  </div></footer>
+  <script>
+    import '../scripts/palette';
+    import '../scripts/site';
+  </script>
+</body>
+</html>

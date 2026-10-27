@@ -1,0 +1,24 @@
+---
+import Base from '../../layouts/Base.astro';
+import routers from '../../data/routers.json';
+
+type R = (typeof routers)[number];
+const adapter = (r: R) => r.implemented ? ['ok', 'Implemented'] : ['off', 'Planned'];
+const hw = (r: R) => r.hardware ? ['ok', 'Tested'] : !r.implemented ? ['off', '—'] : r.id === 'passive' ? ['info', 'Checked on one LAN'] : ['info', 'Simulator only'];
+const key = (r: R) => !r.implemented ? 'planned' : r.hardware ? 'hw' : 'sim';
+const words: Record<string, string> = { yes: 'Yes', no: 'No', unverified: 'Unverified', unconfirmed: 'Unconfirmed', planned: '—' };
+const pretty = (s: string) => words[s] ?? s.charAt(0).toUpperCase() + s.slice(1);
+---
+<Base title="Supported routers — Heimdall" description="Which routers Heimdall supports, what has been tested on real hardware, and what each can and cannot do." current="Equipment">
+  <div class="wrap hero" style="padding-bottom:8px"><div class="eyebrow">Equipment</div><h1>Supported routers</h1>
+    <p class="lede">“Tested” means someone ran Heimdall against that physical router. “Simulator only” means automated tests pass against a simulator, but no real device has been tried, so expect quirks.</p></div>
+  <div class="wrap">
+    <div class="filters" role="group" aria-label="Filter"><button class="fbtn" data-filter="all" aria-pressed="true">All</button><button class="fbtn" data-filter="hw">Tested on hardware</button><button class="fbtn" data-filter="sim">Simulator only</button><button class="fbtn" data-filter="planned">Planned</button></div>
+    <div class="tablewrap"><table id="eq"><thead><tr><th>Router family</th><th>Protocol</th><th>Adapter</th><th>Real hardware</th><th>Block</th><th>Quarantine</th><th>Traffic</th></tr></thead><tbody>
+      {routers.map((r) => { const [ac, at] = adapter(r); const [hc, ht] = hw(r); return (
+        <tr data-k={key(r)}><td class="k">{r.label}</td><td>{r.protocol}</td><td><span class={`chip ${ac}`}>{at}</span></td><td><span class={`chip ${hc}`}>{ht}</span></td><td>{pretty(r.block)}</td><td>{pretty(r.quarantine)}</td><td>{pretty(r.traffic)}</td></tr>
+      ); })}
+    </tbody></table></div>
+    <p class="faint small" style="margin-top:8px">Generated from the router catalog and <code>docs/router/equipment-facts.json</code> in the source, so it cannot drift from the software. “Unverified” and “Unconfirmed” mean the code exists but has not been confirmed to work on a real device.</p>
+  </div>
+</Base>

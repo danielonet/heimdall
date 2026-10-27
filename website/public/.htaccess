@@ -1,0 +1,49 @@
+# Heimdall website: Apache configuration. Deployed with the site (website/public/.htaccess).
+# CI checks the important parts after every deploy (see .github/workflows/website.yml).
+Options -Indexes -MultiViews
+DirectoryIndex index.html
+ErrorDocument 404 /404.html
+
+# HTTPS only, on the canonical host. `curl ... | bash` must never run over plain HTTP.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteRule ^ https://heimdall.it.com%{REQUEST_URI} [L,R=301]
+
+  # Release downloads live on GitHub; the site only points at the newest one.
+  # Use the final file name in the URL: `curl -O` keeps the name it was given.
+  RewriteRule ^download/heimdall_all\.deb$            https://github.com/danielonet/heimdall/releases/latest/download/heimdall_all.deb [R=302,L]
+  RewriteRule ^download/heimdall_all\.deb\.sha256$    https://github.com/danielonet/heimdall/releases/latest/download/heimdall_all.deb.sha256 [R=302,L]
+  RewriteRule ^download/heimdall-bundle\.tar\.gz$        https://github.com/danielonet/heimdall/releases/latest/download/heimdall-bundle.tar.gz [R=302,L]
+  RewriteRule ^download/heimdall-bundle\.tar\.gz\.sha256$ https://github.com/danielonet/heimdall/releases/latest/download/heimdall-bundle.tar.gz.sha256 [R=302,L]
+</IfModule>
+
+# The install script: plain text, never cached, so a fix reaches everyone at once.
+<IfModule mod_headers.c>
+  <FilesMatch "^install\.sh(\.sha256)?$">
+    ForceType text/plain
+    Header set Cache-Control "no-store"
+  </FilesMatch>
+
+  Header always set Strict-Transport-Security "max-age=31536000"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+  # Everything is served from this origin. 'unsafe-inline' is needed for the small inline
+  # scripts and styles Astro and Starlight emit; replace with hashes when Astro's CSP support is adopted.
+  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+  # Fingerprinted assets never change; pages must revalidate.
+  <FilesMatch "\.(html|xml|txt)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  <If "%{REQUEST_URI} =~ m#^/(_astro|pagefind)/#">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </If>
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain application/javascript application/json image/svg+xml application/xml
+</IfModule>

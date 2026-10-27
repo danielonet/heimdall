@@ -41,8 +41,9 @@ class TestPackage:
             assert (built / name).is_file()
         assert (built / 'heimdall_all.deb').read_bytes() == (built / 'heimdall_9.9.9_all.deb').read_bytes()
 
-    def test_checksum_matches(self, built):
-        r = subprocess.run(['sha256sum', '-c', 'heimdall_9.9.9_all.deb.sha256'], cwd=built, capture_output=True, text=True)
+    @pytest.mark.parametrize('name', ['heimdall_9.9.9_all.deb.sha256', 'heimdall_all.deb.sha256'])
+    def test_checksum_matches(self, built, name):
+        r = subprocess.run(['sha256sum', '-c', name], cwd=built, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
     def test_control_fields(self, built):

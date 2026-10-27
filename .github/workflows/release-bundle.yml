@@ -38,4 +38,5 @@ jobs:
             "$RUNNER_TEMP"/dist/heimdall_*_all.deb \
             "$RUNNER_TEMP"/dist/heimdall_*_all.deb.sha256 \
             "$RUNNER_TEMP/dist/heimdall_all.deb" \
+            "$RUNNER_TEMP/dist/heimdall_all.deb.sha256" \
             --title "$GITHUB_REF_NAME" --generate-notes

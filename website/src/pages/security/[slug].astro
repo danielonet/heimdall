@@ -1,0 +1,33 @@
+---
+import Base from '../../layouts/Base.astro';
+import { products, groups, bySlug } from '../../data/products';
+
+export function getStaticPaths() { return products.map((p) => ({ params: { slug: p.slug }, props: { p } })); }
+const { p } = Astro.props;
+const tierChip = { minimal: 'ok', intermediate: 'info', full: 'warn' } as const;
+const tiers = ['minimal', 'intermediate', 'full'] as const;
+const on = (t: (typeof tiers)[number]) => tiers.indexOf(t) >= tiers.indexOf(p.tier);
+---
+<Base title={`${p.name} — Heimdall security`} description={p.what} current="Security">
+  <div class="wrap docs">
+    <nav class="side" aria-label="Security products">
+      <h4>Security</h4><a href="/security/">Overview</a>
+      {groups.map((g) => (<><h4>{g}</h4>{products.filter((x) => x.group === g).map((x) => <a href={`/security/${x.slug}/`} aria-current={x.slug === p.slug ? 'page' : undefined}>{x.name}</a>)}</>))}
+      <h4>Reference</h4><a href="/security/limits/">Limits</a>
+    </nav>
+    <article>
+      <div class="eyebrow">Security · {p.kind}</div><h1>{p.name}</h1>
+      <p class="muted lead">{p.what}</p>
+      <p><span class={`chip ${tierChip[p.tier]}`}>Runs in: {p.tier} tier and up</span></p>
+      <div class="block" id="sees"><h2>What it sees</h2><div><p>{p.sees}</p>{p.check && import.meta.env.DEV && <p class="faint small">[dev only] To confirm before publishing: {p.check}</p>}</div></div>
+      <div class="block" id="catches"><h2>What it catches</h2><div class="tablewrap"><table><thead><tr><th>Alert</th><th>Severity</th><th>Meaning</th></tr></thead><tbody>
+        {p.catches.map((c) => <tr><td class="k">{c.alert}</td><td><span class="chip info">{c.severity}</span></td><td>{c.meaning}</td></tr>)}
+      </tbody></table></div></div>
+      <div class="block" id="plugs"><h2>How it plugs in</h2><div class="pipe" aria-label="Alert path">{p.plugs.map((s, i) => <><span class={i === Math.floor(p.plugs.length / 2) ? 'on' : ''}>{s}</span>{i < p.plugs.length - 1 && <i>→</i>}</>)}</div></div>
+      <div class="block" id="runs"><h2>Runs in</h2><div>{tiers.map((t) => <span class={`chip ${on(t) ? tierChip[t] : 'off'}`} style="margin-right:6px">{t}</span>)}<p class="muted" style="margin-top:8px">{p.tierNote}</p></div></div>
+      <div class="block" id="limits"><h2>Limits</h2><div><div class="callout caution"><strong>Read this before relying on it</strong>These are documented, not hidden.</div><ul>{p.limits.map((l) => <li>{l}</li>)}</ul></div></div>
+      <div class="block"><h2>Related</h2><div class="pipe">{p.related.map((s) => <span><a href={`/security/${s}/`}>{bySlug(s)?.name}</a></span>)}</div></div>
+    </article>
+    <aside class="toc" aria-label="On this page"><h4>On this page</h4><a href="#sees">What it sees</a><a href="#catches">What it catches</a><a href="#plugs">How it plugs in</a><a href="#runs">Runs in</a><a href="#limits">Limits</a></aside>
+  </div>
+</Base>

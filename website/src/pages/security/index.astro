@@ -1,0 +1,21 @@
+---
+import Base from '../../layouts/Base.astro';
+import Flow from '../../components/Flow.astro';
+import { products, groups } from '../../data/products';
+const tierChip = { minimal: 'ok', intermediate: 'info', full: 'warn' } as const;
+---
+<Base title="Cyber-security capabilities — Heimdall" description="Every security product Heimdall runs, what each sees and catches, and how it plugs into the alert flow." current="Security">
+  <div class="wrap hero" style="padding-bottom:8px"><div class="eyebrow">Security</div><h1>What Heimdall does, product by product</h1>
+    <p class="lede">Sensors collect, analysers decide, one alert store holds the result, and correlation turns related alerts into one incident before anything reaches you or your router.</p></div>
+  <div class="wrap"><Flow /></div>
+  {groups.map((g) => (
+    <section><div class="wrap"><h2>{g}</h2><div class="grid g3">
+      {products.filter((p) => p.group === g).map((p) => (
+        <a class={`card ${p.tier === 'full' ? 'warn' : p.tier === 'intermediate' ? 'info' : ''}`} href={`/security/${p.slug}/`}>
+          <div class="meta">{p.kind}</div><h3>{p.name}</h3><p class="muted">{p.what}</p><span class={`chip ${tierChip[p.tier]}`}>{p.tier} tier</span>
+        </a>
+      ))}
+    </div></div></section>
+  ))}
+  <section><div class="wrap"><a class="card crit" href="/security/limits/"><h3>Known, documented limits</h3><p class="muted">What Heimdall does not do, stated up front.</p></a></div></section>
+</Base>

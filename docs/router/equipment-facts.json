@@ -1,0 +1,16 @@
+{
+  "_comment": "Facts the adapter catalog does not carry, for the website's equipment table. 'hardware' is true only when someone ran Heimdall against that physical router (README 'Supported routers'). Update together with the README; scripts/gen-routers.py fails on a catalog entry missing here.",
+  "sagemcom-xmo":  {"hardware": true,  "block": "yes",        "quarantine": "yes", "traffic": "Wi-Fi per device, wired per port"},
+  "miwifi-stok":   {"hardware": true,  "block": "unconfirmed", "quarantine": "no",  "traffic": "per device"},
+  "openwrt-ubus":  {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"},
+  "mikrotik-rest": {"hardware": false, "block": "unverified", "quarantine": "no",  "traffic": "none"},
+  "unifi-network": {"hardware": false, "block": "yes",        "quarantine": "no",  "traffic": "per device"},
+  "opnsense-rest": {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"},
+  "pfsense-rest":  {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"},
+  "asus-http":     {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"},
+  "netgear-soap":  {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"},
+  "fritzbox-tr064":{"hardware": false, "block": "planned",    "quarantine": "planned", "traffic": "planned"},
+  "tplink-router": {"hardware": false, "block": "planned",    "quarantine": "planned", "traffic": "planned"},
+  "keenetic-rci":  {"hardware": false, "block": "planned",    "quarantine": "planned", "traffic": "planned"},
+  "passive":       {"hardware": false, "block": "no",         "quarantine": "no",  "traffic": "none"}
+}

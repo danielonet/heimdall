@@ -1,0 +1,19 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="Known limits — Heimdall" description="What Heimdall does not do, stated up front." current="Security">
+  <div class="wrap hero"><div class="eyebrow">Security</div><h1>Known, documented limits</h1>
+    <p class="lede">Being upfront about what Heimdall does not do is better than letting you find out.</p>
+    <ul>
+      <li><strong>Rogue access point (“evil twin”) detection is not implemented.</strong> It needs a dedicated monitor-mode WiFi radio that this design does not provision.</li>
+      <li><strong>Incoming port scans are not detected.</strong> Heimdall’s nightly scan runs outward against devices it already knows.</li>
+      <li><strong>Encrypted DNS and TLS downloads bypass inspection.</strong> Only cleartext DNS on port 53 is inspected, and no TLS interception is configured, so encrypted downloads never reach ClamAV.</li>
+      <li><strong>Suricata’s rule set is unmanaged.</strong> Expect noise until you tune it.</li>
+      <li><strong>Wired traffic is per port, not per device</strong>, because routers only count per port. Heimdall labels it PORT TOTAL.</li>
+      <li><strong>Block and quarantine depend on your router.</strong> Many adapters cannot do either; passive mode cannot.</li>
+      <li><strong>Only two routers have been tested on real hardware.</strong> See <a href="/equipment/">the equipment table</a>.</li>
+      <li><strong>Alpha software.</strong> Built and tested on one home network.</li>
+    </ul>
+    <p class="muted">A penetration-test plan covering every capability and every gap above is in the repository: <a href="https://github.com/danielonet/heimdall/blob/main/docs/testing/heimdall_verification.md">docs/testing/heimdall_verification.md</a>.</p>
+  </div>
+</Base>

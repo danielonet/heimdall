@@ -433,6 +433,14 @@ browser, then ported.
 | **5 — Community** | AI contribution kit and `scrub_har.py` in repo, kit zip in CI, contribute pages, issue-template links; signed apt repo (the `.deb` download itself already ships with the first release) | A volunteer (or a dry run by the maintainer with a fresh assistant) produces a stub set from the kit |
 | **6 — Launch** | Lighthouse and a11y pass, final claims review, announce (GitHub README link, relevant home-lab communities) | Launch checklist complete |
 
+**Status (2026-10-27).** Phase 2 done (`docs/website/mockups/`). Phases 3 and 4 are built in `website/`:
+Astro + Starlight, 38 pages (home, install, security overview + 10 product pages + limits, equipment +
+no-router, contribute, about, home-security, 17 manual chapters), tokens and the equipment table generated
+from the code, `.htaccess`, and a CI build/deploy workflow with a post-deploy smoke test. Not yet live: needs
+the deploy secrets (`website/README.md`), DNS, and a `v0.1.0` release for the download redirects. Manual
+chapters are drafts written from the source, not yet checked against a running dashboard; Phase 1
+(facts on a running stack) is still open. Changelog and the AI kit (Phase 5) are not built.
+
 Rough order of effort: Phase 0 is the critical path and the largest unknown; the user manual is the largest
 single writing job; everything else is small.
 

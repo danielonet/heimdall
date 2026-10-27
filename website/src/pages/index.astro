@@ -1,0 +1,41 @@
+---
+import Base from '../layouts/Base.astro';
+import Terminal from '../components/Terminal.astro';
+import Flow from '../components/Flow.astro';
+import routers from '../data/routers.json';
+import { homeTabs } from '../data/commands';
+
+const chip = (r: (typeof routers)[number]) => !r.implemented ? ['off', 'planned'] : r.hardware ? ['ok', 'tested'] : r.id === 'passive' ? ['info', 'any router'] : ['info', 'simulator'];
+---
+<Base title="Heimdall — home network sentinel" description="Self-hosted security and network operations for the LAN you own. Install with one command." current="">
+  <div class="wrap hero">
+    <div class="eyebrow">Self-hosted · open source · for the LAN you own</div>
+    <h1>A home SOC and NOC<br>in one box.</h1>
+    <p class="lede">Heimdall finds every device on your network, learns what is normal for each one, and alerts you to what is not. It runs on a spare machine as a Docker stack and never leaves your LAN.</p>
+    <Terminal id="home" tabs={homeTabs} />
+    <div class="after-links"><a href="/install/">Requirements &amp; what it changes</a><a href="/download/heimdall-bundle.tar.gz">Download bundle</a><a href="/install/#verify">Verify checksum</a><a href="https://github.com/danielonet/heimdall/blob/main/install/get-heimdall.sh">Read the script first</a></div>
+    <p class="faint small">minimal = core stack · intermediate = + honeypot · full = + Zeek, ClamAV, Suricata (about 4 GB RAM). Installs to <code>~/heimdall</code>; does not touch your router.</p>
+  </div>
+  <div class="wrap" style="padding-bottom:16px">
+    <div class="frame"><div class="bar"><i></i><i></i><i></i><span style="margin-left:8px">Heimdall dashboard · demo data</span></div><img src="/images/dashboard.png" width="1600" height="1000" alt="The Heimdall dashboard: connected hosts, bandwidth, open alerts, service status and router ports" /></div>
+  </div>
+  <section><div class="wrap"><div class="grid g4">
+    <div class="card"><div class="meta">Detect</div><h3>Passive detectors, plus the heavy hitters</h3><p class="muted">ARP spoofing, rogue DHCP, OS fingerprints and per-device ML anomalies, plus Suricata, Zeek, ClamAV and a honeypot.</p></div>
+    <div class="card info"><div class="meta">See</div><h3>Every device, honestly measured</h3><p class="muted">Inventory, WiFi signal, ports, traffic. Wired traffic is labelled <span class="chip warn">port total</span> because routers only count per port.</p></div>
+    <div class="card crit"><div class="meta">Respond</div><h3>Block or quarantine</h3><p class="muted">Cut a device off, or just its internet access. Auto-block is timed and optional. Needs a router that supports it.</p></div>
+    <div class="card warn"><div class="meta">Stay informed</div><h3>Where you already look</h3><p class="muted">Live dashboard, ntfy, email, a daily digest, CSV export and Prometheus metrics.</p></div>
+  </div></div></section>
+  <section><div class="wrap">
+    <div class="sec-head"><h2>How it fits together</h2><a href="/security/">Each product, explained →</a></div>
+    <p class="muted">Every source feeds a detector. Every detector raises alerts into one store. Correlation pairs related alerts into a single incident before anything is blocked or sent to you.</p>
+    <Flow />
+  </div></section>
+  <section><div class="wrap">
+    <div class="sec-head"><h2>Your router?</h2><a href="/equipment/">Full equipment table →</a></div>
+    <div class="filters">{routers.map((r) => { const [c, t] = chip(r); return <span class={`chip ${c}`}>{r.family} · {t}</span>; })}</div>
+    <div class="grid g2">
+      <a class="card info" href="/equipment/no-router/"><h3>Router not listed?</h3><p class="muted">Heimdall still runs. It builds the device list from your network’s own ARP table and keeps every sniffer-based detector. It cannot show per-device traffic or block devices. <strong>See what works →</strong></p></a>
+      <a class="card" href="/contribute/"><h3>Own one of the “simulator” routers?</h3><p class="muted">“Tested” means a person ran Heimdall against that physical router. Help turn a blue chip green, or add yours with an AI assistant and our kit. <strong>Contribute →</strong></p></a>
+    </div>
+  </div></section>
+</Base>

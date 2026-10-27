@@ -66,7 +66,7 @@ p { margin: 0 0 1em; }
 .chip.ok { color: var(--primary); } .chip.info { color: var(--info); } .chip.warn { color: var(--warn); } .chip.crit { color: var(--crit); } .chip.off { color: var(--text-3); }
 
 /* hero */
-.hero { padding: 56px 0 32px; }
+.hero { padding-top: 56px; padding-bottom: 32px; }  /* not the shorthand: .wrap's side gutters must survive */
 .hero .lede { font-size: 1.05rem; color: var(--text-2); max-width: 62ch; }
 .eyebrow { font-family: var(--head); letter-spacing: .2em; text-transform: uppercase; color: var(--text-3); font-size: 13px; margin-bottom: 8px; }
 
@@ -79,7 +79,7 @@ p { margin: 0 0 1em; }
 .tabs button:hover { color: var(--text); }
 .panel[hidden] { display: none; }
 .cmd { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; }
-.cmd pre { margin: 0; flex: 1; overflow-x: auto; white-space: pre; color: var(--text); font: inherit; }
+.cmd pre { min-width: 0; margin: 0; flex: 1; overflow-x: auto; white-space: pre; color: var(--text); font: inherit; }
 .cmd pre .p { color: var(--primary); user-select: none; }
 .cmd pre .c { color: var(--text-3); }
 .copy { font: inherit; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; background: var(--primary); color: var(--on-primary); border: 0; padding: 6px 12px; cursor: pointer; font-weight: 700; flex: none; }
@@ -123,7 +123,7 @@ td.k { color: var(--text); font-weight: 700; }
 
 /* steps */
 .steps { list-style: none; counter-reset: s; padding: 0; margin: 0; display: grid; gap: 12px; }
-.steps li { counter-increment: s; display: grid; grid-template-columns: 36px 1fr; gap: 12px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; }
 .steps li::before { content: counter(s); font-family: var(--head); font-size: 1.3rem; font-weight: 700; color: var(--on-primary); background: var(--primary); width: 30px; height: 30px; display: grid; place-items: center; }
 .steps .term { margin: 8px 0 0; }
 
@@ -173,7 +173,11 @@ footer a { color: var(--text-2); }
   .nav a { padding: 8px 6px; }
   .topbar .wrap { gap: 8px; padding-top: 8px; padding-bottom: 8px; }
   .hero { padding-top: 32px; }
-  .cmd { flex-direction: column; } .copy { align-self: flex-start; }
+  .topbar .wrap { justify-content: space-between; }
+  .nav { order: 3; flex: 0 0 100%; flex-wrap: nowrap; overflow-x: auto; margin: 0 -6px; }
+  .nav a { white-space: nowrap; padding: 8px 10px; }
+  .term, .card, .frame, .tablewrap { min-width: 0; max-width: 100%; }
+  .cmd { flex-direction: column; align-items: stretch; } .copy { align-self: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dot.live, .cursor::after, .flow path.hot { animation: none; }

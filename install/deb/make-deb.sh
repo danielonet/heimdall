@@ -5,6 +5,7 @@
 #   heimdall_<version>_all.deb
 #   heimdall_all.deb               same file under a stable name (for "latest" links)
 #   heimdall_<version>_all.deb.sha256
+#   heimdall_all.deb.sha256        verifies heimdall_all.deb
 #
 # The package ships the install bundle under /opt/heimdall, a `heimdall`
 # command, and a systemd unit that is installed but NOT enabled: nothing starts
@@ -83,5 +84,7 @@ CTL
 DEB="${OUT_DIR}/heimdall_${DEB_VERSION}_all.deb"
 dpkg-deb --root-owner-group --build "$PKG" "$DEB" >/dev/null
 cp "$DEB" "${OUT_DIR}/heimdall_all.deb"
-(cd "$OUT_DIR" && sha256sum "heimdall_${DEB_VERSION}_all.deb" > "heimdall_${DEB_VERSION}_all.deb.sha256")
+# Each name gets a checksum file that verifies under that name (sha256sum -c checks the name inside it).
+(cd "$OUT_DIR" && sha256sum "heimdall_${DEB_VERSION}_all.deb" > "heimdall_${DEB_VERSION}_all.deb.sha256" \
+    && sha256sum heimdall_all.deb > heimdall_all.deb.sha256)
 echo "Built ${DEB} (${DEB_VERSION})"

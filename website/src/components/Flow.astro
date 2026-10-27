@@ -1,0 +1,38 @@
+---
+// The overview diagram: sources -> detectors -> alerts -> response. Drawn from data so it matches the product pages.
+const rows: [string, string, boolean][] = [
+  ['Router API (adapter)', 'Traffic ML · upload ratio · signal', false],
+  ['Scapy sniffer', 'ARP · rogue DHCP · OS fingerprint', false],
+  ['Nmap, nightly', 'Ports · CVEs · default credentials', false],
+  ['Zeek', 'DNS · C2 beaconing', false],
+  ['ClamAV  (Zeek files)', 'MALWARE_DETECTED', false],
+  ['Suricata', 'IDS_SIGNATURE_MATCH', true],
+  ['OpenCanary', 'HONEYPOT_ACCESS', true],
+  ['Threat-intel feeds', 'Reputation lookups', false],
+];
+const outs: [string, string][] = [['Block · Quarantine', 'auto-block, timed'], ['Dashboard', 'WebSocket, live'], ['ntfy · email', 'daily digest']];
+---
+<svg class="flow" viewBox="0 0 1120 440" role="img" aria-labelledby="flow-t flow-d">
+  <title id="flow-t">How Heimdall’s parts fit together</title>
+  <desc id="flow-d">Eight sources feed eight detectors. Every detector raises alerts into one alert store, then correlation, then response and notification.</desc>
+  <text class="col" x="20" y="26">Sources</text><text class="col" x="282" y="26">Detectors</text><text class="col" x="596" y="26">Alerts</text><text class="col" x="896" y="26">Response &amp; notify</text>
+  {rows.map(([src, det, hot], i) => {
+    const y = 48 + i * 44, cy = y + 16;
+    return (<>
+      <rect class="n" x="20" y={y} width="210" height="32" /><text x="32" y={cy + 4}>{src}</text>
+      <path d={`M230,${cy} L282,${cy}`} />
+      <rect class={hot ? 'hl' : 'n'} x="282" y={y} width="262" height="32" /><text x="294" y={cy + 4}>{det}</text>
+      <path class={hot ? 'hot' : ''} d={`M544,${cy} C575,${cy} 565,222 596,222`} />
+    </>);
+  })}
+  <rect class="hl" x="596" y="188" width="130" height="68" /><text x="612" y="218">Alert store</text><text class="t3" x="612" y="236">PostgreSQL</text>
+  <path d="M726,222 L760,222" />
+  <rect class="n" x="760" y="188" width="104" height="68" /><text x="772" y="214">Correlation</text><text class="t3" x="772" y="232">pairs → one</text><text class="t3" x="772" y="246">incident</text>
+  {outs.map(([a, b], j) => {
+    const y = 120 + j * 80;
+    return (<>
+      <path d={`M864,222 C884,222 872,${y + 30} 896,${y + 30}`} />
+      <rect class="n" x="896" y={y} width="204" height="60" /><text x="910" y={y + 26}>{a}</text><text class="t3" x="910" y={y + 44}>{b}</text>
+    </>);
+  })}
+</svg>

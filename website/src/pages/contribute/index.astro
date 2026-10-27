@@ -1,0 +1,15 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="Contribute — Heimdall" description="Help Heimdall support more routers: test one, document one, or implement one with an AI assistant." current="Contribute">
+  <div class="wrap hero"><div class="eyebrow">Community</div><h1>Help Heimdall support your router</h1>
+    <p class="lede">Heimdall can only be as broad as the hardware people test it on. You do not have to be a developer: three ways to help, from five minutes to an afternoon.</p>
+    <div class="grid g3" style="margin:24px 0">
+      <a class="card" href="/contribute/test-your-router/"><div class="meta">5 minutes · no code</div><h3>Test</h3><p class="muted">Run Heimdall against your router and report what worked. Turns a “simulator only” chip into “tested”.</p></a>
+      <div class="card info"><div class="meta">An hour</div><h3>Document</h3><p class="muted">Capture your router’s web interface, scrub private details, and share the capture. Planned: a scrubbing script.</p></div>
+      <div class="card warn"><div class="meta">An afternoon</div><h3>Implement</h3><p class="muted">Write the adapter, by hand or with an AI assistant. The architecture rules are in CONTRIBUTING.md.</p></div>
+    </div>
+    <div class="callout caution"><strong>AI contribution kit: in preparation</strong>A guided kit (prompts, an adapter template and a capture-scrubbing script) is planned. Until then, <a href="https://github.com/danielonet/heimdall/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> describes how to add an adapter.</div>
+    <div class="callout danger"><strong>Never paste a raw capture into an AI service</strong>A router capture contains your MAC addresses, SSIDs, serial numbers and session tokens. Scrub it first.</div>
+  </div>
+</Base>

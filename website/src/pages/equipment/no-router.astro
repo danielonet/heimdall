@@ -1,0 +1,15 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="No supported router? — Heimdall" description="What Heimdall does without a router login, and what it cannot do." current="Equipment">
+  <div class="wrap hero"><div class="eyebrow">Equipment</div><h1>No supported router?</h1>
+    <p class="lede">Choose <strong>Other / not listed</strong> on the Equipment tab, or pass <code>--router=passive</code> at install. No login is needed. Heimdall builds the device list from its own host’s view of the network.</p>
+    <div class="grid g2" style="margin:24px 0">
+      <div class="card"><h3>What you get</h3><ul class="muted tight"><li>Device inventory, new-device alerts, online / offline</li><li>ARP-spoof and rogue-DHCP watch, OS fingerprinting</li><li>Nmap scans and threat-intel lookups</li><li>Suricata, Zeek, ClamAV and the honeypot, if your tier includes them</li></ul></div>
+      <div class="card crit"><h3>What you do not get</h3><ul class="muted tight"><li>Per-device traffic and the traffic-based ML. Nothing is estimated or faked.</li><li>WAN throughput, router model, ports and WiFi radio details</li><li>Block and quarantine: use your router’s own admin page</li><li>A reliable DHCP cross-check, so a normal address change can raise an occasional false ARP-spoof alert</li></ul></div>
+    </div>
+    <h2>How devices are found</h2>
+    <p class="muted">Heimdall reads the host’s ARP table every poll and runs an ARP sweep of your subnet every five minutes. A device counts as online if it answered recently. Subnets wider than /22 are never swept.</p>
+    <div class="callout"><strong>Help add yours</strong>Capture your router’s web interface, scrub it with our script, and let an AI assistant draft the adapter from our kit. A maintainer reviews it. <a href="/contribute/">Start here →</a></div>
+  </div>
+</Base>

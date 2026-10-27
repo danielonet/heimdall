@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Home security and the home lab" description="Why Heimdall exists: a home network is a network worth defending, and what it is and is not responsible for." current="">
+  <div class="wrap hero"><div class="eyebrow">Home security</div><h1>Your network is worth defending</h1>
+    <p class="lede">A home now holds cameras, phones, laptops, a NAS, smart plugs and guests’ devices on one flat network, and almost none of it reports what it is doing. Heimdall is the part that watches.</p>
+    <div class="grid g3" style="margin:24px 0">
+      <div class="card"><h3>Local first</h3><p class="muted">It runs on a machine you own. Your device list, traffic history and alerts stay on your LAN.</p></div>
+      <div class="card info"><h3>Honest about its limits</h3><p class="muted">Where a router cannot report something, Heimdall says so rather than estimating. See <a href="/security/limits/">the limits</a>.</p></div>
+      <div class="card warn"><h3>Built for a home lab</h3><p class="muted">Prometheus metrics, CSV export and a plain Docker Compose stack fit an existing home-lab setup.</p></div>
+    </div>
+    <h2>What Heimdall is not</h2>
+    <ul class="muted"><li>Not a firewall. It watches and, where your router allows, asks it to block.</li><li>Not a guarantee. It raises alerts; you decide what they mean.</li><li>Not for networks you do not own or administer. Only monitor networks you are entitled to monitor.</li></ul>
+    <p><a class="copy" style="text-decoration:none;display:inline-block" href="/install/">Install Heimdall</a></p>
+  </div>
+</Base>

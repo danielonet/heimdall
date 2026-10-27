@@ -1,0 +1,20 @@
+---
+// Install/command block with tabs and a copy button. Copy gets the commands only (no prompts or notes).
+export interface Line { cmd: string; note?: string; }
+export interface Tab { label: string; lines: Line[]; }
+interface Props { id: string; tabs: Tab[]; label?: string; }
+const { id, tabs, label = 'Install method' } = Astro.props;
+---
+<div class="term" data-tabs>
+  <div class="tabs" role="tablist" aria-label={label}>
+    {tabs.map((t, i) => <button type="button" role="tab" id={`${id}-t${i}`} aria-controls={`${id}-p${i}`} aria-selected={i === 0 ? 'true' : 'false'}>{t.label}</button>)}
+  </div>
+  {tabs.map((t, i) => (
+    <div class="panel" role="tabpanel" id={`${id}-p${i}`} aria-labelledby={`${id}-t${i}`} hidden={i !== 0}>
+      <div class="cmd">
+        <pre>{t.lines.map((l) => <><span class="p">$ </span>{l.cmd}{l.note && <span class="c">  # {l.note}</span>}{'\n'}</>)}</pre>
+        <button class="copy" type="button" data-text={t.lines.map((l) => l.cmd).join('\n')}>Copy</button>
+      </div>
+    </div>
+  ))}
+</div>

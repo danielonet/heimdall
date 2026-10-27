@@ -1,0 +1,19 @@
+{
+  "name": "heimdall-website",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "generate": "node scripts/gen-tokens.mjs && node scripts/copy-assets.mjs && PYTHONPATH=.. python3 scripts/gen-routers.py",
+    "dev": "npm run generate && astro dev",
+    "build": "npm run generate && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.7",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/medievalsharp": "^5.3.0",
+    "@fontsource/rajdhani": "^5.3.0",
+    "astro": "7.4.2"
+  }
+}
