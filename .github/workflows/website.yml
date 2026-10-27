@@ -1,6 +1,6 @@
 name: Website
 
-# Builds the site on every change to it, and deploys main to heimdall.it.com over SSH.
+# Builds the site on every change to it, and deploys main to heimdall.it.com over SFTP.
 # One-time setup (secrets, deploy key, host key): website/README.md.
 
 on:
@@ -81,7 +81,7 @@ jobs:
           name: site
           path: dist
 
-      - name: Prepare SSH
+      - name: Prepare SFTP
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -91,6 +91,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
       - name: Upload
         env:
@@ -98,14 +99,9 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-        run: |
-          set -euo pipefail
-          case "$DEPLOY_PATH" in /?*/?*|[!/]?*) ;; *) echo "::error::DEPLOY_PATH looks unsafe: '$DEPLOY_PATH'"; exit 1 ;; esac
-          # --delete keeps the site an exact copy of the build; /apt/ is reserved for the package repository
-          # and is never touched. --delay-updates swaps files in at the end so visitors never see a half-upload.
-          rsync -rlptz --delete --delay-updates --exclude='/apt/' \
-            -e "ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT:-22} -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes" \
-            dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH%/}/"
+        # Makes the web root an exact copy of the build over SFTP (the host has no shell, so no rsync).
+        # apt/ is reserved for the package repository and never touched.
+        run: website/scripts/deploy-sftp.sh dist
 
       - name: Smoke test the live site
         run: |

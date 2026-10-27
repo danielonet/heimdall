@@ -30,36 +30,45 @@ When a router is added to the catalog, `npm run build` fails until it has an ent
 
 ## Deploy (GitHub Actions, `.github/workflows/website.yml`)
 
-Every push to `main` that touches the site builds it and rsyncs `dist/` to the web host over SSH,
-then smoke-tests the live site. Pull requests build only.
+Every push to `main` that touches the site builds it and uploads `dist/` to the web host over **SFTP with a key**
+(`scripts/deploy-sftp.sh`, using `lftp`), then smoke-tests the live site. Pull requests build only.
+The host is Hetzner web hosting, which offers SFTP but no shell, so there is no rsync.
+
+`deploy-sftp.sh` was tested against a throwaway OpenSSH server: it uploads, deletes files that no longer exist,
+re-uploads changed files, leaves `apt/` alone, and refuses to run with a wrong host key, an empty build directory
+or an unsafe path.
 
 One-time setup:
 
 1. **Deploy key.** On your computer: `ssh-keygen -t ed25519 -f heimdall-deploy -C heimdall-site-deploy -N ""`.
-   Append `heimdall-deploy.pub` to `~/.ssh/authorized_keys` on the host, with restrictions:
-   `restrict,no-pty ssh-ed25519 AAAA... heimdall-site-deploy`. If the host has `rrsync`, prefer
-   `command="rrsync /path/to/webroot",restrict ssh-ed25519 ...` so the key can only write the web root.
-2. **Host key.** `ssh-keyscan -p 22 your.host` and compare its fingerprint with the one in your hosting panel
-   before trusting it. The workflow uses `StrictHostKeyChecking=yes`.
-3. **Repository secrets** (Settings → Secrets → Actions), on an environment named `production`:
+   In konsoleH open **Services → Login data → Public SFTP Keys → Add** and paste `heimdall-deploy.pub`.
+   If it rejects ed25519, use `ssh-keygen -t rsa -b 4096` instead.
+2. **Prefer a limited login.** konsoleH lets you add an extra FTP user restricted to one directory. If a key can be
+   attached to that user, use it for deploys so a leaked key reaches only the web root. Otherwise the key belongs to
+   the main login, which is the whole account: protect it accordingly.
+3. **Host key.** `ssh-keyscan -t ed25519,rsa www805.your-server.de` (use your server's name). Compare the fingerprint
+   with what Hetzner shows before trusting it. The deploy checks the host key strictly and never auto-accepts.
+4. **Repository secrets** (Settings → Secrets → Actions), on an environment named `production`:
 
    | Secret | Value |
    |---|---|
    | `DEPLOY_SSH_KEY` | contents of the private key `heimdall-deploy` |
    | `DEPLOY_KNOWN_HOSTS` | the `ssh-keyscan` line(s) |
-   | `DEPLOY_HOST`, `DEPLOY_USER` | the SSH host and user |
-   | `DEPLOY_PATH` | the web root directory, e.g. `/home/user/public_html` |
+   | `DEPLOY_HOST` | the server name, e.g. `www805.your-server.de` |
+   | `DEPLOY_USER` | the FTP login name |
+   | `DEPLOY_PATH` | the web root as the SFTP login sees it: usually `public_html` (confirm in WebFTP) |
    | `DEPLOY_PORT` | only if not 22 |
 
    Delete the private key from your computer afterwards. Optionally require your approval on the
    `production` environment.
-4. **First deploy** is a push to `main` (or Actions → Website → Run workflow). The smoke test then checks
+5. **First deploy** is a push to `main` (or Actions → Website → Run workflow). The smoke test then checks
    HSTS and CSP headers, that `/install.sh` is `text/plain` and identical to the repo's script, that
    `/download/heimdall_all.deb` redirects, and that plain HTTP redirects to HTTPS. If it fails on a header,
-   the host probably lacks `mod_headers` or `AllowOverride`; ask the host to enable them.
+   the host probably ignores `.htaccess` for that setting; ask Hetzner support.
 
-`rsync --delete` keeps the web root an exact copy of the build. `/apt/` is excluded so a future package
-repository can live beside the site. Do not keep anything else in the web root.
+The deploy keeps the web root an exact copy of the build. `apt/` is excluded so a future package repository can
+live beside the site. Do not keep anything else in the web root. Files are uploaded one by one, so a visitor can
+briefly see a mix of old and new files during the few seconds an upload takes.
 
 ## Before the site goes public
 

@@ -51,8 +51,8 @@ These are facts about the repo today; each one changes what the site can honestl
 | Decision | Choice | Why / alternative |
 |----------|--------|-------------------|
 | Framework | **Astro** with **Starlight** for `/manual` and `/docs` | Markdown-first (the content already is Markdown), built-in search (Pagefind), zero JS by default, themeable via CSS variables so the product tokens drop straight in. *Alternative:* reuse React/Vite from `frontend/` — matches the product stack but means hand-building docs navigation and search. |
-| Hosting | **Existing Hetzner web hosting (PHP/Apache, SSH access)** | Updated 2026-10-27: the host runs PHP and offers SSH, so no VPS or Caddy is needed. The site is still static files; PHP is not used for pages. No CMS and no database: nothing to patch or attack. *Alternative:* a Cloud VPS + Caddy if the host's limits get in the way. |
-| Deploy | **GitHub Actions** → build → `rsync` over SSH into a new release directory, then switch a symlink (if the host allows symlinks; otherwise rsync `--delay-updates` into the web root) | A dedicated deploy key, stored as a repo secret, restricted in `authorized_keys` (`command=` rsync-only, fixed path) where the host permits. |
+| Hosting | **Hetzner web hosting (Webhosting S, PHP/Apache, SFTP with keys, no shell)** | Updated 2026-10-27: the domain stays at Namecheap, DNS A/AAAA records point at the Hetzner server. No VPS or Caddy is needed. The site is still static files; PHP is not used for pages. No CMS and no database: nothing to patch or attack. *Alternative:* a Cloud VPS + Caddy if the host's limits get in the way. |
+| Deploy | **GitHub Actions** → build → `lftp` mirror over SFTP with a key (`website/scripts/deploy-sftp.sh`) | The host has SFTP but no shell, so no rsync and no atomic symlink swap; files upload one by one. Strict host-key checking, a dedicated key, a restricted FTP user if the host allows attaching a key to one. |
 | DNS/TLS | Domain pointed at the host; host-managed Let's Encrypt; HTTPS forced and HSTS in `.htaccess` | `curl ... | bash` is only acceptable over HTTPS with no redirect downgrade. |
 | Analytics | **None by default.** If wanted: self-hosted Umami/Plausible on the same box | A security tool's site should not ship third-party trackers. |
 | Fonts | Self-hosted JetBrains Mono, Rajdhani, MedievalSharp (subset, `woff2`) | No Google Fonts request, matches the product, faster. |
@@ -133,7 +133,7 @@ volume, because the database was created with those secrets; `heimdall reset`
 is the explicit delete.
 
 **Still Phase 5:** a signed apt repository (`aptly` or `reprepro` run in CI,
-dedicated GPG key, the generated static repo rsynced to the web host) so `apt upgrade` finds new versions. Until then
+dedicated GPG key, the generated static repo uploaded to the web host over SFTP) so `apt upgrade` finds new versions. Until then
 an upgrade means downloading the newer `.deb`; the install page says so
 plainly. The `.deb` is `Architecture: all`, so it needs no per-arch build; the
 images it pulls are amd64 only until linux/arm64 is added to the publish workflow.
@@ -428,7 +428,7 @@ browser, then ported.
 | **0 — Install foundation** | First image publish (GHCR public), `v0.1.0` tag, install bundle, `setup.sh`, `install.sh`, checksum; fix F4/F8 | A clean VM installs each tier with the documented command and the dashboard loads |
 | **1 — Facts** | Run Heimdall with no adapter and record what works (§9); inventory of UI pages for the manual; `tested_hardware.yml`; generators for equipment table and tokens | Facts file reviewed by the owner |
 | **2 — Design** | Static HTML mockups (home, install, security product, equipment, manual page) in both palettes; contrast report | Owner signs off on look |
-| **3 — Skeleton and deploy** | Astro project, tokens, layout, `.htaccess`, SSH/rsync CI deploy, HTTPS, headers; Home + Install live | Site reachable on the domain with the install command |
+| **3 — Skeleton and deploy** | Astro project, tokens, layout, `.htaccess`, SFTP CI deploy, HTTPS, headers; Home + Install live | Site reachable on the domain with the install command |
 | **4 — Content** | Manual, security section, home-security statement, equipment, no-router page, about, changelog | Every page in §6 exists and passes link/spell/shellcheck |
 | **5 — Community** | AI contribution kit and `scrub_har.py` in repo, kit zip in CI, contribute pages, issue-template links; signed apt repo (the `.deb` download itself already ships with the first release) | A volunteer (or a dry run by the maintainer with a fresh assistant) produces a stub set from the kit |
 | **6 — Launch** | Lighthouse and a11y pass, final claims review, announce (GitHub README link, relevant home-lab communities) | Launch checklist complete |
@@ -462,7 +462,7 @@ single writing job; everything else is small.
 
 **Still open**
 
-1. ~~Which Hetzner product~~ **Resolved:** web hosting with PHP and SSH (Apache `.htaccess`; rsync deploy). Still to confirm on the account: Apache vs nginx, whether symlinks and `mod_headers`/`mod_rewrite` are allowed, and a restricted SSH key.
+1. ~~Which Hetzner product~~ **Resolved:** Hetzner Webhosting S (domain stays at Namecheap; DNS done 2026-10-27). SFTP with keys, no shell, so the deploy is an lftp mirror. Still to confirm on the account: that `.htaccess` headers and rewrites apply (the smoke test checks), and whether a key can be attached to a restricted FTP user.
 2. **Project name on the site:** "Heimdall" is a common name (Heimdall dashboard, etc.). Keep it, or add a qualifier ("Heimdall Sentinel")?
 3. **Analytics:** none, or self-hosted?
 4. **Languages:** English only at launch?
