@@ -86,7 +86,7 @@ docker compose --profile intermediate pull && docker compose --profile intermedi
 
 Built and tested, uncommitted: `install/setup.sh`, `install/make-bundle.sh`, `install/get-heimdall.sh` (served as `/install.sh`), `.github/workflows/release-bundle.yml`, tests in `tests/test_install/`, and a CI job running shellcheck plus those tests. The bundle's `.env` sets `COMPOSE_PROFILES`, so `docker compose pull && docker compose up -d` is the same command for every tier. The bootstrap downloads from GitHub Releases (`releases/latest/download/...`), so the site only has to serve the script itself.
 
-Still to do before the command on the home page is true: (1) push these changes; (2) the `ci.yml` concurrency fix, because the first "Publish images" run was **cancelled** (the reusable CI shared a concurrency group with the push-triggered CI run), so no images exist yet; (3) set both GHCR packages Public; (4) tag `v0.1.0`; (5) a clean-VM run of the real command. Known gap: a fresh install defaults to the Sagemcom adapter until the user picks a router on the Equipment tab.
+Still to do before the command on the home page is true: (1) push these changes; (2) the `ci.yml` concurrency fix, because the first "Publish images" run was **cancelled** (the reusable CI shared a concurrency group with the push-triggered CI run), so no images exist yet; (3) set both GHCR packages Public; (4) tag `v0.1.0`; (5) a clean-VM run of the real command. The first-boot router gap is closed: `setup.sh`/`install.sh` take `--router=passive` (or ask on a terminal), written as `INITIAL_ROUTER` and applied once on a pristine install by `sentinel/adapter/initial_router.py`.
 
 Original checklist, for reference:
 
