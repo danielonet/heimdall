@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en" data-palette="amber">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Heimdall</title>
+<meta name="description" content="Install Heimdall with one command or a .deb package. Requirements, what it changes, upgrade and uninstall.">
+<script>try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}</script>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><div class="wrap">
+  <a class="logo" href="index.html">◈ Heimdall</a>
+  <nav class="nav" aria-label="Main"><a href="install.html" aria-current="page">Install</a><a href="#">Manual</a><a href="security-suricata.html">Security</a><a href="equipment.html">Equipment</a><a href="#">Contribute</a><a href="https://github.com/danielonet/heimdall">GitHub</a></nav>
+  <button class="toggle" type="button" aria-label="Switch colour palette">◐ Slate</button>
+</div></header>
+<div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="security-suricata.html#limits">Read the limits</a> before relying on it.</span></div></div>
+<main id="main">
+<div class="wrap hero" style="padding-bottom:8px">
+  <div class="eyebrow">Install</div>
+  <h1>One command.<br>Your machine, your data.</h1>
+  <p class="lede">Heimdall runs on a Linux machine on your home network, ideally wired. Pick a tier, run the command, open the dashboard.</p>
+</div>
+<div class="wrap">
+  <div class="term"><div class="tabs" role="tablist" aria-label="Install method"><button role="tab" id="m-t0" aria-controls="m-p0" aria-selected="true">Script</button><button role="tab" id="m-t1" aria-controls="m-p1" aria-selected="false">Debian / Ubuntu .deb</button><button role="tab" id="m-t2" aria-controls="m-p2" aria-selected="false">By hand</button></div>
+<div class="panel" role="tabpanel" id="m-p0" aria-labelledby="m-t0"><div class="cmd"><pre><span class="p">$ </span>curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=intermediate
+<span class="c"># tiers: minimal | intermediate | full. Add --router=passive if yours is not listed.</span></pre><button class="copy" type="button">Copy</button></div></div>
+<div class="panel" role="tabpanel" id="m-p1" aria-labelledby="m-t1" hidden><div class="cmd"><pre><span class="p">$ </span>curl -fsSLO https://heimdall.it.com/download/heimdall.deb
+<span class="p">$ </span>sudo apt install ./heimdall.deb  <span class="c"># installs Docker and the compose plugin if missing</span>
+<span class="p">$ </span>sudo heimdall setup  <span class="c"># tier, router, generates this machine’s secrets</span>
+<span class="p">$ </span>sudo heimdall start  <span class="c"># pulls the images; starts now and at every boot</span></pre><button class="copy" type="button">Copy</button></div></div>
+<div class="panel" role="tabpanel" id="m-p2" aria-labelledby="m-t2" hidden><div class="cmd"><pre><span class="p">$ </span>curl -fsSLO https://heimdall.it.com/download/heimdall-bundle.tar.gz
+<span class="p">$ </span>curl -fsSLO https://heimdall.it.com/download/heimdall-bundle.tar.gz.sha256
+<span class="p">$ </span>sha256sum -c heimdall-bundle.tar.gz.sha256 &amp;&amp; tar xzf heimdall-bundle.tar.gz &amp;&amp; cd heimdall
+<span class="p">$ </span>./setup.sh
+<span class="p">$ </span>docker compose pull &amp;&amp; docker compose up -d</pre><button class="copy" type="button">Copy</button></div></div>
+</div>
+  <div class="callout caution"><strong>Do not expose it</strong>Never forward ports 3000 or 5000 to the internet. Heimdall is for your LAN. Reach it remotely through a VPN you already trust.</div>
+</div>
+
+<section><div class="wrap">
+  <h2>Choose a tier</h2>
+  <div class="grid g3">
+    <div class="card"><div class="meta">Tier · minimal</div><h3>Core stack</h3><p class="muted">Database, cache, backend and dashboard. All eight passive detectors, ML anomaly detection, Nmap, threat intel, block and quarantine. Light enough for a mini-PC or a Raspberry Pi 4-class machine.</p></div>
+    <div class="card info"><div class="meta">Tier · intermediate</div><h3>+ Honeypot</h3><p class="muted">Adds OpenCanary: fake FTP, Telnet, SSH and HTTP services. Anything that touches one is a critical alert naming the source.</p></div>
+    <div class="card warn"><div class="meta">Tier · full</div><h3>+ Zeek, ClamAV, Suricata</h3><p class="muted">Adds DNS and connection analysis, file scanning and a signature IDS. Needs about 4 GB of RAM and a wired connection that sees your traffic.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Requirements</h2>
+  <div class="tablewrap"><table><tbody>
+    <tr><td class="k">Machine</td><td>Linux on the same LAN as the devices you want to watch. A wired port is strongly preferred; WiFi sniffing is limited.</td></tr>
+    <tr><td class="k">Software</td><td>Docker with the compose plugin. The installer can add it (<code>--install-docker</code>); the .deb pulls it in.</td></tr>
+    <tr><td class="k">Router</td><td>Optional. Pick yours on the Equipment tab, or choose “Other / not listed” and Heimdall works from its own view of the network.</td></tr>
+    <tr><td class="k">Architecture</td><td>x86-64 today. ARM images are not published yet.</td></tr>
+  </tbody></table></div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>What the installer changes</h2>
+  <div class="grid g2">
+    <div class="card"><h3>It does</h3><ul class="muted" style="margin:0;padding-left:18px"><li>Create <code>~/heimdall</code> (or <code>/opt/heimdall</code> for the .deb) with the compose file and config.</li><li>Generate secrets unique to this machine in <code>secrets/</code>, readable only by you.</li><li>Write <code>.env</code> with your tier, interface and subnet.</li><li>Pull images and start the containers.</li></ul></div>
+    <div class="card crit"><h3>It does not</h3><ul class="muted" style="margin:0;padding-left:18px"><li>Touch your router’s settings or password.</li><li>Open any port to the internet.</li><li>Send data anywhere. Optional threat-intel lookups ask public feeds about addresses only if you enable them.</li><li>Start anything after a .deb install until you run <code>sudo heimdall start</code>.</li></ul></div>
+  </div>
+</div></section>
+
+<section id="verify"><div class="wrap">
+  <h2>Verify before you run</h2>
+  <p class="muted">Piping a script to a shell asks for trust. Here is how to need less of it.</p>
+  <ol class="steps">
+    <li><div><strong>Read the script.</strong> <a href="https://github.com/danielonet/heimdall/blob/main/install/get-heimdall.sh">install/get-heimdall.sh</a> is about 150 lines. The page’s command downloads it from the same release.</div></li>
+    <li><div><strong>Check the checksum.</strong> Every download has a published SHA-256.
+      <div class="term"><div class="cmd"><pre><span class="p">$ </span>sha256sum -c heimdall_0.1.0_all.deb.sha256
+<span class="c">heimdall_0.1.0_all.deb: OK</span></pre><button class="copy" type="button">Copy</button></div></div></div></li>
+    <li><div><strong>Use the manual route.</strong> The “By hand” tab does the same thing step by step.</div></li>
+  </ol>
+</div></section>
+
+<section><div class="wrap">
+  <div class="grid g2">
+    <div><h2>Upgrade</h2><p class="muted">Script: run the same command again. Secrets and <code>.env</code> are kept; the image tag moves. .deb: install the newer .deb, or <code>sudo heimdall upgrade</code>. Database migrations run on start.</p></div>
+    <div><h2>Uninstall</h2><p class="muted">Stop it with <code>sudo heimdall stop</code>, remove the package with <code>sudo apt remove heimdall</code>. Your data and secrets stay. To delete everything: <code>sudo heimdall reset</code> (asks first).</p></div>
+  </div>
+</div></section>
+</main>
+<footer><div class="wrap">
+  <span>MIT licence · <a href="https://github.com/danielonet/heimdall/blob/main/SECURITY.md">SECURITY.md</a> · <a href="https://github.com/danielonet/heimdall">GitHub</a> · <a href="https://github.com/danielonet/heimdall/discussions">Discussions</a></span>
+  <span>v0.1.0 · heimdall.it.com · <em>design mockup, not the built site</em></span>
+</div></footer>
+<script src="site.js"></script>
+</body></html>

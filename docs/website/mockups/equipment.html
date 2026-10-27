@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-palette="amber">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supported equipment — Heimdall</title>
+<meta name="description" content="Which routers Heimdall supports, what has been tested on real hardware, and what each can and cannot do.">
+<script>try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}</script>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><div class="wrap">
+  <a class="logo" href="index.html">◈ Heimdall</a>
+  <nav class="nav" aria-label="Main"><a href="install.html">Install</a><a href="#">Manual</a><a href="security-suricata.html">Security</a><a href="equipment.html" aria-current="page">Equipment</a><a href="#">Contribute</a><a href="https://github.com/danielonet/heimdall">GitHub</a></nav>
+  <button class="toggle" type="button" aria-label="Switch colour palette">◐ Slate</button>
+</div></header>
+<div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="security-suricata.html#limits">Read the limits</a> before relying on it.</span></div></div>
+<main id="main">
+<div class="wrap hero" style="padding-bottom:8px">
+  <div class="eyebrow">Equipment</div>
+  <h1>Supported routers</h1>
+  <p class="lede">“Tested” means someone ran Heimdall against that physical router. “Simulator only” means automated tests pass against a simulator, but no real device has been tried, so expect quirks.</p>
+</div>
+<div class="wrap">
+  <div class="filters" role="group" aria-label="Filter"><button class="fbtn" data-f="all">All</button><button class="fbtn" data-f="hw">Tested on hardware</button><button class="fbtn" data-f="sim">Simulator only</button><button class="fbtn" data-f="planned">Planned</button></div>
+  <div class="tablewrap"><table id="eq"><thead><tr><th>Router family</th><th>Protocol</th><th>Adapter</th><th>Real hardware</th><th>Block / quarantine</th><th>Traffic</th></tr></thead><tbody><tr data-k="implemented hw"><td class="k">Sagemcom F@st 5670</td><td>XMO JSON API</td><td><span class="chip ok">Implemented</span></td><td><span class="chip ok">Tested</span></td><td>Yes</td><td>Wi-Fi per device · wired per port</td></tr><tr data-k="implemented hw"><td class="k">Xiaomi / Redmi (MiWiFi)</td><td>HTTP stok token</td><td><span class="chip ok">Implemented</span></td><td><span class="chip ok">Tested</span></td><td>—</td><td>—</td></tr><tr data-k="implemented sim"><td class="k">OpenWrt</td><td>ubus JSON-RPC</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>No</td><td>No</td></tr><tr data-k="implemented sim"><td class="k">MikroTik RouterOS 7</td><td>REST</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>Unverified</td><td>No</td></tr><tr data-k="implemented sim"><td class="k">Ubiquiti UniFi Network</td><td>REST</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>—</td><td>Per device</td></tr><tr data-k="implemented sim"><td class="k">OPNsense</td><td>REST, key + secret</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>No</td><td>No</td></tr><tr data-k="implemented sim"><td class="k">pfSense (REST API package)</td><td>REST</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>No</td><td>No</td></tr><tr data-k="implemented sim"><td class="k">ASUS / Asuswrt-Merlin</td><td>HTTP</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>No</td><td>No</td></tr><tr data-k="implemented sim"><td class="k">Netgear Nighthawk / Orbi</td><td>SOAP</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Simulator only</span></td><td>No</td><td>No</td></tr><tr data-k="planned"><td class="k">AVM FRITZ!Box</td><td>TR-064</td><td><span class="chip off">Planned</span></td><td>—</td><td>—</td><td>—</td></tr><tr data-k="planned"><td class="k">TP-Link Archer / Deco</td><td>—</td><td><span class="chip off">Planned</span></td><td>—</td><td>—</td><td>—</td></tr><tr data-k="planned"><td class="k">Keenetic</td><td>RCI</td><td><span class="chip off">Planned</span></td><td>—</td><td>—</td><td>—</td></tr><tr data-k="implemented passive"><td class="k">Anything else — passive mode</td><td>None (ARP table + sweep)</td><td><span class="chip ok">Implemented</span></td><td><span class="chip info">Checked on one LAN</span></td><td>No</td><td>No</td></tr></tbody></table></div>
+  <p class="faint" style="font-size:12.5px;margin-top:8px">The built site generates this table from the router catalog in the source, so it cannot drift. “—” = the catalog does not say; the generator will fill or flag every cell.</p>
+</div>
+
+<section id="no-router"><div class="wrap">
+  <h2>No supported router?</h2>
+  <p class="muted">Choose <strong>Other / not listed</strong> on the Equipment tab. No login is needed.</p>
+  <div class="grid g2">
+    <div class="card"><h3>What you get</h3><ul class="muted" style="margin:0;padding-left:18px"><li>Device inventory, new-device alerts, online/offline</li><li>ARP-spoof and rogue-DHCP watch, OS fingerprinting</li><li>Nmap scans, threat-intel lookups</li><li>Suricata, Zeek, ClamAV and the honeypot, if your tier includes them</li></ul></div>
+    <div class="card crit"><h3>What you do not get</h3><ul class="muted" style="margin:0;padding-left:18px"><li>Per-device traffic and the traffic-based ML. Nothing is estimated or faked.</li><li>WAN throughput, router model, ports, WiFi radios</li><li>Block and quarantine: use your router’s own admin page</li><li>An occasional false ARP-spoof alert after a normal address change</li></ul></div>
+  </div>
+  <div class="callout"><strong>Help add yours</strong>Capture your router’s web interface, scrub it with our script, and let an AI assistant draft the adapter from our kit. A maintainer reviews it. <a href="#">Start here →</a></div>
+</div></section>
+<script>
+document.querySelectorAll('[data-f]').forEach(function(b){b.addEventListener('click',function(){
+ var f=b.dataset.f; document.querySelectorAll('#eq tbody tr').forEach(function(r){r.hidden = f!=='all' && r.dataset.k.split(' ').indexOf(f)<0;});});});
+</script>
+</main>
+<footer><div class="wrap">
+  <span>MIT licence · <a href="https://github.com/danielonet/heimdall/blob/main/SECURITY.md">SECURITY.md</a> · <a href="https://github.com/danielonet/heimdall">GitHub</a> · <a href="https://github.com/danielonet/heimdall/discussions">Discussions</a></span>
+  <span>v0.1.0 · heimdall.it.com · <em>design mockup, not the built site</em></span>
+</div></footer>
+<script src="site.js"></script>
+</body></html>

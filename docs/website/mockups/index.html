@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" data-palette="amber">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heimdall — home network sentinel</title>
+<meta name="description" content="Self-hosted security and network operations for the LAN you own. One command to install.">
+<script>try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}</script>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><div class="wrap">
+  <a class="logo" href="index.html">◈ Heimdall</a>
+  <nav class="nav" aria-label="Main"><a href="install.html">Install</a><a href="#">Manual</a><a href="security-suricata.html">Security</a><a href="equipment.html">Equipment</a><a href="#">Contribute</a><a href="https://github.com/danielonet/heimdall">GitHub</a></nav>
+  <button class="toggle" type="button" aria-label="Switch colour palette">◐ Slate</button>
+</div></header>
+<div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="security-suricata.html#limits">Read the limits</a> before relying on it.</span></div></div>
+<main id="main">
+<div class="wrap hero">
+  <div class="eyebrow">Self-hosted · open source · for the LAN you own</div>
+  <h1>A home SOC and NOC<br>in one box.</h1>
+  <p class="lede">Heimdall finds every device on your network, learns what is normal for each one, and alerts you to what is not. It runs on a spare machine as a Docker stack and never leaves your LAN.</p>
+  <div class="term" style="margin-bottom:0;border-left-color:var(--primary)"><div style="padding:8px 16px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);border-bottom:1px solid var(--border)">Install · Linux with Docker</div>
+<div><div class="tabs" role="tablist" aria-label="Install method"><button role="tab" id="i-t0" aria-controls="i-p0" aria-selected="true">minimal</button><button role="tab" id="i-t1" aria-controls="i-p1" aria-selected="false">intermediate</button><button role="tab" id="i-t2" aria-controls="i-p2" aria-selected="false">full</button><button role="tab" id="i-t3" aria-controls="i-p3" aria-selected="false">Debian / Ubuntu .deb</button></div>
+<div class="panel" role="tabpanel" id="i-p0" aria-labelledby="i-t0"><div class="cmd"><pre><span class="p">$ </span>curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=minimal</pre><button class="copy" type="button">Copy</button></div></div>
+<div class="panel" role="tabpanel" id="i-p1" aria-labelledby="i-t1" hidden><div class="cmd"><pre><span class="p">$ </span>curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=intermediate</pre><button class="copy" type="button">Copy</button></div></div>
+<div class="panel" role="tabpanel" id="i-p2" aria-labelledby="i-t2" hidden><div class="cmd"><pre><span class="p">$ </span>curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=full</pre><button class="copy" type="button">Copy</button></div></div>
+<div class="panel" role="tabpanel" id="i-p3" aria-labelledby="i-t3" hidden><div class="cmd"><pre><span class="p">$ </span>curl -fsSLO https://heimdall.it.com/download/heimdall.deb
+<span class="p">$ </span>sudo apt install ./heimdall.deb  <span class="c"># installs Docker and the compose plugin if missing</span>
+<span class="p">$ </span>sudo heimdall setup  <span class="c"># tier, router, generates this machine’s secrets</span>
+<span class="p">$ </span>sudo heimdall start  <span class="c"># pulls the images; starts now and at every boot</span></pre><button class="copy" type="button">Copy</button></div></div>
+</div>
+  <div class="after"><a href="install.html">Requirements &amp; what it changes</a><a href="https://github.com/danielonet/heimdall/releases/latest/download/heimdall-bundle.tar.gz">Download bundle</a><a href="install.html#verify">Verify checksum</a><a href="https://github.com/danielonet/heimdall/blob/main/install/get-heimdall.sh">Read the script first</a></div></div>
+  <p class="faint" style="margin-top:8px;font-size:12.5px">minimal = core stack · intermediate = + honeypot · full = + Zeek, ClamAV, Suricata (about 4 GB RAM). Installs to <code>~/heimdall</code>; does not touch your router.</p>
+</div>
+<div class="wrap" style="padding-bottom:16px">
+  <div class="frame"><div class="bar"><i></i><i></i><i></i><span style="margin-left:8px">Heimdall dashboard · demo data</span></div><img src="../../images/dashboard.png" width="1600" height="1000" alt="The Heimdall dashboard: connected hosts, bandwidth, open alerts, service status and router ports"></div>
+</div>
+
+<section><div class="wrap">
+  <div class="grid g4">
+    <div class="card"><div class="meta">Detect</div><h3>Eight passive detectors, plus the heavy hitters</h3><p class="muted">ARP spoofing, rogue DHCP, OS fingerprints, per-device ML anomalies, plus Suricata, Zeek, ClamAV and a honeypot.</p></div>
+    <div class="card info"><div class="meta">See</div><h3>Every device, honestly measured</h3><p class="muted">Inventory, WiFi signal, ports, traffic. Wired traffic is labelled <span class="chip warn">port total</span> because routers only count per port.</p></div>
+    <div class="card crit"><div class="meta">Respond</div><h3>Block or quarantine</h3><p class="muted">Cut a device off, or just its internet access. Auto-block is timed and optional. Needs a router that supports it.</p></div>
+    <div class="card warn"><div class="meta">Stay informed</div><h3>Where you already look</h3><p class="muted">Live dashboard, ntfy, email, a daily digest, CSV export and Prometheus metrics.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-head"><h2>How it fits together</h2><a href="security-suricata.html">Each product, explained →</a></div>
+  <p class="muted">Every source feeds a detector. Every detector raises alerts into one store. Correlation pairs related alerts into a single incident before anything is blocked or sent to you.</p>
+  <svg class="flow" viewBox="0 0 1120 440" role="img" aria-labelledby="flow-t flow-d"><title id="flow-t">How Heimdall’s parts fit together</title><desc id="flow-d">Eight sources feed eight detectors. Every detector raises alerts into one alert store, then correlation, then response and notification.</desc>
+<text class="col" x="20" y="26">Sources</text><text class="col" x="282" y="26">Detectors</text><text class="col" x="590" y="26">Alerts</text><text class="col" x="880" y="26">Response &amp; notify</text>
+<rect class="n" x="20" y="48" width="210" height="32"/><text x="32" y="68">Router API (adapter)</text>
+<path d="M230,64 L282,64"/>
+<rect class="n" x="282" y="48" width="262" height="32"/><text x="294" y="68">Traffic ML · upload ratio · signal</text>
+<path class="" d="M544,64 C575,64 565,222 596,222"/>
+<rect class="n" x="20" y="92" width="210" height="32"/><text x="32" y="112">Scapy sniffer</text>
+<path d="M230,108 L282,108"/>
+<rect class="n" x="282" y="92" width="262" height="32"/><text x="294" y="112">ARP · rogue DHCP · OS fingerprint</text>
+<path class="" d="M544,108 C575,108 565,222 596,222"/>
+<rect class="n" x="20" y="136" width="210" height="32"/><text x="32" y="156">Nmap, nightly</text>
+<path d="M230,152 L282,152"/>
+<rect class="n" x="282" y="136" width="262" height="32"/><text x="294" y="156">Ports · CVEs · default credentials</text>
+<path class="" d="M544,152 C575,152 565,222 596,222"/>
+<rect class="n" x="20" y="180" width="210" height="32"/><text x="32" y="200">Zeek</text>
+<path d="M230,196 L282,196"/>
+<rect class="n" x="282" y="180" width="262" height="32"/><text x="294" y="200">DNS · C2 beaconing</text>
+<path class="" d="M544,196 C575,196 565,222 596,222"/>
+<rect class="n" x="20" y="224" width="210" height="32"/><text x="32" y="244">ClamAV  (Zeek files)</text>
+<path d="M230,240 L282,240"/>
+<rect class="n" x="282" y="224" width="262" height="32"/><text x="294" y="244">MALWARE_DETECTED</text>
+<path class="" d="M544,240 C575,240 565,222 596,222"/>
+<rect class="n" x="20" y="268" width="210" height="32"/><text x="32" y="288">Suricata</text>
+<path d="M230,284 L282,284"/>
+<rect class="hl" x="282" y="268" width="262" height="32"/><text x="294" y="288">IDS_SIGNATURE_MATCH</text>
+<path class="hot" d="M544,284 C575,284 565,222 596,222"/>
+<rect class="n" x="20" y="312" width="210" height="32"/><text x="32" y="332">OpenCanary</text>
+<path d="M230,328 L282,328"/>
+<rect class="hl" x="282" y="312" width="262" height="32"/><text x="294" y="332">HONEYPOT_ACCESS</text>
+<path class="hot" d="M544,328 C575,328 565,222 596,222"/>
+<rect class="n" x="20" y="356" width="210" height="32"/><text x="32" y="376">Threat-intel feeds</text>
+<path d="M230,372 L282,372"/>
+<rect class="n" x="282" y="356" width="262" height="32"/><text x="294" y="376">Reputation lookups</text>
+<path class="" d="M544,372 C575,372 565,222 596,222"/>
+<rect class="hl" x="596" y="188" width="130" height="68"/><text x="612" y="218">Alert store</text><text class="t3" x="612" y="236">PostgreSQL</text>
+<path d="M726,222 L760,222"/><rect class="n" x="760" y="188" width="104" height="68"/><text x="772" y="214">Correlation</text><text class="t3" x="772" y="232">pairs → one</text><text class="t3" x="772" y="246">incident</text>
+<path d="M864,222 C884,222 872,150 896,150"/><rect class="n" x="896" y="120" width="204" height="60"/><text x="910" y="146">Block · Quarantine</text><text class="t3" x="910" y="164">auto-block, timed</text>
+<path d="M864,222 C884,222 872,230 896,230"/><rect class="n" x="896" y="200" width="204" height="60"/><text x="910" y="226">Dashboard</text><text class="t3" x="910" y="244">WebSocket, live</text>
+<path d="M864,222 C884,222 872,310 896,310"/><rect class="n" x="896" y="280" width="204" height="60"/><text x="910" y="306">ntfy · email</text><text class="t3" x="910" y="324">daily digest</text>
+</svg>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-head"><h2>Your router?</h2><a href="equipment.html">Full equipment table →</a></div>
+  <div class="filters" aria-label="Router support summary">
+    <span class="chip ok">Sagemcom · tested</span><span class="chip ok">Xiaomi / Redmi · tested</span>
+    <span class="chip info">OpenWrt · simulator</span><span class="chip info">MikroTik · simulator</span><span class="chip info">UniFi · simulator</span><span class="chip info">OPNsense · simulator</span><span class="chip info">pfSense · simulator</span><span class="chip info">ASUS · simulator</span><span class="chip info">Netgear · simulator</span>
+    <span class="chip off">FRITZ!Box · planned</span><span class="chip off">TP-Link · planned</span><span class="chip off">Keenetic · planned</span>
+  </div>
+  <div class="grid g2">
+    <a class="card info" href="equipment.html#no-router"><h3>Router not listed?</h3><p class="muted">Heimdall still runs. It builds the device list from your network’s own ARP table and keeps every sniffer-based detector. It cannot show per-device traffic or block devices. <strong>See what works →</strong></p></a>
+    <a class="card" href="#"><h3>Own one of the “simulator” routers?</h3><p class="muted">“Tested” means a person ran Heimdall against that physical router. Help turn a blue chip green, or add yours with an AI assistant and our kit. <strong>Contribute →</strong></p></a>
+  </div>
+</div></section>
+</main>
+<footer><div class="wrap">
+  <span>MIT licence · <a href="https://github.com/danielonet/heimdall/blob/main/SECURITY.md">SECURITY.md</a> · <a href="https://github.com/danielonet/heimdall">GitHub</a> · <a href="https://github.com/danielonet/heimdall/discussions">Discussions</a></span>
+  <span>v0.1.0 · heimdall.it.com · <em>design mockup, not the built site</em></span>
+</div></footer>
+<script src="site.js"></script>
+</body></html>

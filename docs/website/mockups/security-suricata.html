@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-palette="amber">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suricata — Heimdall security</title>
+<meta name="description" content="How Heimdall uses Suricata: what it sees, what it catches, how it plugs into the alert flow, and its limits.">
+<script>try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}</script>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><div class="wrap">
+  <a class="logo" href="index.html">◈ Heimdall</a>
+  <nav class="nav" aria-label="Main"><a href="install.html">Install</a><a href="#">Manual</a><a href="security-suricata.html" aria-current="page">Security</a><a href="equipment.html">Equipment</a><a href="#">Contribute</a><a href="https://github.com/danielonet/heimdall">GitHub</a></nav>
+  <button class="toggle" type="button" aria-label="Switch colour palette">◐ Slate</button>
+</div></header>
+<div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="security-suricata.html#limits">Read the limits</a> before relying on it.</span></div></div>
+<main id="main">
+<div class="wrap docs">
+<nav class="side" aria-label="Security products"><h4>Security</h4><a href="#">Overview</a><a href="#">Passive detectors</a><a href="#">Nmap</a><a href="security-suricata.html" aria-current="page">Suricata</a><a href="#">Zeek</a><a href="#">ClamAV</a><a href="#">OpenCanary</a><a href="#">Threat intel</a><a href="#">Response</a><a href="#limits">Limits</a></nav>
+<article>
+  <div class="eyebrow">Security · network IDS</div>
+  <h1>Suricata</h1>
+  <p class="lede muted" style="font-size:1.05rem">A signature-based intrusion detector. It compares live traffic against a rule set of known-bad patterns and tells Heimdall when one matches.</p>
+  <p><span class="chip warn">Runs in: full tier</span> <span class="chip ok">Works without a router login</span> <span class="chip off">Alert: IDS_SIGNATURE_MATCH</span></p>
+
+  <div class="block" id="what"><h2>What it is</h2><div><p>Suricata is a widely used open-source IDS. Heimdall runs it in a container beside the rest of the stack. Where the other detectors look for <em>unusual behaviour</em>, Suricata looks for <em>known patterns</em>: exploit attempts, malware command-and-control traffic, protocol abuse, scans.</p></div></div>
+  <div class="block" id="sees"><h2>What it sees</h2><div><p>Packets on the interface Heimdall sniffs (set on the Settings tab). It writes each match as a line of JSON (its EVE log); Heimdall reads that file.</p><p class="faint" style="font-size:12.5px">Phase 1 check before publishing: state exactly what traffic reaches the sniff interface on a switched home network.</p></div></div>
+  <div class="block" id="catches"><h2>What it catches</h2><div>
+    <div class="tablewrap"><table><thead><tr><th>Alert</th><th>Severity</th><th>Meaning</th></tr></thead><tbody>
+      <tr><td class="k">IDS_SIGNATURE_MATCH</td><td><span class="chip info">from the rule</span></td><td>A rule matched. Heimdall maps the rule’s own priority to CRIT / WARN / INFO. The alert carries the rule name and the devices involved.</td></tr>
+    </tbody></table></div></div></div>
+  <div class="block" id="plugs"><h2>How it plugs in</h2><div>
+    <div class="pipe" aria-label="Alert path"><span>Suricata container</span><i>→</i><span>EVE JSON log</span><i>→</i><span>suricata_parser</span><i>→</i><span class="on">IDS_SIGNATURE_MATCH</span><i>→</i><span>Alert store</span><i>→</i><span>Correlation</span><i>→</i><span>Dashboard · ntfy · email</span></div>
+    <p style="margin-top:12px">A scheduled job tails the log, turns each match into an alert, and the usual pipeline takes over: de-duplication, correlation with other alerts about the same device, notification. Suricata never blocks anything itself; only you, or an auto-block rule you enabled, can.</p></div></div>
+  <div class="block" id="runs"><h2>Runs in</h2><div><span class="chip off">minimal</span> <span class="chip off">intermediate</span> <span class="chip warn">full</span><p style="margin-top:8px" class="muted">Choose the full tier at install time. The container needs host networking and raw-socket capability, like Heimdall’s own sniffer.</p></div></div>
+  <div class="block" id="limits"><h2>Limits</h2><div>
+    <div class="callout caution"><strong>Read this before relying on it</strong>These are documented, not hidden.</div>
+    <ul>
+      <li><strong>The rule set is not managed by Heimdall.</strong> Heimdall ingests whatever alerts the container produces. It does not fetch, verify or tune rules.</li>
+      <li><strong>Expect noise at first.</strong> The stock Emerging Threats Open set is tuned for enterprise and ISP traffic, so ordinary home traffic can trigger alerts until you add suppressions.</li>
+      <li><strong>No visibility into encrypted payloads.</strong> No TLS interception is configured.</li>
+    </ul></div></div>
+  <div class="block"><h2>Related</h2><div class="pipe"><span><a href="#">Zeek</a></span><span><a href="#">Threat intel</a></span><span><a href="#">Response: block &amp; quarantine</a></span><span><a href="#">Alerts page in the manual</a></span></div></div>
+</article>
+<aside class="toc" aria-label="On this page"><h4>On this page</h4><a href="#what">What it is</a><a href="#sees">What it sees</a><a href="#catches">What it catches</a><a href="#plugs">How it plugs in</a><a href="#runs">Runs in</a><a href="#limits">Limits</a></aside>
+</div>
+</main>
+<footer><div class="wrap">
+  <span>MIT licence · <a href="https://github.com/danielonet/heimdall/blob/main/SECURITY.md">SECURITY.md</a> · <a href="https://github.com/danielonet/heimdall">GitHub</a> · <a href="https://github.com/danielonet/heimdall/discussions">Discussions</a></span>
+  <span>v0.1.0 · heimdall.it.com · <em>design mockup, not the built site</em></span>
+</div></footer>
+<script src="site.js"></script>
+</body></html>
