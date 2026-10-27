@@ -17,7 +17,10 @@ services:
       - ROUTER_PORT=80
       - ROUTER_USERNAME=home
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
-      # - USE_MOCK_ROUTER=true   # enable for offline dev (synthetic test data)
+      # The code default is the mock router (dev convenience); an install must never
+      # silently show synthetic data, so default it off here. USE_MOCK_ROUTER=true
+      # docker compose up -d  gives the offline demo mode.
+      - USE_MOCK_ROUTER=${USE_MOCK_ROUTER:-false}
       # Optional second router — a Redmi/Xiaomi unit on stock MiWiFi
       # firmware (see sentinel/adapter/miwifi/). Blank MIWIFI_IP means "not
       # configured"; both can also be set/changed later from the Settings

@@ -172,9 +172,11 @@ Pick your router family on the **Equipment** tab and add its login there (stored
 | TP-Link Archer / Deco | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
 | Netgear Nighthawk / Orbi | ✅ Implemented (simulator-tested only) | ❌ No | ✅ Contract + behaviour tests vs WireMock | WireMock (synthetic) |
 | Keenetic (RCI) | 🛠️ Planned | ❌ No | ⏳ None yet (stubs only) | WireMock (synthetic) |
-| Anything else | ❌ Not yet | ❌ No | — | — |
+| Anything else (passive mode) | ✅ Implemented — no router login | ❌ No | ✅ Unit tests against canned ARP/nmap output; checked live on one LAN | None needed |
 
 **Implemented (simulator-tested only)** means the adapter builds from your Equipment-tab login and passes automated tests against a simulator — hand-written WireMock stubs for UniFi, OPNsense and pfSense, and the real OpenWrt / RouterOS operating systems running in Docker for those two — but it has never touched a physical router, so expect quirks and please report them. OpenWrt, OPNsense, pfSense, Netgear and ASUS cannot block or quarantine devices, and none of the implemented non-Sagemcom/Redmi routers except UniFi report per-device traffic (their APIs have no per-client counters). MikroTik can block via a firewall rule, but whether it enforces is unverified because the simulator carries no traffic. Selecting one of these as the *primary* router for threat detection is not wired into the scheduler yet.
+
+**Anything else (passive mode)** works with any router: no login, Heimdall finds devices from its own host's ARP table and a periodic ARP sweep. It gives you the device inventory, new-device alerts and everything that only needs the sniff interface (ARP/DHCP watch, OS fingerprinting, Nmap, Suricata, Zeek, ClamAV, honeypot, threat intel). It cannot give per-device traffic, WAN stats or block/quarantine, and it cannot confirm a DHCP reassignment, so expect an occasional false `ARP_SPOOF`. Pick it on the Equipment tab, then set it as the primary router. Details: [`docs/architecture/14-passive-adapter.md`](docs/architecture/14-passive-adapter.md).
 
 **Planned** routers can be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. The WireMock stubs are hand-written from public API docs, so they prove nothing about a real device.
 **Own one of these routers? You can help — see [Help test your router](CONTRIBUTING.md#help-test-your-router).** Roadmap: [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md); stubs: [`wiremock/`](wiremock/README.md).
@@ -191,7 +193,17 @@ pre-built images instead of building from source? See
 walkthrough — the general steps below still apply, this just sequences them
 for that setup.
 
-### 1. Choose an installation tier and run the installer
+### Quick install (pre-built images, no clone)
+
+> Available from the first tagged release (`v0.1.0`); until then use the from-source steps below.
+
+```bash
+curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=intermediate   # minimal | intermediate | full
+```
+
+This downloads the release bundle, **verifies its SHA-256**, generates secrets unique to your machine, detects your LAN interface and subnet, and runs `docker compose pull && docker compose up -d` from `~/heimdall`. It does not touch your router. Prefer to read it first? The script is [`install/get-heimdall.sh`](install/get-heimdall.sh); the manual route is: download `heimdall-bundle.tar.gz` and its `.sha256` from the [latest release](https://github.com/danielonet/heimdall/releases/latest), check it with `sha256sum -c`, extract, run `./setup.sh`, then `docker compose pull && docker compose up -d`. Re-running the same command upgrades in place and keeps your secrets and `.env`. Open `http://<this-machine>:3000`, log in as `admin` (password in `~/heimdall/secrets/admin_password.txt`), then pick your router on the Equipment tab (choose **Other / not listed** if yours isn't there). Requires Docker with the compose plugin (`--install-docker` installs it for you).
+
+### 1. Choose an installation tier and run the installer (from source)
 
 | Tier | Containers beyond core (Postgres/Redis/backend/frontend) | Installer |
 |---|---|---|

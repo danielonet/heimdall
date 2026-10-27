@@ -9,11 +9,25 @@ on:
 permissions:
   contents: read
 
+# github.workflow is the *caller's* name when this runs via workflow_call, so
+# the publish gate and the push-triggered run get different groups. With a
+# shared group they cancelled each other and nothing was ever published.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  install-scripts:
+    name: Install scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck install/setup.sh install/get-heimdall.sh install/make-bundle.sh
+      - name: Bundle and bootstrap tests
+        run: |
+          pip install pytest
+          pytest tests/test_install -q
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
