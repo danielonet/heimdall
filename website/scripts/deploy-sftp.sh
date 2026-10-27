@@ -8,7 +8,8 @@
 # Environment: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH (required); DEPLOY_PORT (22);
 #   DEPLOY_KEY_FILE (~/.ssh/deploy_key); DEPLOY_KNOWN_HOSTS_FILE (~/.ssh/known_hosts).
 # The host key must already be in the known-hosts file: it is checked strictly, never auto-accepted.
-# Files that exist only on the server are deleted, except under apt/ (reserved for the package repository).
+# Files that exist only on the server are deleted, except under apt/ (reserved for the package repository)
+# and .well-known/ (the host puts certificate-verification files there).
 set -euo pipefail
 
 SRC="${1:?usage: deploy-sftp.sh <built-site-dir>}"
@@ -40,7 +41,7 @@ set net:timeout 30
 set cmd:fail-exit yes
 open -u '${DEPLOY_USER},' -p ${PORT} sftp://${DEPLOY_HOST}
 mkdir -p -f '${DEPLOY_PATH}'
-mirror --reverse --delete --parallel=4 --verbose=1 --exclude-glob apt/ '${SRC}' '${DEPLOY_PATH}'
+mirror --reverse --delete --parallel=4 --verbose=1 --exclude-glob apt/ --exclude-glob .well-known/ '${SRC}' '${DEPLOY_PATH}'
 bye
 LFTP
 lftp -f "$script" < /dev/null

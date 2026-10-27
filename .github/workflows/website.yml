@@ -56,6 +56,8 @@ jobs:
         run: |
           grep -ho 'curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=[a-z]*' website/dist/install/index.html | sort -u
           cmp website/public/install.sh install/get-heimdall.sh
+      - name: Check that .htaccess is in the build
+        run: test -s website/dist/.htaccess
       - name: Check internal links
         working-directory: website
         run: python3 scripts/check-links.py dist
@@ -67,6 +69,9 @@ jobs:
           name: site
           path: website/dist
           retention-days: 7
+          # Without this the artifact silently drops .htaccess (a dotfile), and the live site loses
+          # its HTTPS redirect, security headers and download redirects.
+          include-hidden-files: true
 
   deploy:
     name: Deploy
@@ -80,6 +85,9 @@ jobs:
         with:
           name: site
           path: dist
+
+      - name: Check that .htaccess survived the artifact
+        run: test -s dist/.htaccess || { echo "::error::dist/.htaccess is missing from the downloaded artifact"; exit 1; }
 
       - name: Prepare SFTP
         env:

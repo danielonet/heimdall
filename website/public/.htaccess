@@ -7,6 +7,8 @@ ErrorDocument 404 /404.html
 # HTTPS only, on the canonical host. `curl ... | bash` must never run over plain HTTP.
 <IfModule mod_rewrite.c>
   RewriteEngine On
+  # Certificate (re)issue is verified over plain HTTP, so /.well-known/ must not be redirected.
+  RewriteCond %{REQUEST_URI} !^/\.well-known/
   RewriteCond %{HTTPS} !=on
   RewriteCond %{HTTP:X-Forwarded-Proto} !https
   RewriteRule ^ https://heimdall.it.com%{REQUEST_URI} [L,R=301]
