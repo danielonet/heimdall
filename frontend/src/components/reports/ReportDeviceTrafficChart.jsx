@@ -22,7 +22,9 @@ export function ReportDeviceTrafficChart({ traffic }) {
       (traffic || [])
         .map((t) => ({
           name: t.device_label,
-          total: t.upload_bytes + t.download_bytes,
+          // The API sends byte counts as strings (Postgres numeric), and `+` on
+          // two strings concatenates them — the axis then read in thousands of GB.
+          total: Number(t.upload_bytes) + Number(t.download_bytes),
           isTrusted: t.is_trusted,
         }))
         .sort((a, b) => b.total - a.total)

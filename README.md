@@ -87,6 +87,7 @@ Runs continuously via packet sniffing (Scapy) and the router's own polled state 
 | **Signal-Strength Anomaly** | A WiFi device's RSSI shifting and holding at a new level — a possible sign of a MAC-cloned device swap |
 | **Hostname/Vendor Mismatch** | A hostname implying a different hardware vendor than the device's actual MAC OUI |
 | **AP Trust-Boundary Crossing** | A device moving between the guest and private WiFi networks — CRITICAL if it gains private access it didn't have before |
+| **WiFi Monitor (Rogue AP)** | With a second, monitor-mode WiFi adapter: a non-yours access point broadcasting one of your protected network names — the signature of an "evil twin" attack. Also lists nearby WiFi devices and networks on the WIFI tab. Off until the adapter is chosen in Settings |
 
 ### Active investigation
 
@@ -124,7 +125,7 @@ Nightly-refreshed IP/domain reputation feeds — **Feodo Tracker** (botnet C2 IP
 | **Time-limited auto-block** | An automatic block (never a manual one) expires after a configurable window and sends a review notification, instead of staying blocked forever on a possible false positive |
 | **Cross-alert correlation** | Recognizes specific alert *pairs* on the same device in a short window (e.g. a brand-new device immediately spoofing, or a known exposure followed by real compromise signs) and escalates them into one higher-severity incident instead of leaving them as two isolated rows |
 
-All response actions are manual by default and can be armed to fire automatically (`auto_block_on_threat`) from the Settings page.
+Blocking and quarantining a device are manual actions. Automatic blocking (`auto_block_on_threat`) is **on by default** for a new install and can be turned off from the Settings page; an automatic block expires after 24 hours by default.
 
 ### Visibility
 
@@ -145,7 +146,8 @@ All response actions are manual by default and can be armed to fire automaticall
 
 Being upfront about what Heimdall does **not** do, rather than leaving it to be discovered:
 
-- **Rogue AP / "evil twin" detection** is not implemented — it needs a dedicated 802.11 monitor-mode WiFi radio, which this architecture doesn't provision.
+- **Rogue AP / "evil twin" detection** needs extra hardware: it runs only when you add a second, monitor-mode WiFi adapter and choose it in Settings, listens on 2.4 GHz channels 1, 6 and 11 only, and cannot block anything. It is off by default.
+- **On an ordinary switch, Heimdall does not see other devices' private traffic** — the sniff interface hears broadcast, multicast and its own machine's traffic. Suricata and Zeek see more only if the switch or router mirrors traffic to Heimdall's port.
 - **Active port-scan detection** (someone scanning *you*) has no dedicated signature — Heimdall's own nightly scan runs *outward* against devices it already knows, it doesn't detect incoming scans.
 - **DNS-over-HTTPS/TLS** traffic bypasses DNS visibility (only cleartext UDP/53 is inspected), and **TLS-encrypted downloads** bypass the ClamAV file-extraction pipeline (no TLS interception is configured).
 - **Suricata's ruleset is unmanaged by Heimdall** — this integration ingests whatever alerts the container produces, it doesn't fetch, verify, or tune the rule set itself (see the Network IDS section above).

@@ -3,6 +3,7 @@
 const rows: [string, string, boolean][] = [
   ['Router API (adapter)', 'Traffic ML · upload ratio · signal', false],
   ['Scapy sniffer', 'ARP · rogue DHCP · OS fingerprint', false],
+  ['WiFi radio (2nd adapter)', 'Rogue AP · nearby devices', false],
   ['Nmap, nightly', 'Ports · CVEs · default credentials', false],
   ['Zeek', 'DNS · C2 beaconing', false],
   ['ClamAV  (Zeek files)', 'MALWARE_DETECTED', false],
@@ -12,9 +13,9 @@ const rows: [string, string, boolean][] = [
 ];
 const outs: [string, string][] = [['Block · Quarantine', 'auto-block, timed'], ['Dashboard', 'WebSocket, live'], ['ntfy · email', 'daily digest']];
 ---
-<svg class="flow" viewBox="0 0 1120 440" role="img" aria-labelledby="flow-t flow-d">
+<svg class="flow" viewBox="0 0 1120 484" role="img" aria-labelledby="flow-t flow-d">
   <title id="flow-t">How Heimdall’s parts fit together</title>
-  <desc id="flow-d">Eight sources feed eight detectors. Every detector raises alerts into one alert store, then correlation, then response and notification.</desc>
+  <desc id="flow-d">Nine sources feed nine detectors. Every detector raises alerts into one alert store, then correlation, then response and notification.</desc>
   <text class="col" x="20" y="26">Sources</text><text class="col" x="282" y="26">Detectors</text><text class="col" x="596" y="26">Alerts</text><text class="col" x="896" y="26">Response &amp; notify</text>
   {rows.map(([src, det, hot], i) => {
     const y = 48 + i * 44, cy = y + 16;

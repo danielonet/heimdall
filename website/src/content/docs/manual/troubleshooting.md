@@ -12,6 +12,12 @@ Check that Heimdall is running: `sudo heimdall status` (.deb) or `docker compose
 ## The device list is empty
 You have not chosen a router, or the router login is wrong. Open [Equipment](/manual/equipment/). If your router is not listed, choose **Other / not listed (passive mode)**.
 
+## ARP Watch, DHCP Watch or Passive Fingerprint show OFF
+They listen on one network card, and it is probably the wrong one. Open [Equipment](/manual/equipment/), choose the card connected to your home network under **Network interface**, and press **Save**. They start immediately. If you chose it correctly and they still stay off, run `sudo heimdall logs` (.deb) or `docker compose logs sentinel-backend` and look for a line beginning "failed to sniff on".
+
+## WiFi Monitor shows OFF
+That is normal until you add a second WiFi adapter that supports monitor mode and choose it under **WiFi monitor** in [Settings](/manual/settings/). See [WiFi scan](/manual/wifi-scan/).
+
 ## Traffic shows "PORT TOTAL" for a wired device
 Routers count bytes per port, not per device. Heimdall will not present that as one device's traffic.
 

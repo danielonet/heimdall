@@ -1,26 +1,33 @@
 ---
 title: Devices
-description: The inventory, a device page, and block and quarantine.
+description: The inventory, a device page, trust, block and quarantine.
 ---
-
-:::caution[Draft]
-Written from the dashboard's source code. It has not yet been checked page by page against a running dashboard, so a label may differ slightly.
-:::
-
 
 ## The list
 
-Every device Heimdall has seen: MAC, IP, hostname, vendor, device type, signal, traffic, and which WiFi access point it uses. You can filter by search text, connectivity (wired or WiFi), network, trust, and presence (online or not).
+Every device Heimdall has seen, one row each, with its name and IP address, vendor, kind of device, current traffic, WiFi or ETH (plus which access point or segment), signal strength or router port, trust, and a **Block** button.
+
+Above the table:
+
+- A **search box** for name, IP address or MAC address.
+- **Connectivity:** all, online or offline.
+- **Network:** all, WiFi or wired.
+- **Trust:** all, trusted or suspect.
+- **Presence:** all, connected, or *nearby only* (devices heard over the air that never joined your network).
+- **Group by AP** gathers the rows by access point.
+
+The count on the right ("12 / 12 devices") shows how many rows match your filters.
 
 ## A device's page
 
 Click a device to open it.
 
-- **Rename:** click the name. The router's own hostname is shown on hover.
-- **Traffic (24h)** and **Anomaly score** charts. Wired devices on routers that only count per port show a note instead of invented per-device numbers.
-- **Open ports (last Nmap scan)** from the nightly scan.
-- **Alert history** for this device, with OPEN / ACKED / RESOLVED status.
-- A randomised MAC address (the private address phones use per network) is labelled, because it has no real manufacturer prefix to look up.
+- **Rename** changes the name Heimdall shows. The router's own name is offered as a hint.
+- The **TRUSTED / SUSPECT** badge is a button: click it to change whether you trust the device. The [Reports](/manual/reports/) page lists each device's trust next to its traffic.
+- **Traffic (24h)** and **Anomaly score** charts. They stay empty until the device has some history. A wired device on a router that only counts per port shows a note instead of invented numbers.
+- **Open ports (last Nmap scan)**, from the nightly scan. It says so if no scan has run yet.
+- **Alert history** for this device, with OPEN, ACKED or RESOLVED.
+- A randomised MAC address (the private address phones use per network) has no manufacturer to look up, so the vendor may show as a dash.
 
 ## Block and quarantine
 

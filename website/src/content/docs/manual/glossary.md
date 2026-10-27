@@ -9,7 +9,7 @@ description: Terms used in Heimdall.
 | **Alert** | A finding raised by a detector. Severity CRITICAL, WARNING or INFO. |
 | **Acknowledge / resolve** | *Seen it* / *dealt with*. |
 | **ARP spoofing** | Pretending to be another device on the LAN by forging address replies; a common man-in-the-middle method. |
-| **Auto-block** | A timed, automatic block of a device after a qualifying threat alert. Off by default. |
+| **Auto-block** | A timed, automatic block of a device after a qualifying threat alert. On by default for a new install; you can turn it off in Settings. |
 | **Beaconing** | Regular-interval calls to one remote host, typical of malware waiting for orders (C2). |
 | **Block** | Remove a device from the network via the router. |
 | **Correlation** | Combining two related alerts on one device into one higher-severity incident. |

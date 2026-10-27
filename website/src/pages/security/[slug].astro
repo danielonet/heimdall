@@ -19,7 +19,7 @@ const on = (t: (typeof tiers)[number]) => tiers.indexOf(t) >= tiers.indexOf(p.ti
       <div class="eyebrow">Security · {p.kind}</div><h1>{p.name}</h1>
       <p class="muted lead">{p.what}</p>
       <p><span class={`chip ${tierChip[p.tier]}`}>Runs in: {p.tier} tier and up</span></p>
-      <div class="block" id="sees"><h2>What it sees</h2><div><p>{p.sees}</p>{p.check && import.meta.env.DEV && <p class="faint small">[dev only] To confirm before publishing: {p.check}</p>}</div></div>
+      <div class="block" id="sees"><h2>What it sees</h2><div><p>{p.sees}</p></div></div>
       <div class="block" id="catches"><h2>What it catches</h2><div class="tablewrap"><table><thead><tr><th>Alert</th><th>Severity</th><th>Meaning</th></tr></thead><tbody>
         {p.catches.map((c) => <tr><td class="k">{c.alert}</td><td><span class="chip info">{c.severity}</span></td><td>{c.meaning}</td></tr>)}
       </tbody></table></div></div>

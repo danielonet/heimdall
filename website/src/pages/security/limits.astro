@@ -5,7 +5,8 @@ import Base from '../../layouts/Base.astro';
   <div class="wrap hero"><div class="eyebrow">Security</div><h1>Known, documented limits</h1>
     <p class="lede">Being upfront about what Heimdall does not do is better than letting you find out.</p>
     <ul>
-      <li><strong>Rogue access point (“evil twin”) detection is not implemented.</strong> It needs a dedicated monitor-mode WiFi radio that this design does not provision.</li>
+      <li><strong>Rogue access point (“evil twin”) detection needs extra hardware.</strong> It works only with a second, monitor-mode WiFi adapter that you add and set up, it listens on 2.4 GHz channels 1, 6 and 11 only, and it is off until you do. See <a href="/security/wifi-monitor/">WiFi monitor</a>.</li>
+      <li><strong>On an ordinary switch, Heimdall does not see other devices’ private traffic.</strong> Its sniff interface hears broadcast and multicast and its own machine’s traffic. Suricata and Zeek see more only if the switch or router mirrors traffic to Heimdall’s port.</li>
       <li><strong>Incoming port scans are not detected.</strong> Heimdall’s nightly scan runs outward against devices it already knows.</li>
       <li><strong>Encrypted DNS and TLS downloads bypass inspection.</strong> Only cleartext DNS on port 53 is inspected, and no TLS interception is configured, so encrypted downloads never reach ClamAV.</li>
       <li><strong>Suricata’s rule set is unmanaged.</strong> Expect noise until you tune it.</li>

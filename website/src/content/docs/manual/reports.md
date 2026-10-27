@@ -3,9 +3,10 @@ title: Reports
 description: Bandwidth and alerts over a time window.
 ---
 
-:::caution[Draft]
-Written from the dashboard's source code. It has not yet been checked page by page against a running dashboard, so a label may differ slightly.
-:::
+Choose a **report window** with *from* and *to* (*from* must be before *to*), or press **24H**, **7D** or **30D**, and optionally pick one device. The page then shows:
 
+- **Alerts** in the window, grouped by severity, type and count, each with its latest occurrence and a link on to the [Alerts](/manual/alerts/) page.
+- **Bandwidth by hour** for the whole household.
+- **Device traffic**: a bar for each device, and a table of its trust, upload and download. Wired devices sharing a port are not broken out individually; only a combined port total is measurable for them.
 
-Choose a **report window** (from and to; *from* must be before *to*) and optionally one device. You get household bandwidth over time, per-device upload and download (with trust), and alerts grouped by severity, type and count with their latest occurrence. Windows with no data say so; nothing is estimated.
+A window with no data says so; nothing is estimated.
