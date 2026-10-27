@@ -12,7 +12,7 @@ export default defineConfig({
       description: 'How to use the Heimdall dashboard.',
       favicon: '/images/heimdall.png',
       // The product is dark-only; the palette toggle replaces Starlight's theme select.
-      components: { ThemeSelect: './src/components/PaletteToggle.astro', SiteTitle: './src/components/ManualTitle.astro' },
+      components: { ThemeSelect: './src/components/PaletteToggle.astro', SiteTitle: './src/components/ManualTitle.astro', SocialIcons: './src/components/SiteLinks.astro', MobileMenuFooter: './src/components/MobileMenuFooter.astro' },
       customCss: ['@fontsource/jetbrains-mono/400.css', '@fontsource/jetbrains-mono/700.css', '@fontsource/rajdhani/600.css', '@fontsource/rajdhani/700.css', './src/styles/tokens.css', './src/styles/starlight.css'],
       head: [{ tag: 'script', content: "try{var p=localStorage.getItem('heimdall_palette');if(p==='slate')document.documentElement.setAttribute('data-palette','slate')}catch(e){}" }],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/danielonet/heimdall' }],

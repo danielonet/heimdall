@@ -1,0 +1,12 @@
+---
+// The main site's navigation, shown in the manual's header so the manual never feels like a dead end.
+const links = [
+  ['/install/', 'Install'], ['/security/', 'Security'], ['/equipment/', 'Equipment'],
+  ['/contribute/', 'Contribute'], ['https://github.com/danielonet/heimdall', 'GitHub'],
+];
+const { stacked = false } = Astro.props;
+---
+<nav class={`site-links${stacked ? ' stacked' : ''}`} aria-label="Site">
+  <a href="/">Home</a>
+  {links.map(([href, label]) => <a href={href}>{label}</a>)}
+</nav>

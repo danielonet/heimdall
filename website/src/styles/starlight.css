@@ -42,3 +42,9 @@ h1, h2, h3, h4 { font-family: 'Rajdhani', 'Arial Narrow', system-ui, sans-serif;
 .palette-toggle:hover { border-color: var(--border-hi); color: var(--text); }
 .site-link { margin-inline-start: 1rem; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
 .manual-logo { width: 28px; height: 28px; border-radius: 50%; display: block; }
+
+/* Site navigation inside the manual header (and the mobile menu). */
+.site-links { display: flex; align-items: center; gap: 1.1rem; }
+.site-links a { font-family: var(--head, 'Rajdhani', sans-serif); font-weight: 600; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; color: var(--sl-color-gray-2); font-size: .85rem; }
+.site-links a:hover { color: var(--sl-color-white); }
+.site-links.stacked { flex-direction: column; align-items: flex-start; gap: .6rem; padding-bottom: .8rem; margin-bottom: .8rem; border-bottom: 1px solid var(--sl-color-gray-5); }
