@@ -26,6 +26,8 @@ SUPPORTED_ROUTERS = ('sagemcom', 'miwifi')
 
 # Routers picked on the Equipment tab (router_profiles + a per-router secret
 # file) rather than the original sagemcom/miwifi settings columns.
+PASSIVE_ROUTER = 'passive'
+
 PROFILE_ROUTERS = ('unifi-network', 'opnsense-rest', 'pfsense-rest', 'openwrt-ubus', 'mikrotik-rest',
                    'netgear-soap', 'asus-http')
 
@@ -49,6 +51,17 @@ async def miwifi_configured() -> bool:
     return bool(ip)
 
 
+async def available_routers() -> list[str]:
+    """Values AppSettings.active_router may currently take: Sagemcom always,
+    MiWiFi once it has credentials, and 'passive' once it has been picked on
+    the Equipment tab (it needs no credentials, so picking it is the whole setup)."""
+    from sentinel.db.repositories import RouterProfileRepository
+    routers = list(SUPPORTED_ROUTERS) if await miwifi_configured() else ['sagemcom']
+    if await RouterProfileRepository().get(PASSIVE_ROUTER) is not None:
+        routers.append(PASSIVE_ROUTER)
+    return routers
+
+
 async def create_router_adapter(router: str | None = None) -> RouterAdapter:
     """Build the adapter for `router` ('sagemcom' | 'miwifi'), or for
     whichever router is currently AppSettings.active_router if `router`
@@ -66,9 +79,13 @@ async def create_router_adapter(router: str | None = None) -> RouterAdapter:
         return await _build_sagemcom_adapter()
     if router == 'miwifi':
         return await _build_miwifi_adapter()
+    if router == PASSIVE_ROUTER:
+        return await _build_passive_adapter()
     if router in PROFILE_ROUTERS:
         return await create_profile_adapter(router)
-    raise ValueError(f'Unknown router: {router!r} (expected one of {SUPPORTED_ROUTERS + PROFILE_ROUTERS})')
+    raise ValueError(
+        f'Unknown router: {router!r} (expected one of {SUPPORTED_ROUTERS + (PASSIVE_ROUTER,) + PROFILE_ROUTERS})'
+    )
 
 
 async def create_profile_adapter(router_id: str) -> RouterAdapter:
@@ -128,6 +145,15 @@ async def create_secondary_router_adapter(active_router: str) -> RouterAdapter |
         # Sagemcom is the permanent household router — always buildable.
         return await _build_sagemcom_adapter()
     return None
+
+
+async def _build_passive_adapter() -> RouterAdapter:
+    """No router to log in to: just the LAN interface Heimdall already sniffs on."""
+    from sentinel.adapter.passive.passive_adapter import PassiveAdapter
+    from sentinel.db.repositories import SettingsRepository
+    iface = await SettingsRepository().get_sniff_iface()
+    logger.info('Passive mode: no router API, inventory from the ARP table and sweeps on %s', iface or '(default route)')
+    return PassiveAdapter(iface, sweep_interval_s=settings.PASSIVE_SWEEP_INTERVAL_S)
 
 
 async def _build_sagemcom_adapter() -> RouterAdapter:

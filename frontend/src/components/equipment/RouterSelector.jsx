@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge } from '../Badge'
 import { RouterLoginModal } from './RouterLoginModal'
-import { useRemoveRouter, useRouterCatalog, useSelectedRouters } from '../../hooks/useRouters'
+import { useRemoveRouter, useRouterCatalog, useSaveRouter, useSelectedRouters } from '../../hooks/useRouters'
 
 // Pick one or more router families from the catalog (multi-select dropdown);
 // every picked router gets a row with a LOGIN button that opens the
@@ -11,6 +11,7 @@ export function RouterSelector() {
   const { data: catalog = [], isLoading } = useRouterCatalog()
   const { data: selected = [] } = useSelectedRouters()
   const removeMutation = useRemoveRouter()
+  const saveMutation = useSaveRouter()
   const [pending, setPending] = useState([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -37,6 +38,9 @@ export function RouterSelector() {
         removeMutation.mutate({ spec })
       }
       setPending((p) => p.filter((id) => id !== spec.id))
+    } else if (spec.fields.length === 0) {
+      // Nothing to log in to (passive mode): picking it is the whole setup.
+      saveMutation.mutate({ spec })
     } else {
       setPending((p) => [...p, spec.id])
       setEditing(spec)
@@ -107,24 +111,32 @@ export function RouterSelector() {
                     {entry?.host ? ` · ${entry.host}` : ''}
                     {entry?.username ? ` · ${entry.username}` : ''}
                   </div>
+                  {spec.notes && <div className="mt-0.5 text-[9px] leading-relaxed text-text-secondary">{spec.notes}</div>}
                 </div>
                 <Badge variant={spec.implemented ? 'success' : 'muted'} title={spec.implemented ? undefined : 'Login can be saved; the adapter is not built yet'}>
                   {spec.implemented ? 'SUPPORTED' : 'PLANNED'}
                 </Badge>
-                <Badge variant={entry?.password_configured ? 'info' : 'warning'}>
-                  {entry?.password_configured ? 'LOGIN SAVED' : 'NO LOGIN'}
-                </Badge>
-                <button
-                  type="button"
-                  onClick={() => setEditing(spec)}
-                  className="border border-accent-green/30 bg-accent-green/5 px-3 py-1 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20"
-                >
-                  LOGIN
-                </button>
+                {spec.fields.length === 0 ? (
+                  <Badge variant="info">NO LOGIN NEEDED</Badge>
+                ) : (
+                  <>
+                    <Badge variant={entry?.password_configured ? 'info' : 'warning'}>
+                      {entry?.password_configured ? 'LOGIN SAVED' : 'NO LOGIN'}
+                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(spec)}
+                      className="border border-accent-green/30 bg-accent-green/5 px-3 py-1 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20"
+                    >
+                      LOGIN
+                    </button>
+                  </>
+                )}
               </li>
             )
           })}
       </ul>
+      {saveMutation.isError && <div className="mt-2 text-[9px] text-accent-red">{saveMutation.error.message}</div>}
       {removeMutation.isError && <div className="mt-2 text-[9px] text-accent-red">{removeMutation.error.message}</div>}
 
       {editing && <RouterLoginModal spec={editing} current={byId[editing.id]} onClose={closeModal} />}

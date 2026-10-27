@@ -4,6 +4,7 @@ import { useSettings, useUpdateSettings } from '../../hooks/useSettings'
 const ROUTER_LABELS = {
   sagemcom: 'Sagemcom F@st 5670',
   miwifi: 'Redmi router (MiWiFi)',
+  passive: 'Other router (passive mode)',
 }
 
 // Which configured router is "active" — feeds the detection pipeline, WAN
@@ -29,7 +30,8 @@ export function PrimaryRouterSelect() {
       <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
         Which router Heimdall treats as the base network endpoint — threat detection, WAN status, and
         auto-block all run against this one. The other configured router (if any) is still monitored for
-        device/traffic visibility.
+        device/traffic visibility. Passive mode has no router connection: it lists devices from the ARP table
+        and cannot show per-device traffic or block devices.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}
@@ -65,7 +67,7 @@ export function PrimaryRouterSelect() {
       )}
 
       {options.length < 2 && (
-        <p className="mt-1.5 text-[9px] text-text-muted">Add the Redmi router in the Routers list above to enable switching.</p>
+        <p className="mt-1.5 text-[9px] text-text-muted">Add the Redmi router, or “Other / not listed (passive mode)”, in the Routers list above to enable switching.</p>
       )}
       {mutation.isError && <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>}
     </div>

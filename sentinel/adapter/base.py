@@ -11,6 +11,11 @@ class RouterAdapter(ABC):
     No other module may import from xmo_client.py or call the XMO API directly.
     """
 
+    # False for adapters with no DHCP server to ask (PassiveAdapter). Callers
+    # that cross-check ARP changes against leases skip the check — and its
+    # retry wait — instead of polling an adapter that can only answer "[]".
+    HAS_DHCP_LEASES: bool = True
+
     @abstractmethod
     async def get_connected_devices(self) -> List[DeviceSnapshot]:
         """Return all currently connected LAN devices. Implementations may

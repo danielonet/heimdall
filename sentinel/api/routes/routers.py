@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from sentinel.adapter.catalog import CATALOG, RouterSpec, get_spec
+from sentinel.adapter.factory import PASSIVE_ROUTER
 from sentinel.config import _read_secret_file, router_secret_path, secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import RouterProfileRepository, SettingsRepository
 
@@ -124,6 +125,8 @@ async def remove_router(router_id: str):
         return jsonify(error=f'Unknown router: {router_id!r}'), 404
     if spec.credential_store != 'profile':
         return jsonify(error=f'{router_id} is managed through the Settings API and cannot be removed here'), 400
+    if router_id == PASSIVE_ROUTER and await SettingsRepository().get_active_router() == PASSIVE_ROUTER:
+        return jsonify(error='Passive mode is the primary router — choose another primary router first'), 409
     await RouterProfileRepository().delete(router_id)
     path = router_secret_path(router_id)
     if path and os.path.isfile(path) and secret_file_writable(path):

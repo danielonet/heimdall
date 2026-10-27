@@ -44,6 +44,8 @@ class RouterSpec:
     credential_store: str = 'profile'
     # Popup label overrides, e.g. OPNsense calls username/password its API key/secret.
     field_labels: dict[str, str] = field(default_factory=dict)
+    # What the Equipment tab shows under the router; used for limits the user must know about.
+    notes: str = ''
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -88,6 +90,14 @@ CATALOG: tuple[RouterSpec, ...] = (
         id='pfsense-rest', label='pfSense (REST API package)', family='pfSense',
         protocol='HTTPS REST, API key', simulator=SimulatorKind.WIREMOCK, implemented=True,
         fields=('host', 'password'), default_port=443, field_labels={'password': 'API KEY'},
+    ),
+    RouterSpec(
+        id='passive', label='Other / not listed (passive mode)', family='Any router',
+        protocol='None — ARP table + ARP sweep', simulator=SimulatorKind.NONE, implemented=True,
+        fields=(),
+        notes='No login. Finds devices from the Heimdall host\'s own view of the LAN. No per-device traffic, '
+              'no WAN stats and no block/quarantine; the sniffer-based detectors, Nmap, Suricata, Zeek and '
+              'the honeypot work as normal.',
     ),
     RouterSpec(
         id='fritzbox-tr064', label='AVM FRITZ!Box (TR-064)', family='AVM',

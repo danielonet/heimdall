@@ -16,8 +16,15 @@ def test_existing_routers_are_implemented_and_use_settings_store():
         assert spec.implemented and spec.credential_store == 'settings'
 
 
-def test_every_password_field_is_declared():
-    assert all('password' in spec.fields for spec in CATALOG)
+def test_every_login_router_declares_a_password_field():
+    # Only routers with no login at all (passive mode) may omit it.
+    assert all('password' in spec.fields for spec in CATALOG if spec.fields)
+
+
+def test_passive_mode_needs_no_login_and_documents_its_limits():
+    spec = get_spec('passive')
+    assert spec.implemented and spec.fields == () and spec.credential_store == 'profile'
+    assert 'no per-device traffic' in spec.notes.lower()
 
 
 def test_unknown_id_returns_none():

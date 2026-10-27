@@ -53,3 +53,28 @@ class TestSaveRouter:
     def test_503_when_secrets_dir_unset(self, client, auth_headers):
         resp = client.put('/api/routers/openwrt-ubus', json={'password': 'x'}, headers=auth_headers)
         assert resp.status_code == 503
+
+
+class TestPassiveMode:
+    """'Other / not listed': no login, picking it is the whole setup."""
+
+    def test_pick_with_no_login_then_use_as_primary_then_remove(self, client, auth_headers):
+        assert 'passive' not in client.get('/api/settings', headers=auth_headers).get_json()['available_routers']
+
+        assert client.put('/api/routers/passive', json={}, headers=auth_headers).status_code == 200
+        selected = {r['router_id'] for r in client.get('/api/routers').get_json()['selected']}
+        assert 'passive' in selected
+        assert 'passive' in client.get('/api/settings', headers=auth_headers).get_json()['available_routers']
+
+        resp = client.patch('/api/settings', json={'active_router': 'passive'}, headers=auth_headers)
+        assert resp.status_code == 200
+        # The primary router cannot be removed out from under the scheduler.
+        assert client.delete('/api/routers/passive', headers=auth_headers).status_code == 409
+
+        assert client.patch('/api/settings', json={'active_router': 'sagemcom'}, headers=auth_headers).status_code == 200
+        assert client.delete('/api/routers/passive', headers=auth_headers).status_code == 200
+        assert 'passive' not in client.get('/api/settings', headers=auth_headers).get_json()['available_routers']
+
+    def test_cannot_make_passive_primary_before_picking_it(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'active_router': 'passive'}, headers=auth_headers)
+        assert resp.status_code == 400

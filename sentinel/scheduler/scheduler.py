@@ -783,6 +783,11 @@ class SentinelScheduler:
             adapter = await self._ensure_adapter()
         except Exception:
             return False
+        if not adapter.HAS_DHCP_LEASES:
+            # Passive mode: no lease data to confirm a reassignment, and the
+            # retry loop would just burn its whole wait on empty answers. An
+            # unverified change is treated as suspicious, as it always is.
+            return False
 
         for attempt in range(self._arp_verify_max_attempts):
             try:

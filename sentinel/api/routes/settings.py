@@ -12,7 +12,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import text
 
-from sentinel.adapter.factory import SUPPORTED_ROUTERS, miwifi_configured
+from sentinel.adapter.factory import available_routers
 from sentinel.config import secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
@@ -65,12 +65,10 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         miwifi_ip=data['miwifi_ip'],
         miwifi_password_configured=bool(settings.MIWIFI_PASSWORD),
         active_router=data['active_router'],
-        # Only offers 'miwifi' once it's actually configured, so the
-        # Settings-tab dropdown never lets an admin select a router with no
-        # credentials — see sentinel/adapter/factory.py:miwifi_configured.
-        available_routers=(
-            list(SUPPORTED_ROUTERS) if await miwifi_configured() else ['sagemcom']
-        ),
+        # Only offers 'miwifi' once it's actually configured (and 'passive'
+        # once picked), so the dropdown never lets an admin select a router
+        # with no credentials — see sentinel/adapter/factory.py:available_routers.
+        available_routers=await available_routers(),
         ntfy_url=data['ntfy_url'],
         smtp_host=data['smtp_host'],
         smtp_port=data['smtp_port'],
@@ -189,7 +187,7 @@ async def update_settings():
 
     active_router = body.get('active_router')
     if 'active_router' in body:
-        available = list(SUPPORTED_ROUTERS) if await miwifi_configured() else ['sagemcom']
+        available = await available_routers()
         if not isinstance(active_router, str) or active_router not in available:
             return jsonify(
                 error=f'active_router must be one of the currently configured routers: {", ".join(available)}'
