@@ -1,9 +1,10 @@
-name: Release install bundle
+name: Release install bundle and .deb
 
 # On a version tag, builds the install bundle (compose file + config + setup.sh)
 # and attaches it, its checksum and the bootstrap script to the GitHub Release.
 # These fixed file names are what https://heimdall.it.com/install.sh downloads
-# from .../releases/latest/download/. The matching images are pushed by
+# from .../releases/latest/download/. The .deb is attached as heimdall_<ver>_all.deb
+# and as heimdall_all.deb (stable name, for the website's download button). The matching images are pushed by
 # publish-images.yml on the same tag.
 
 on:
@@ -23,6 +24,9 @@ jobs:
       - name: Build bundle
         run: OUT_DIR="$RUNNER_TEMP/dist" install/make-bundle.sh "$GITHUB_REF_NAME"
 
+      - name: Build the .deb
+        run: OUT_DIR="$RUNNER_TEMP/dist" install/deb/make-deb.sh "$GITHUB_REF_NAME"
+
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -31,4 +35,7 @@ jobs:
             "$RUNNER_TEMP/dist/heimdall-bundle.tar.gz" \
             "$RUNNER_TEMP/dist/heimdall-bundle.tar.gz.sha256" \
             "$RUNNER_TEMP/dist/install.sh" \
+            "$RUNNER_TEMP"/dist/heimdall_*_all.deb \
+            "$RUNNER_TEMP"/dist/heimdall_*_all.deb.sha256 \
+            "$RUNNER_TEMP/dist/heimdall_all.deb" \
             --title "$GITHUB_REF_NAME" --generate-notes

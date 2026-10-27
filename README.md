@@ -203,6 +203,19 @@ curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=intermediate  
 
 This downloads the release bundle, **verifies its SHA-256**, generates secrets unique to your machine, detects your LAN interface and subnet, and runs `docker compose pull && docker compose up -d` from `~/heimdall`. It does not touch your router. Prefer to read it first? The script is [`install/get-heimdall.sh`](install/get-heimdall.sh); the manual route is: download `heimdall-bundle.tar.gz` and its `.sha256` from the [latest release](https://github.com/danielonet/heimdall/releases/latest), check it with `sha256sum -c`, extract, run `./setup.sh`, then `docker compose pull && docker compose up -d`. Re-running the same command upgrades in place and keeps your secrets and `.env`. Open `http://<this-machine>:3000`, log in as `admin` (password in `~/heimdall/secrets/admin_password.txt`), then pick your router on the Equipment tab (choose **Other / not listed** if yours isn't there). Requires Docker with the compose plugin (`--install-docker` installs it for you).
 
+#### Debian / Ubuntu: the `.deb` package
+
+Each release also carries `heimdall_<version>_all.deb` (plus a `.sha256`). It installs the same stack under `/opt/heimdall`, a `heimdall` command and a systemd unit, and **starts nothing** until you ask:
+
+```bash
+curl -fsSLO https://github.com/danielonet/heimdall/releases/latest/download/heimdall_all.deb
+sudo apt install ./heimdall_all.deb     # pulls in docker.io, the compose plugin, openssl, iproute2
+sudo heimdall setup                     # tier, router, generates this machine's secrets
+sudo heimdall start                     # pulls the images; starts now and at every boot
+```
+
+Other commands: `heimdall status | logs [service] | password | upgrade | stop | reset`. Upgrading the package (`sudo apt install ./newer.deb`) moves `IMAGE_TAG` in your `.env` and restarts the stack; secrets, tier and router choice are kept. Removing or purging the package stops the containers but keeps `.env`, `secrets/` and the database volume, because the database was created with those secrets; `sudo heimdall reset` deletes everything. A signed apt repository (so `apt upgrade` finds new versions by itself) is planned.
+
 ### 1. Choose an installation tier and run the installer (from source)
 
 | Tier | Containers beyond core (Postgres/Redis/backend/frontend) | Installer |

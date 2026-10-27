@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+DIR="${HEIMDALL_HOME:-/opt/heimdall}"
+
+case "$1" in
+    configure)
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+        fi
+        if [ -f "$DIR/.env" ]; then
+            # An upgrade: move the image tag to this package's version. The
+            # secrets, tier and router choice in .env stay as they are.
+            tag=$(tr -d '[:space:]' < "$DIR/VERSION")
+            tag="${tag#v}"
+            sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${tag}/" "$DIR/.env"
+            if [ -d /run/systemd/system ] && systemctl is-active --quiet heimdall.service; then
+                systemctl restart heimdall.service || echo "heimdall: restart failed — see: journalctl -u heimdall" >&2
+            fi
+        else
+            cat <<MSG
+
+Heimdall is installed but not started. Next:
+
+    sudo heimdall setup      # pick a tier and router, generates secrets
+    sudo heimdall start      # pulls the images and starts Heimdall at every boot
+
+Dashboard: http://<this-machine>:3000  (do not expose ports 3000/5000 to the internet)
+
+MSG
+        fi
+        ;;
+esac
+exit 0

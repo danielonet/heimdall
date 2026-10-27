@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove|purge)
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+        fi
+        ;;
+esac
+if [ "$1" = purge ] && [ -f /opt/heimdall/.env ]; then
+    # Deliberately not deleted: the database volume was created with these
+    # secrets, so a reinstall with new ones could not open it.
+    echo "heimdall: /opt/heimdall/.env and /opt/heimdall/secrets were kept, and so were the Docker volumes."
+    echo "heimdall: to delete everything: run 'sudo heimdall reset' before removing the package."
+fi
+exit 0

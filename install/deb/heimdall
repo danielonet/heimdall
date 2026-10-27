@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# heimdall — control the Heimdall stack installed by the heimdall .deb package.
+#
+#   heimdall setup [setup.sh options]   generate secrets and .env (first time only)
+#   heimdall start                      start now and at every boot
+#   heimdall stop                       stop, and do not start at boot
+#   heimdall upgrade                    pull the images for the installed version and restart
+#   heimdall status | logs [service] | password | version
+#   heimdall reset                      DELETE all data, secrets and .env (asks first)
+#
+# Everything except `version` and `help` needs root (sudo): it controls Docker
+# and reads the generated secrets.
+set -euo pipefail
+
+DIR="${HEIMDALL_HOME:-/opt/heimdall}"
+UNIT=heimdall.service
+
+die() { echo "heimdall: $*" >&2; exit 1; }
+
+version() { tr -d '[:space:]' < "$DIR/VERSION" 2>/dev/null || echo unknown; }
+
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+has_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null; }
+
+compose() { (cd "$DIR" && docker compose "$@"); }
+
+need_root() { [ "$(id -u)" -eq 0 ] || [ -n "${HEIMDALL_HOME:-}" ] || die "run this with sudo: sudo heimdall ${1:-}"; }
+
+need_setup() { [ -f "$DIR/.env" ] || die "not set up yet — run: sudo heimdall setup"; }
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    version|-v|--version) version ;;
+    help|-h|--help) usage ;;
+    setup)
+        need_root setup
+        (cd "$DIR" && ./setup.sh "$@")
+        ;;
+    start)
+        need_root start; need_setup
+        if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d; fi
+        echo "Dashboard: http://<this-machine>:3000   user admin   password: sudo heimdall password"
+        ;;
+    stop)
+        need_root stop
+        if has_systemd; then systemctl disable --now "$UNIT"; else compose stop; fi
+        ;;
+    upgrade)
+        need_root upgrade; need_setup
+        # `apt upgrade` already moved IMAGE_TAG (postinst); this fetches the images and restarts.
+        compose pull && compose up -d
+        ;;
+    status)
+        need_root status; need_setup
+        echo "Heimdall $(version)"
+        compose ps
+        ;;
+    logs)
+        need_root logs; need_setup
+        compose logs -f --tail 100 "$@"
+        ;;
+    password)
+        need_root password
+        cat "$DIR/secrets/admin_password.txt" 2>/dev/null || die "no admin password yet — run: sudo heimdall setup"
+        ;;
+    reset)
+        need_root reset
+        echo "This deletes the Heimdall database, every generated secret and .env."
+        read -rp "Type 'delete' to continue: " answer
+        [ "$answer" = delete ] || die "cancelled"
+        if has_systemd; then systemctl disable --now "$UNIT" 2>/dev/null || true; fi
+        [ -f "$DIR/docker-compose.yml" ] && compose down -v || true
+        rm -rf "${DIR:?}/secrets" "${DIR:?}/.env"
+        echo "Done. Run 'sudo heimdall setup' to start fresh."
+        ;;
+    *) usage >&2; exit 2 ;;
+esac

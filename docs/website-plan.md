@@ -27,7 +27,7 @@ These are facts about the repo today; each one changes what the site can honestl
 |---|---------|-------------|
 | F1 | **There is no one-line `docker compose` install yet.** `docker-compose.yml` mounts `./secrets/`, `./secrets/routers/`, `./suricata/`, `./opencanary/` and reads `.env`, so it only works from a repo checkout prepared by `scripts/install.sh`. | The site cannot promise "run this one command" until a standalone **install bundle** exists (Phase 0). |
 | F2 | **No images are published yet.** `publish-images.yml` is uncommitted/unpushed; the GHCR packages do not exist and will be private until switched to Public. There are no tagged releases (`SECURITY.md`). | Phase 0 depends on a first successful publish, then a `v0.x` tag so the site can pin a version. |
-| F3 | **`apt` is a poor primary channel.** Heimdall is a multi-container stack with host networking, `NET_RAW`/`NET_ADMIN`, per-machine generated secrets and tier profiles. A `.deb` would just wrap Docker anyway. | Lead with a bootstrap script + compose bundle. Offer a thin `.deb` / apt repo on Hetzner later (Phase 5) as a convenience, not the foundation. |
+| F3 | **`apt` is a poor primary channel.** Heimdall is a multi-container stack with host networking, `NET_RAW`/`NET_ADMIN`, per-machine generated secrets and tier profiles. A `.deb` would just wrap Docker anyway. | Lead with a bootstrap script + compose bundle. Offer a thin `.deb` as a download from the first release (built; see §5.3), and a signed apt repo on Hetzner later (Phase 5), as a convenience, not the foundation. |
 | F4 | **The product's default palette is Amber CRT, not the green/blue in `ui-design-brief.md`.** `themeStore.js` defaults to `amber`; `index.css` also defines `slate`. The brief predates this. | The site follows `index.css` (source of truth) and ships the same two-palette toggle. The brief should be updated to match (small docs fix, listed in Phase 0). |
 | F5 | **`docs/router/network-topology.md` holds a real WAN MAC and BSSID** (and other topology). | Content is published from an **allowlist** of files, never a directory glob. That file is excluded and should be scrubbed regardless. |
 | F6 | ~~The "no supported router" mode is not built.~~ **Resolved 2026-10-27:** the `passive` adapter now exists (`docs/architecture/14-passive-adapter.md`). | The "works without a router" page is written from that document. Phase 1 still includes a full-stack run in passive mode to confirm each sensor claim end to end before it is published. |
@@ -104,14 +104,32 @@ Original checklist, for reference:
 4. **Tag `v0.1.0`**, so the bundle URL and image tags are pinned, not `latest`.
 5. Fix F4 and F8 in `docs/`.
 
-### 5.3 The apt question
+### 5.3 The `.deb` and the apt question (updated 2026-10-27)
 
-Recommend **not** starting there. Reasons: F3, plus an apt repo means GPG key
-management, a signing process and per-distro testing for a project that is alpha.
-If demand shows up: a `heimdall` `.deb` that only installs the bundle under
-`/opt/heimdall`, a `heimdall` CLI (`up`, `down`, `upgrade`, `status`) and a systemd
-unit, hosted as a flat apt repo on the same Hetzner box (`aptly` or `reprepro`,
-signed with a dedicated key). That is Phase 5.
+**Decided: the website offers the `.deb` as a download from the first release.**
+It is built (`install/deb/make-deb.sh`, tested in `tests/test_install/test_deb_package.py`)
+and attached to every GitHub Release by `release-bundle.yml` as
+`heimdall_<version>_all.deb`, a stable-name copy `heimdall_all.deb`, and a `.sha256`.
+The install page therefore has two tabs: **Script** (`curl ... | bash`) and
+**Debian / Ubuntu** (download, verify, `sudo apt install ./heimdall_all.deb`,
+`sudo heimdall setup`, `sudo heimdall start`). The download button links to
+`.../releases/latest/download/heimdall_all.deb`, so the site never needs a rebuild
+for a new release; the displayed version and checksum come from the GitHub API at
+build time (or a small client fetch with a static fallback).
+
+What the package is, and is not (F3 still applies): it wraps the same compose
+bundle and still depends on Docker, so it is a convenience, not a native
+package. It installs under `/opt/heimdall`, a `heimdall` command and a systemd
+unit; it **does not start or enable anything** (a LAN sniffer should not start
+without a tier and router choice). Purge keeps `.env`, `secrets/` and the Docker
+volume, because the database was created with those secrets; `heimdall reset`
+is the explicit delete.
+
+**Still Phase 5:** a signed apt repository on the Hetzner box (`aptly` or
+`reprepro`, dedicated GPG key) so `apt upgrade` finds new versions. Until then
+an upgrade means downloading the newer `.deb`; the install page says so
+plainly. The `.deb` is `Architecture: all`, so it needs no per-arch build; the
+images it pulls are amd64 only until linux/arm64 is added to the publish workflow.
 
 ### 5.4 Trust and safety on the install page
 
@@ -405,7 +423,7 @@ browser, then ported.
 | **2 — Design** | Static HTML mockups (home, install, security product, equipment, manual page) in both palettes; contrast report | Owner signs off on look |
 | **3 — Skeleton and deploy** | Astro project, tokens, layout, Caddy on Hetzner, CI deploy, HTTPS, headers; Home + Install live | Site reachable on the domain with the install command |
 | **4 — Content** | Manual, security section, home-security statement, equipment, no-router page, about, changelog | Every page in §6 exists and passes link/spell/shellcheck |
-| **5 — Community** | AI contribution kit and `scrub_har.py` in repo, kit zip in CI, contribute pages, issue-template links; **optional** `.deb`/apt repo | A volunteer (or a dry run by the maintainer with a fresh assistant) produces a stub set from the kit |
+| **5 — Community** | AI contribution kit and `scrub_har.py` in repo, kit zip in CI, contribute pages, issue-template links; signed apt repo (the `.deb` download itself already ships with the first release) | A volunteer (or a dry run by the maintainer with a fresh assistant) produces a stub set from the kit |
 | **6 — Launch** | Lighthouse and a11y pass, final claims review, announce (GitHub README link, relevant home-lab communities) | Launch checklist complete |
 
 Rough order of effort: Phase 0 is the critical path and the largest unknown; the user manual is the largest
@@ -425,7 +443,7 @@ single writing job; everything else is small.
 
 ## 15. Decisions and open questions
 
-**Decided (2026-10-27):** domain is `heimdall.it.com`; install route is the bootstrap script, apt deferred to Phase 5; the passive adapter is built before launch (done), so §9 describes a shipped feature.
+**Decided (2026-10-27):** domain is `heimdall.it.com`; install route is the bootstrap script; the `.deb` download ships with the first release (built 2026-10-27), the signed apt repo is Phase 5; the passive adapter is built before launch (done), so §9 describes a shipped feature.
 
 **Still open**
 

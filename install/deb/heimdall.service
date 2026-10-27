@@ -1,0 +1,21 @@
+[Unit]
+Description=Heimdall home network sentinel
+Documentation=https://heimdall.it.com
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/heimdall/.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/heimdall
+# A failed pull (no network at boot) must not stop already-downloaded images from starting.
+ExecStartPre=-/usr/bin/docker compose pull --quiet
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=900
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
