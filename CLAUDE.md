@@ -21,6 +21,7 @@ Compose stack.
 | Cache / bus | Redis 7 (Pub/Sub) |
 | Frontend | React 19 + Vite + Tailwind CSS |
 | Containers | Docker Compose |
+| Website | Astro + Starlight (TypeScript), static, deployed over SFTP by GitHub Actions to https://www.heimdall.it.com |
 
 ## Repository layout
 
@@ -41,7 +42,13 @@ heimdall/
 │   ├── security/              ← Scapy, nmap, threat intel
 │   ├── db/                    ← SQLAlchemy models + migrations
 │   └── scheduler/             ← APScheduler job definitions
-└── frontend/                  ← React + Vite SPA
+├── frontend/                  ← React + Vite SPA
+├── install/                   ← setup.sh, bootstrap script, bundle + .deb builders
+└── website/                   ← public website + user manual (Astro/Starlight)
+    ├── src/pages/             ← home, install, security, equipment, contribute
+    ├── src/content/docs/manual/ ← the user manual, one chapter per dashboard page
+    ├── src/data/products.ts   ← the security-product pages
+    └── public/.htaccess       ← HTTPS, redirects, headers
 ```
 
 ## Non-negotiable architecture rules
@@ -76,6 +83,30 @@ heimdall/
    Router password, JWT secret, OTX API key — all read from `/run/secrets/`
    files. Never from environment variables or hardcoded values.
 
+## Keep the website and manual in sync with the application
+
+The website (`website/`, published at https://www.heimdall.it.com) is the public
+description of what Heimdall does. **Whenever a change adds, removes or alters
+something a user can see or rely on, update the website in the same change** — a
+feature that exists only in the code, or a page that describes something that no
+longer exists, is a bug.
+
+| If you change… | Update… |
+|---|---|
+| A dashboard page, control, label, setting or workflow | The matching chapter in `website/src/content/docs/manual/` (and the glossary/FAQ/troubleshooting if affected) |
+| A detector, alert type, sensor, container, tier or response action | `website/src/data/products.ts` (alert names come from the registry in `docs/architecture/04-detection-pipeline.md`), the diagram in `website/src/components/Flow.astro`, the home-page cards, and the README "Defenses & Capabilities" |
+| A router adapter or what one can do (block, quarantine, traffic) | `sentinel/adapter/catalog.py` and `docs/router/equipment-facts.json` (the build fails if an entry is missing), plus the README "Supported routers" table. Mark "Tested" only after a real-hardware run |
+| Install, tiers, requirements, upgrade, uninstall, the `.deb` | `website/src/pages/install.astro`, `website/src/data/commands.ts`, the README quick install, and the install scripts' own tests |
+| A known limit, or a limit that is now fixed | `website/src/pages/security/limits.astro`, the affected product page's limits, and the README "Known, documented limits" |
+| Colours or design tokens in `frontend/src/index.css` | Nothing: `website/src/styles/tokens.css` is generated from it |
+
+Rules for website content:
+- Describe only what exists and was checked. Never advertise a planned feature as shipped; label it planned.
+- Manual chapters carry a "Draft" note until verified against a running dashboard. Remove the note only after you have actually checked the page.
+- No private data on the site: no real MAC addresses, IPs, SSIDs, serial numbers or secrets. Screenshots are synthetic demo data (`docs/images/`).
+- Generated files (`website/src/data/routers.json`, `src/styles/tokens.css`, `public/images/`, `public/install.sh`) are not committed. Change their sources.
+- Verify before finishing: `cd website && npm run build` (needs Node 22.23.4 or newer), then `python3 scripts/check-links.py dist` and `python3 scripts/check-private.py dist`. Pushes to `main` that touch the site deploy it automatically.
+
 ## Where to find what
 
 | Topic | Document |
@@ -95,6 +126,8 @@ heimdall/
 | UI design language | `docs/frontend/ui-design-brief.md` |
 | React component map | `docs/frontend/component-map.md` |
 | HTML mockups | `docs/frontend/mockups/` |
+| Website plan, design, hosting | `docs/website-plan.md`, `website/README.md` |
+| Website mockups | `docs/website/mockups/` |
 
 ## Code style
 
