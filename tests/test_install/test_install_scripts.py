@@ -117,6 +117,21 @@ class TestSetup:
             run(['./setup.sh', '--tier=minimal'], d, fake_bin)
         assert (a / 'secrets' / 'jwt_secret.txt').read_text() != (b / 'secrets' / 'jwt_secret.txt').read_text()
 
+    def test_router_choice_is_recorded_for_first_boot(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        run(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin)
+        assert '\nINITIAL_ROUTER=passive\n' in (tmp_path / '.env').read_text()
+
+    def test_no_router_choice_leaves_the_setting_blank(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
+        assert '\nINITIAL_ROUTER=\n' in (tmp_path / '.env').read_text()
+
+    def test_only_routers_needing_no_login_can_be_preselected(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        r = run(['./setup.sh', '--tier=minimal', '--router=openwrt-ubus'], tmp_path, fake_bin)
+        assert r.returncode != 0 and 'Invalid --router' in r.stderr
+
     def test_rejects_a_bad_tier(self, dist, tmp_path, fake_bin):
         extract(dist, tmp_path)
         r = run(['./setup.sh', '--tier=huge'], tmp_path, fake_bin)
@@ -133,6 +148,10 @@ class TestBootstrap:
         assert r.returncode == 0, r.stderr + r.stdout
         assert (tmp_path / 'h' / '.env').is_file() and (tmp_path / 'h' / 'secrets' / 'jwt_secret.txt').is_file()
         assert 'Checksum verified' in r.stdout
+
+    def test_router_choice_passes_through_the_bootstrap(self, dist, tmp_path, fake_bin):
+        self._install(dist, tmp_path, fake_bin, '--tier=minimal', '--router=passive', '--no-start')
+        assert 'INITIAL_ROUTER=passive' in (tmp_path / 'h' / '.env').read_text()
 
     def test_start_runs_pull_then_up(self, dist, tmp_path, fake_bin):
         # No dashboard is listening in the test, so don't wait for one.

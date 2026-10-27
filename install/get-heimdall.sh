@@ -12,7 +12,7 @@
 # It does not touch your router or network configuration. It needs no sudo unless Docker itself does.
 #
 # Options: --tier=minimal|intermediate|full  --dir=PATH  --version=vX.Y.Z (default: latest)
-#          --install-docker  --no-start  --yes (no prompts)  --iface=NAME  --subnet=CIDR
+#          --router=sagemcom|passive  --install-docker  --no-start  --yes (no prompts)  --iface=NAME  --subnet=CIDR
 set -euo pipefail
 
 REPO="danielonet/heimdall"
@@ -28,8 +28,8 @@ main() {
             --install-docker) install_docker=true ;;
             --no-start) start=false ;;
             --yes|-y) yes=true ;;
-            --iface=*|--subnet=*) setup_args+=("$arg") ;;
-            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR]"; return 0 ;;
+            --iface=*|--subnet=*|--router=*) setup_args+=("$arg") ;;
+            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR]"; return 0 ;;
             *) die "Unknown option: $arg" ;;
         esac
     done
@@ -52,6 +52,16 @@ main() {
         case "${choice:-1}" in 1) tier=minimal ;; 2) tier=intermediate ;; 3) tier=full ;; *) die "Invalid choice: $choice" ;; esac
     fi
     [ -n "$tier" ] && setup_args+=("--tier=$tier")
+
+    # Same idea for the router, on a fresh install only (an existing .env keeps its choice).
+    if [[ " ${setup_args[*]-} " != *" --router="* ]] && [ ! -f "$dir/.env" ] && ! $yes && [ -r /dev/tty ]; then
+        echo "Which router is on your network?"
+        echo "  1) Sagemcom F@st (XMO)"
+        echo "  2) Another router, or not sure — Heimdall finds devices itself (passive mode)"
+        echo "  3) A router from the supported list — I'll pick it in the dashboard"
+        local rchoice; read -rp "Enter 1/2/3 [3]: " rchoice < /dev/tty
+        case "${rchoice:-3}" in 1) setup_args+=("--router=sagemcom") ;; 2) setup_args+=("--router=passive") ;; 3) ;; *) die "Invalid choice: $rchoice" ;; esac
+    fi
 
     ensure_docker "$install_docker"
     local docker=(docker)

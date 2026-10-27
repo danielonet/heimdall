@@ -28,6 +28,7 @@ services:
       - MIWIFI_IP=
       - MIWIFI_PASSWORD_FILE=/run/secrets/miwifi_password
       - ROUTER_SECRETS_DIR=/run/secrets/routers
+      - INITIAL_ROUTER=${INITIAL_ROUTER:-}   # first boot only; written by the bundle's setup.sh --router=
       # - USE_MOCK_MIWIFI=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel
       - REDIS_URL=redis://localhost:6379

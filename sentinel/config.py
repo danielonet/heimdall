@@ -183,6 +183,9 @@ class Settings(BaseSettings):
     # PassiveAdapter's ARP ping sweep cadence (seconds); 0 = never sweep, use
     # the host's ARP table only. See docs/architecture/14-passive-adapter.md.
     PASSIVE_SWEEP_INTERVAL_S: int = 300
+    # Written by the bundle's setup.sh --router=; applied once on a pristine
+    # install by sentinel/adapter/initial_router.py. Only 'passive' is honoured.
+    INITIAL_ROUTER: str = ''
     NMAP_SCAN_CRON: str = '0 2 * * *'          # 02:00 daily
     THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
     OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'

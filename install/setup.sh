@@ -6,7 +6,7 @@
 # secrets, detects the LAN interface and subnet, and writes .env. It never
 # overwrites an existing secret or .env, so it is safe to re-run.
 #
-# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--iface=eth0] [--subnet=192.168.1.0/24]
+# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24]
 #
 # Afterwards:  docker compose pull && docker compose up -d
 # (.env sets COMPOSE_PROFILES, so the same command works for every tier.)
@@ -20,10 +20,11 @@ ok()   { echo "${G}✔${N} $*"; }
 warn() { echo "${Y}⚠${N} $*" >&2; }
 die()  { echo "${R}✖${N} $*" >&2; exit 1; }
 
-TIER="" IFACE="" SUBNET=""
+TIER="" IFACE="" SUBNET="" ROUTER=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
+        --router=*) ROUTER="${arg#--router=}" ;;
         --iface=*)  IFACE="${arg#--iface=}" ;;
         --subnet=*) SUBNET="${arg#--subnet=}" ;;
         -h|--help)  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -51,6 +52,16 @@ if [ -z "$TIER" ]; then
     fi
 fi
 case "$TIER" in minimal|intermediate|full) ;; *) die "Invalid --tier=$TIER (minimal, intermediate or full)" ;; esac
+
+if [ -z "$ROUTER" ] && [ -t 0 ] && [ ! -f .env ]; then
+    echo "Which router is on your network?"
+    echo "  1) Sagemcom F@st (XMO)"
+    echo "  2) Another router, or not sure — Heimdall finds devices itself (passive mode)"
+    echo "  3) A router from the supported list — I'll pick it in the dashboard"
+    read -rp "Enter 1/2/3 [3]: " choice
+    case "${choice:-3}" in 1) ROUTER=sagemcom ;; 2) ROUTER=passive ;; 3) ROUTER="" ;; *) die "Invalid choice: $choice" ;; esac
+fi
+case "$ROUTER" in ""|sagemcom|passive) ;; *) die "Invalid --router=$ROUTER (sagemcom or passive; other routers are chosen in the dashboard)" ;; esac
 
 # ── LAN interface and subnet ────────────────────────────────────────────────
 if [ -z "$IFACE" ]; then
@@ -107,6 +118,10 @@ COMPOSE_PROFILES=${profiles}
 
 # Image version to run. Change it, then: docker compose pull && docker compose up -d
 IMAGE_TAG=${VERSION_TAG}
+
+# Router chosen at setup. 'passive' = no router login, devices found from the ARP table.
+# Applied once, on first start; change it afterwards on the Equipment tab.
+INITIAL_ROUTER=${ROUTER}
 
 # LAN-facing interface to sniff, and its subnet (used by Zeek).
 SNIFF_IFACE=${IFACE}

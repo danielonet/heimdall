@@ -24,6 +24,7 @@ from sqlalchemy import delete, select, text
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
 from sentinel.adapter.factory import create_router_adapter, create_secondary_router_adapter
+from sentinel.adapter.initial_router import apply_initial_router
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
 from sentinel.api.websocket import emit_alert
@@ -357,6 +358,13 @@ class SentinelScheduler:
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._redis_client = from_url(self._redis_url)
+
+        # First boot of an install from the published bundle: apply the
+        # router chosen in setup.sh before anything builds an adapter.
+        try:
+            self._loop.run_until_complete(apply_initial_router())
+        except Exception:
+            logger.exception('Could not apply INITIAL_ROUTER — choose the router on the Equipment tab')
 
         # A runtime-configured SNIFF_IFACE (an admin's pick from the Settings
         # tab dropdown — see SettingsRepository) overrides the env default,
