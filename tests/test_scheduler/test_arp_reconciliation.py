@@ -73,6 +73,7 @@ def _scheduler_with_mocks(leases_result) -> tuple[SentinelScheduler, Mock, Async
     asyncio.sleep() calls it doesn't care about.
     """
     scheduler = object.__new__(SentinelScheduler)
+    scheduler._secondary_adapter = None  # no second router configured
     arp_watcher = Mock()
     arp_watcher.is_active = True
     scheduler._arp_watcher = arp_watcher

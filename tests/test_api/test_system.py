@@ -23,10 +23,10 @@ class TestHealth:
             'deployment_tier': 'minimal',
             'active_services': [
                 'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch',
-                'fingerprint', 'nmap', 'threat_intel',
+                'fingerprint', 'nmap', 'threat_intel', 'wifi_monitor',
             ],
             'arp_watch_active': False, 'dhcp_watch_active': False, 'fingerprint_active': False,
-            'sniff_iface': '',
+            'sniff_iface': '', 'wifi_monitor_active': False,
             'nmap_last_scan_at': None, 'canary_last_check_at': None,
             'zeek_dns_last_check_at': None, 'zeek_beacon_last_scan_at': None,
             'clamav_reachable': None, 'suricata_last_check_at': None,
@@ -42,6 +42,7 @@ class TestServiceDetails:
         assert set(body) == {
             'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch', 'fingerprint',
             'nmap', 'opencanary', 'threat_intel', 'zeek_dns', 'zeek_beacon', 'clamav', 'suricata',
+            'wifi_monitor',
         }
         for entry in body.values():
             assert entry['description']

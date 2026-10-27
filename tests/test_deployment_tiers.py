@@ -31,7 +31,7 @@ class TestActiveServiceKeys:
         keys = active_service_keys('minimal')
         assert set(keys) == {
             'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch',
-            'fingerprint', 'nmap', 'threat_intel',
+            'fingerprint', 'nmap', 'threat_intel', 'wifi_monitor',
         }
 
     def test_intermediate_adds_opencanary(self):
@@ -46,7 +46,7 @@ class TestActiveServiceKeys:
         assert set(keys) == {
             'postgres', 'redis', 'router_poll', 'arp_watch', 'dhcp_watch',
             'fingerprint', 'nmap', 'threat_intel', 'opencanary', 'zeek_dns',
-            'zeek_beacon', 'clamav', 'suricata',
+            'zeek_beacon', 'clamav', 'suricata', 'wifi_monitor',
         }
 
     def test_unknown_tier_falls_back_to_minimal(self):

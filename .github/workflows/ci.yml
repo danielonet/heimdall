@@ -44,6 +44,8 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://sentinel:pass@localhost:5432/sentinel
       REDIS_URL: redis://localhost:6379
+      # Throwaway value for the API tests' login flow; production reads JWT_SECRET_FILE.
+      JWT_SECRET_KEY: ci-only-not-a-real-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

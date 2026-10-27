@@ -10,6 +10,7 @@ def _scheduler(tier='full', **overrides):
     sched._arp_watcher = None
     sched._dhcp_watcher = None
     sched._fingerprinter = None
+    sched._wifi_monitor = None
     sched._sniff_iface = 'eth0'
     sched._last_nmap_scan_at = None
     sched._last_canary_check_at = None

@@ -307,21 +307,28 @@ class TestSecurityDigestJob:
         call = scheduler._notifier.calls[0]
         assert _TRAFFIC_MAC_2 in call['message']
 
-    async def test_bandwidth_by_hour_section_appears_with_real_polling_data(self, scheduler):
+    async def test_bandwidth_by_hour_section_appears_when_wan_stats_exist(self, scheduler):
         """Requested directly 2026-09-08: an hourly household bandwidth bar
-        chart. The live scheduler polls WanStats every ~15s regardless of
-        this test, so the section should always have something to show —
-        same 'regardless of alert content' reasoning as the device-traffic
-        tests above. Doesn't assert on specific figures here (that's
-        test_digest.py's own unit-level coverage) since real household
-        values can't be controlled from this test."""
+        chart. Seeds its own WanStats row rather than relying on a live
+        scheduler having polled some — this used to assert on whatever a
+        running dev instance had written, which made it pass locally and
+        fail in CI (empty database). Doesn't assert on figures here (that's
+        test_digest.py's unit-level coverage and the sibling test below).
+        Cleanup targets this exact seeded timestamp only."""
         now = datetime.now(timezone.utc)
         await SettingsRepository().set_last_digest_sent_at(now - timedelta(hours=1))
+        seed_time = (now - timedelta(minutes=30)).replace(microsecond=313131)
+        async with get_session() as session:
+            session.add(WanStats(time=seed_time, bytes_sent_delta=1024, bytes_recv_delta=2048))
 
-        await scheduler._security_digest_job()
+        try:
+            await scheduler._security_digest_job()
 
-        call = scheduler._notifier.calls[0]
-        assert 'BANDWIDTH BY HOUR' in call['message']
+            call = scheduler._notifier.calls[0]
+            assert 'BANDWIDTH BY HOUR' in call['message']
+        finally:
+            async with get_session() as session:
+                await session.execute(delete(WanStats).where(WanStats.time == seed_time))
 
     async def test_bandwidth_by_hour_sums_wan_stats_into_the_right_bucket(self, scheduler):
         """WanStats has no MAC column to scope a synthetic row by (see its

@@ -1017,11 +1017,15 @@ class SentinelScheduler:
             days = await SettingsRepository().get_data_retention_days()
             cutoff = datetime.now(timezone.utc) - timedelta(days=days)
             async with get_session() as session:
+                # CAST: drop_chunks' older_than is polymorphic, so asyncpg can't infer
+                # the parameter's type ("could not determine data type of parameter
+                # $1") and without it the whole job — including the DELETEs below —
+                # rolled back on every run, i.e. retention never actually ran.
                 await session.execute(
-                    text("SELECT drop_chunks('traffic_samples', older_than => :cutoff)"), {'cutoff': cutoff}
+                    text("SELECT drop_chunks('traffic_samples', older_than => CAST(:cutoff AS timestamptz))"), {'cutoff': cutoff}
                 )
                 await session.execute(
-                    text("SELECT drop_chunks('port_stats', older_than => :cutoff)"), {'cutoff': cutoff}
+                    text("SELECT drop_chunks('port_stats', older_than => CAST(:cutoff AS timestamptz))"), {'cutoff': cutoff}
                 )
                 await session.execute(delete(WanStatusHistory).where(WanStatusHistory.changed_at < cutoff))
                 await session.execute(delete(Alert).where(Alert.created_at < cutoff))
