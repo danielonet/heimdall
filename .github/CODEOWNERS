@@ -1,0 +1,26 @@
+# Code owners: GitHub asks these people to review any pull request that touches the
+# matching paths. It only BLOCKS merging if the branch rule for `main` has
+# "Require review from Code Owners" turned on (Settings -> Branches).
+# Later lines override earlier ones; the last matching pattern wins.
+
+# Everything that can change what runs, what is published, or who can deploy.
+/.github/                 @danielonet
+/website/                 @danielonet
+/install/                 @danielonet
+/scripts/                 @danielonet
+/docker-compose.yml       @danielonet
+**/Dockerfile             @danielonet
+/frontend/nginx.conf      @danielonet
+
+# Project policy and instructions, including the file that steers AI assistants.
+/CLAUDE.md                @danielonet
+/SECURITY.md              @danielonet
+/LICENSE                  @danielonet
+/CONTRIBUTING.md          @danielonet
+
+# Published website content derives from these.
+/docs/router/equipment-facts.json  @danielonet
+/sentinel/adapter/catalog.py       @danielonet
+
+# Secrets handling.
+/sentinel/config.py       @danielonet
