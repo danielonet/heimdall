@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck install/setup.sh install/get-heimdall.sh install/make-bundle.sh \
+        run: shellcheck install/setup.sh install/get-heimdall.sh install/make-bundle.sh
             install/deb/make-deb.sh install/deb/heimdall install/deb/postinst install/deb/prerm install/deb/postrm
       - name: Bundle and bootstrap tests
         run: |

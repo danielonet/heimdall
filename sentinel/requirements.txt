@@ -8,8 +8,8 @@ Flask==3.0.3
 asgiref==3.11.1  # required for Flask's native `async def` view support
 Flask-SocketIO==5.7.0
 Flask-JWT-Extended==4.5.3
-python-socketio==5.9.0
-python-engineio==4.8.0  # pulls in simple-websocket, which is what actually
+python-socketio==5.17.0
+python-engineio==4.15.0  # pulls in simple-websocket, which is what actually
                         # gives Flask-SocketIO's async_mode='threading' real
                         # WebSocket upgrades under a threaded WSGI server
 
@@ -80,5 +80,5 @@ tenacity==9.2.1
 # ─────────────────────────────────────────────────────────────────────────────
 # Development & Testing (optional, remove for production)
 # ─────────────────────────────────────────────────────────────────────────────
-pytest==7.4.3
+pytest==8.4.2
 pytest-asyncio==1.4.0

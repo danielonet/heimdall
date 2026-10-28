@@ -62,3 +62,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# ── Website deploy key (never commit; lives in the DEPLOY_SSH_KEY repo secret) ──
+heimdall-deploy
+heimdall-deploy.pub

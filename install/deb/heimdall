@@ -72,7 +72,7 @@ case "$cmd" in
         read -rp "Type 'delete' to continue: " answer
         [ "$answer" = delete ] || die "cancelled"
         if has_systemd; then systemctl disable --now "$UNIT" 2>/dev/null || true; fi
-        [ -f "$DIR/docker-compose.yml" ] && compose down -v || true
+        if [ -f "$DIR/docker-compose.yml" ]; then compose down -v || true; fi
         rm -rf "${DIR:?}/secrets" "${DIR:?}/.env"
         echo "Done. Run 'sudo heimdall setup' to start fresh."
         ;;
