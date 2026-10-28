@@ -1,0 +1,11 @@
+# Reviewed false positives, by exact fingerprint (file:rule:line). Not a blanket ignore: a real
+# secret anywhere else, or on another line of these files, still fails CI.
+
+# MiWiFi's login constant. It ships in the router's own web JS (js/xqjson.js), identical on every
+# device; docs/router/miwifi-api.md documents it as not a secret.
+sentinel/adapter/miwifi/miwifi_auth.py:generic-api-key:14
+docs/router/miwifi-api.md:generic-api-key:37
+
+# Fake feed key in the threat-feed API tests.
+tests/test_api/test_threats.py:generic-api-key:16
+tests/test_api/test_threats.py:generic-api-key:21
