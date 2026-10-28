@@ -21,14 +21,14 @@ jobs:
     name: Docs index is current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Every document has a row in docs/INDEX.md, and no row is dead
         run: python3 scripts/check-docs-index.py
   install-scripts:
     name: Install scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck
         run: shellcheck install/setup.sh install/get-heimdall.sh install/make-bundle.sh \
             install/deb/make-deb.sh install/deb/heimdall install/deb/postinst install/deb/prerm install/deb/postrm
@@ -70,7 +70,7 @@ jobs:
       # Throwaway value for the API tests' login flow; production reads JWT_SECRET_FILE.
       JWT_SECRET_KEY: ci-only-not-a-real-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -90,7 +90,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -104,6 +104,6 @@ jobs:
     name: Docker images build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t heimdall-backend-ci ./sentinel
       - run: docker build -t heimdall-frontend-ci ./frontend
