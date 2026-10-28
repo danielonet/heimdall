@@ -18,7 +18,9 @@ services:
       - ROUTER_PORT=80
       - ROUTER_USERNAME=home
       - ROUTER_PASSWORD_FILE=/run/secrets/router_password
-      # - USE_MOCK_ROUTER=true   # enable for offline dev (synthetic test data)
+      # Set explicitly: sentinel/config.py defaults this to true for host dev,
+      # which would make a container install show synthetic data.
+      - USE_MOCK_ROUTER=${USE_MOCK_ROUTER:-false}   # true = offline dev (synthetic test data)
       # Optional second router — a Redmi/Xiaomi unit on stock MiWiFi
       # firmware (see sentinel/adapter/miwifi/). Blank MIWIFI_IP means "not
       # configured"; both can also be set/changed later from the Settings
