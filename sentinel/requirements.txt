@@ -50,9 +50,9 @@ python-dotenv==1.2.2
 # ─────────────────────────────────────────────────────────────────────────────
 # Machine Learning & Anomaly Detection
 # ─────────────────────────────────────────────────────────────────────────────
-scikit-learn==1.9.0
+scikit-learn==1.9.1
 PyOD==3.6.1  # 1.1.2 predates scikit-learn's __sklearn_tags__ API (sklearn>=1.6)
-             # and crashes on LOF.predict() under scikit-learn==1.9.0 above
+             # and crashes on LOF.predict() under scikit-learn==1.9.1 above
 numpy==2.4.6
 pandas==3.0.3
 
