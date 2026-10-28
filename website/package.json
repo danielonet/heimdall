@@ -5,8 +5,9 @@
   "version": "0.0.0",
   "scripts": {
     "generate": "node scripts/gen-tokens.mjs && node scripts/copy-assets.mjs && PYTHONPATH=.. python3 scripts/gen-routers.py",
+    "check:docs": "python3 ../scripts/check-docs-index.py",
     "dev": "npm run generate && astro dev",
-    "build": "npm run generate && astro build",
+    "build": "npm run check:docs && npm run generate && astro build",
     "preview": "astro preview"
   },
   "dependencies": {

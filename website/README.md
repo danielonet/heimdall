@@ -25,6 +25,9 @@ npm run build      # same, then builds to dist/
 python3 scripts/check-links.py dist
 ```
 
+`npm run build` also runs `scripts/check-docs-index.py` (from the repository root) and fails if `docs/INDEX.md`
+has drifted from the documents, including the manual chapters in this site.
+
 When a router is added to the catalog, `npm run build` fails until it has an entry in
 `docs/router/equipment-facts.json`. That is deliberate: the equipment table cannot drift.
 

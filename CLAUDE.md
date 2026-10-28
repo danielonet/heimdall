@@ -51,6 +51,37 @@ heimdall/
     └── public/.htaccess       ← HTTPS, redirects, headers
 ```
 
+## Business context
+
+Read this before planning anything large; the code cannot tell you it.
+
+- **Who it is for:** people who run a home network or home lab and want to see every
+  device on it and be told about unknown or suspicious ones, with no cloud account and
+  no data leaving the house. Self-hosted on one dedicated machine.
+- **Maturity:** alpha, one maintainer. It is deliberately privileged (host networking,
+  `NET_RAW`/`NET_ADMIN`, router admin credentials) and says so in `SECURITY.md`.
+- **Honesty is the product's selling point.** Limits are published on the website, not
+  hidden. A router is "Tested" only after a run on real hardware; every other adapter was
+  checked against a simulator. Never describe a planned feature as shipped.
+- **Real hardware:** the primary router is a Sagemcom F@st 5670 and the second a
+  Redmi/MiWiFi in AP mode. Other adapters are exercised against simulators (WireMock or a
+  container) unless the equipment table marks them Tested.
+- **Private data stays private:** the owner's real LAN (addresses, MACs, SSIDs) is in
+  `docs/router/network-topology.md`. It never goes on the website, the README or a screenshot.
+- **Most wanted from contributors:** new router adapters and switch web-UI fixtures
+  (`CONTRIBUTING.md`).
+- **Which source wins:** the code, then the architecture docs, then the manual, then the
+  plans. Plans record how something was decided and may be out of date once shipped.
+
+## Documents: read the index, not every file
+
+`docs/INDEX.md` lists every document in the repository with its kind (reference, plan,
+proposal, ...) and a "read when" line. Open it first, pick the two to four documents
+your task needs, and read those. A plan describes how a feature was built, not how it
+behaves now; a proposal is not built. When you add, rename or delete a document, update
+the index in the same change: `python3 scripts/check-docs-index.py` (add `--fix` to
+drop dead rows and stub new ones) fails the website build and CI when it is out of date.
+
 ## Non-negotiable architecture rules
 
 1. **Never access the router directly outside the adapter layer.**
@@ -111,6 +142,7 @@ Rules for website content:
 
 | Topic | Document |
 |-------|---------|
+| Every document, with when to read it | `docs/INDEX.md` |
 | Full system architecture | `docs/architecture/01-system-overview.md` |
 | Router adapter (XMO API) | `docs/architecture/02-router-adapter.md` |
 | Flask API + endpoints | `docs/architecture/03-flask-api.md` |

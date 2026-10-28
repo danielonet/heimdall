@@ -17,6 +17,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-index:
+    name: Docs index is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every document has a row in docs/INDEX.md, and no row is dead
+        run: python3 scripts/check-docs-index.py
   install-scripts:
     name: Install scripts
     runs-on: ubuntu-latest
