@@ -27,6 +27,7 @@ p { margin: 0 0 1em; }
 .topbar .wrap { display: flex; align-items: center; gap: 24px; min-height: 52px; flex-wrap: wrap; }
 .logo { font-family: var(--nordic); font-size: 1.35rem; letter-spacing: .1em; color: var(--primary); text-decoration: none; text-transform: uppercase; }
 .nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.build { font-family: var(--mono, monospace); font-size: 12px; color: var(--text-2); border: 1px solid var(--border); padding: 2px 8px; }
 .nav a { font-family: var(--head); font-weight: 600; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; color: var(--text-2); padding: 14px 10px; border-bottom: 2px solid transparent; }
 .nav a:hover { color: var(--text); }
 .nav a[aria-current] { color: var(--primary); border-bottom-color: var(--primary); }

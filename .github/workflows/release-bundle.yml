@@ -10,6 +10,17 @@ name: Release install bundle and .deb
 on:
   push:
     tags: ['v*']
+  # publish-images.yml tags every main build and calls this. A tag pushed with the workflow
+  # token does not trigger a push event, so the call is what makes the release happen.
+  workflow_call:
+    inputs:
+      tag:
+        description: The version tag to release, e.g. v0.1.6
+        required: true
+        type: string
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -20,18 +31,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Build bundle
-        run: OUT_DIR="$RUNNER_TEMP/dist" install/make-bundle.sh "$GITHUB_REF_NAME"
+        run: OUT_DIR="$RUNNER_TEMP/dist" install/make-bundle.sh "$TAG"
 
       - name: Build the .deb
-        run: OUT_DIR="$RUNNER_TEMP/dist" install/deb/make-deb.sh "$GITHUB_REF_NAME"
+        run: OUT_DIR="$RUNNER_TEMP/dist" install/deb/make-deb.sh "$TAG"
 
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$TAG" \
             "$RUNNER_TEMP/dist/heimdall-bundle.tar.gz" \
             "$RUNNER_TEMP/dist/heimdall-bundle.tar.gz.sha256" \
             "$RUNNER_TEMP/dist/install.sh" \
@@ -39,4 +52,4 @@ jobs:
             "$RUNNER_TEMP"/dist/heimdall_*_all.deb.sha256 \
             "$RUNNER_TEMP/dist/heimdall_all.deb" \
             "$RUNNER_TEMP/dist/heimdall_all.deb.sha256" \
-            --title "$GITHUB_REF_NAME" --generate-notes
+            --title "$TAG" --generate-notes

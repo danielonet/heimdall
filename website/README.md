@@ -11,6 +11,7 @@ reviewed mockups: `docs/website/mockups/`.
 | `src/data/routers.json` | **Generated** from `sentinel/adapter/catalog.py` + `docs/router/equipment-facts.json` |
 | `src/styles/tokens.css` | **Generated** from `frontend/src/index.css` (the product's palettes) |
 | `public/.htaccess` | HTTPS, the `/download/*` redirects, `/install.sh` handling, security headers |
+| `src/data/version.json` | **Generated** by `scripts/gen-version.mjs` from `git describe`; the version shown top right (`v0.1.6` on a tagged build, `v0.1.5+abc1234` between tags, `dev` without git tags) |
 | `public/install.sh` | **Generated** copy of `install/get-heimdall.sh` |
 
 ## Develop
@@ -72,6 +73,10 @@ One-time setup:
 The deploy keeps the web root an exact copy of the build. `apt/` is excluded so a future package repository can
 live beside the site. Do not keep anything else in the web root. Files are uploaded one by one, so a visitor can
 briefly see a mix of old and new files during the few seconds an upload takes.
+
+Every build of `main` is also a release (`.github/workflows/publish-images.yml`): after CI and the image push it
+tags the next patch version, runs `release-bundle.yml`, then triggers this workflow again so the site shows the new
+version. The version top right is therefore the release the live site was built from.
 
 ## Before the site goes public
 

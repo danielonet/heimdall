@@ -7,3 +7,4 @@ dist/
 public/install.sh
 public/install.sh.sha256
 src/assets/heimdall.png
+src/data/version.json

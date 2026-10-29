@@ -5,6 +5,11 @@ name: Publish images
 # on version tags — never on pull requests, so a fork can't publish anything —
 # and only after the full CI workflow has passed.
 #
+# Every main build is a release: the next patch version (v0.1.5 -> v0.1.6) is chosen up
+# front, the images are pushed with it, then the tag is created, the install bundle and .deb
+# are released, and the website is rebuilt so it shows that version. Pushing a v* tag by hand
+# still works and releases that exact version.
+#
 # One-time setup (see docs/homelab-deployment.md): after the first run, set each
 # package's visibility to Public under your profile -> Packages.
 
@@ -26,9 +31,35 @@ jobs:
     name: CI gate
     uses: ./.github/workflows/ci.yml
 
+  version:
+    name: Choose the version
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      image_tag: ${{ steps.v.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)
+            last=${last:-v0.0.0}
+            IFS=. read -r major minor patch <<< "${last#v}"
+            tag="v${major}.${minor}.$((patch + 1))"
+          fi
+          echo "Version: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+
   publish:
     name: Push ${{ matrix.image }}
-    needs: ci
+    needs: [ci, version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,6 +95,7 @@ jobs:
             type=sha,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.version.outputs.image_tag }},enable=${{ github.ref_type == 'branch' }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -76,3 +108,44 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  tag:
+    name: Tag ${{ needs.version.outputs.tag }}
+    # A tag pushed by hand is already the release; only branch builds create one.
+    if: github.ref_type == 'branch'
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Build of ${GITHUB_SHA::7}" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+  release:
+    name: Release ${{ needs.version.outputs.tag }}
+    needs: [version, tag]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-bundle.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+
+  site:
+    name: Rebuild the website
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # The site shows the deployed version, which only exists now that the tag does.
+      # workflow_dispatch is allowed with the workflow token (a tag push is not).
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run website.yml --repo "$GITHUB_REPOSITORY" --ref main

@@ -8,6 +8,7 @@ import '../styles/tokens.css';
 import '../styles/site.css';
 import { Image, getImage } from 'astro:assets';
 import logo from '../assets/heimdall.png';
+import build from '../data/version.json';
 
 interface Props { title: string; description: string; current?: string; }
 const { title, description, current = '' } = Astro.props;
@@ -40,6 +41,7 @@ const favicon = await getImage({ src: logo, width: 64, height: 64, format: 'png'
       {nav.map(([href, label]) => <a href={href} aria-current={current === label ? 'page' : undefined}>{label}</a>)}
     </nav>
     <button class="toggle" type="button" data-palette-toggle aria-label="Switch colour palette">◐ Slate</button>
+    <span class="build" title={build.commit ? `Deployed build, commit ${build.commit}` : 'Local build'}>{build.version}</span>
   </div></header>
   <div class="alpha"><div class="wrap"><span class="dot warn live"></span><span><strong>Alpha.</strong> Heimdall monitors, and can block, devices on your LAN. <a href="/security/limits/">Read the limits</a> before relying on it.</span></div></div>
   <main id="main"><slot /></main>
