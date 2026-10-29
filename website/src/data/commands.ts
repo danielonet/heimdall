@@ -8,7 +8,7 @@ const script = (tier: string): Tab => ({
 export const debLines = [
   { cmd: 'curl -fsSLO https://heimdall.it.com/download/heimdall_all.deb' },
   { cmd: 'sudo apt install ./heimdall_all.deb', note: 'installs Docker and the compose plugin if missing' },
-  { cmd: 'sudo heimdall setup', note: 'tier, router, generates this machine’s secrets' },
+  { cmd: 'sudo heimdall setup', note: 'tier, router, your dashboard user name and password; generates this machine’s secrets' },
   { cmd: 'sudo heimdall start', note: 'pulls the images; starts now and at every boot' },
 ];
 

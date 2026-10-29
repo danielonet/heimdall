@@ -21,7 +21,7 @@ case "$1" in
 
 Heimdall is installed but not started. Next:
 
-    sudo heimdall setup      # pick a tier and router, generates secrets
+    sudo heimdall setup      # pick a tier and router, choose the dashboard user name and password
     sudo heimdall start      # pulls the images and starts Heimdall at every boot
 
 Dashboard: http://<this-machine>:3000  (do not expose ports 3000/5000 to the internet)

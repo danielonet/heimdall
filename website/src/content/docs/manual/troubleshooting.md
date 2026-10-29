@@ -6,8 +6,10 @@ description: Common problems and fixes.
 ## I cannot open the dashboard
 Check that Heimdall is running: `sudo heimdall status` (.deb) or `docker compose ps` in the install folder. Use port 3000 on the Heimdall machine's address, from a device on the same network.
 
-## I forgot the admin password
-`sudo heimdall password` (.deb), or read `secrets/admin_password.txt` in the install folder.
+## I forgot the admin user name or password
+`sudo heimdall password` (.deb), or read `secrets/admin_password.txt` in the install folder, shows the password. The user name is the `ADMIN_USERNAME` line in `.env` in the install folder; if there is none, it is `admin`.
+
+To change either, edit those two files (put the new password on one line in `secrets/admin_password.txt`, at least 12 characters with no space at either end), then restart: `sudo heimdall start` after `sudo heimdall stop` (.deb) or `docker compose up -d --force-recreate sentinel-backend`.
 
 ## The device list is empty
 You have not chosen a router, or the router login is wrong. Open [Equipment](/manual/equipment/). If your router is not listed, choose **Other / not listed (passive mode)**.

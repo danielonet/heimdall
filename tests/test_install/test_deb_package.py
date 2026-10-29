@@ -132,6 +132,7 @@ class TestCommand:
                 kw['stdin'] = subprocess.DEVNULL
             return subprocess.run([exe, *args], capture_output=True, text=True, env=env, **kw)
         run.home = home
+        run.exe = exe
         return run
 
     def test_version(self, cmd):
@@ -153,6 +154,21 @@ class TestCommand:
         (cmd.home / 'secrets').mkdir()
         (cmd.home / 'secrets' / 'admin_password.txt').write_text('s3cret\n')
         assert cmd('password').stdout.strip() == 's3cret'
+
+    def test_setup_passes_the_dashboard_login_to_setup_sh(self, cmd, tmp_path):
+        fake = tmp_path / 'bin'
+        fake.mkdir()
+        (fake / 'docker').write_text('#!/bin/sh\nexit 0\n')
+        (fake / 'docker').chmod(0o755)
+        pw = tmp_path / 'pw.txt'
+        pw.write_text('correct-horse-battery\n')
+        env = {**os.environ, 'PATH': f'{fake}:{os.environ["PATH"]}'}
+        r = subprocess.run([cmd.exe, 'setup', '--tier=minimal', '--router=passive', '--admin-user=carol',
+                            f'--admin-password-file={pw}'],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, 'HEIMDALL_HOME': str(cmd.home)})
+        assert r.returncode == 0, r.stderr
+        assert (cmd.home / 'secrets' / 'admin_password.txt').read_text().strip() == 'correct-horse-battery'
+        assert 'ADMIN_USERNAME=carol' in (cmd.home / '.env').read_text()
 
     def test_reset_needs_explicit_confirmation(self, cmd):
         (cmd.home / '.env').write_text('x=1\n')

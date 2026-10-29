@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # heimdall — control the Heimdall stack installed by the heimdall .deb package.
 #
-#   heimdall setup [setup.sh options]   generate secrets and .env (first time only)
+#   heimdall setup [setup.sh options]   asks for the dashboard user name and password, generates secrets and .env (first time only)
 #   heimdall start                      start now and at every boot
 #   heimdall stop                       stop, and do not start at boot
 #   heimdall upgrade                    pull the images for the installed version and restart
@@ -27,6 +27,9 @@ compose() { (cd "$DIR" && docker compose "$@"); }
 
 need_root() { [ "$(id -u)" -eq 0 ] || [ -n "${HEIMDALL_HOME:-}" ] || die "run this with sudo: sudo heimdall ${1:-}"; }
 
+# The dashboard user name chosen at setup (written to .env); "admin" for installs that predate the choice.
+admin_user() { sed -n 's/^ADMIN_USERNAME=//p' "$DIR/.env" 2>/dev/null | head -n 1 | grep . || echo admin; }
+
 need_setup() { [ -f "$DIR/.env" ] || die "not set up yet — run: sudo heimdall setup"; }
 
 cmd="${1:-help}"
@@ -42,7 +45,7 @@ case "$cmd" in
     start)
         need_root start; need_setup
         if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d; fi
-        echo "Dashboard: http://<this-machine>:3000   user admin   password: sudo heimdall password"
+        echo "Dashboard: http://<this-machine>:3000   user $(admin_user)   password: the one you chose at setup (forgotten? sudo heimdall password)"
         ;;
     stop)
         need_root stop

@@ -27,8 +27,9 @@ Only the latest commit on `main` is supported. There are no tagged releases yet.
   Keep them LAN-only or behind a VPN/reverse proxy with its own authentication.
 - **Secrets** live in `secrets/` (mode 700) and are mounted as Docker secrets;
   they are never committed (`secrets/` and `.env` are gitignored). The
-  installer generates a random dashboard `admin` password into
-  `secrets/admin_password.txt` — change it if you share the host.
+  installer asks you for the dashboard user name and password (or generates a random
+  password) and keeps the password only in `secrets/admin_password.txt` — change it if you
+  share the host.
 - **Router credentials** give full control of your router. Use a dedicated
   router account where the firmware allows it.
 - **Privileged containers.** Anything that can sniff your LAN can read it.

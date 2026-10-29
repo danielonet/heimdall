@@ -216,7 +216,7 @@ for that setup.
 curl -fsSL https://heimdall.it.com/install.sh | bash -s -- --tier=intermediate   # minimal | intermediate | full
 ```
 
-This downloads the release bundle, **verifies its SHA-256**, generates secrets unique to your machine, detects your LAN interface and subnet, and runs `docker compose pull && docker compose up -d` from `~/heimdall`. It does not touch your router. Prefer to read it first? The script is [`install/get-heimdall.sh`](install/get-heimdall.sh); the manual route is: download `heimdall-bundle.tar.gz` and its `.sha256` from the [latest release](https://github.com/danielonet/heimdall/releases/latest), check it with `sha256sum -c`, extract, run `./setup.sh`, then `docker compose pull && docker compose up -d`. Re-running the same command upgrades in place and keeps your secrets and `.env`. Open `http://<this-machine>:3000`, log in as `admin` (password in `~/heimdall/secrets/admin_password.txt`), then pick your router on the Equipment tab (choose **Other / not listed** if yours isn't there). Requires Docker with the compose plugin (`--install-docker` installs it for you).
+This downloads the release bundle, **verifies its SHA-256**, generates secrets unique to your machine, detects your LAN interface and subnet, and runs `docker compose pull && docker compose up -d` from `~/heimdall`. It does not touch your router. Prefer to read it first? The script is [`install/get-heimdall.sh`](install/get-heimdall.sh); the manual route is: download `heimdall-bundle.tar.gz` and its `.sha256` from the [latest release](https://github.com/danielonet/heimdall/releases/latest), check it with `sha256sum -c`, extract, run `./setup.sh`, then `docker compose pull && docker compose up -d`. On a fresh install it asks for the **dashboard user name and password** you will sign in with (a password of at least 12 characters; press Enter at either prompt to keep `admin` and a generated password). The password is kept only in `~/heimdall/secrets/admin_password.txt`. For an unattended install pass `--admin-user=NAME --admin-password-file=PATH` (a file, so the password never shows in the process list). Re-running the same command upgrades in place, keeps your secrets and `.env`, and does not ask again. Open `http://<this-machine>:3000`, log in with that user, then pick your router on the Equipment tab (choose **Other / not listed** if yours isn't there). Requires Docker with the compose plugin (`--install-docker` installs it for you).
 
 #### Debian / Ubuntu: the `.deb` package
 
@@ -225,7 +225,7 @@ Each release also carries `heimdall_<version>_all.deb` (plus a `.sha256`). It in
 ```bash
 curl -fsSLO https://github.com/danielonet/heimdall/releases/latest/download/heimdall_all.deb
 sudo apt install ./heimdall_all.deb     # pulls in docker.io, the compose plugin, openssl, iproute2
-sudo heimdall setup                     # tier, router, generates this machine's secrets
+sudo heimdall setup                     # tier, router, your dashboard user name and password; generates this machine's secrets
 sudo heimdall start                     # pulls the images; starts now and at every boot
 ```
 
@@ -290,7 +290,7 @@ exact command at the end of step 1.
 
 The backend container applies the database migrations itself on every start (`python -m sentinel.db.migrate`), so there is no separate schema step. Dev mode (`run.sh`/`dev.sh`) runs `alembic upgrade head` for you.
 
-Dashboard: `http://<host-ip>:3000` — log in with `admin` / the password you put in `secrets/admin_password.txt`.
+Dashboard: `http://<host-ip>:3000` — log in with `admin` (or the `ADMIN_USERNAME` you set in `.env`) and the password you put in `secrets/admin_password.txt`.
 
 Notifications (ntfy/SMTP) are configured from the Settings page after first login, not via `.env` — see the **NOTIFICATIONS** section there.
 

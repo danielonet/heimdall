@@ -22,6 +22,7 @@ services:
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}   # chosen at setup, written to .env by setup.sh
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
