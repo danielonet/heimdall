@@ -21,11 +21,20 @@ export function LoginPage() {
   const wisdom = wisdomRef.current
   const navigate = useNavigate()
 
+  // Which form to show is decided by the backend, so neither is rendered until it answers; a failed
+  // check is shown as an error with a retry rather than guessed as "sign in".
+  const [setupError, setSetupError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+
   useEffect(() => {
+    let cancelled = false
     fetchSetupRequired()
-      .then(setSetupRequired)
-      .catch(() => setSetupRequired(false))
-  }, [])
+      .then((required) => !cancelled && setSetupRequired(required))
+      .catch((err) => !cancelled && setSetupError(err.message))
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
 
   const creating = setupRequired === true
   const mismatch = creating && confirm !== '' && confirm !== password
@@ -46,6 +55,31 @@ export function LoginPage() {
     } finally {
       setPending(false)
     }
+  }
+
+  if (setupRequired === null) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-bg text-[11px] text-text-secondary">
+        <img src={heimdallLogo} alt="" className="h-20 w-20" />
+        {setupError ? (
+          <>
+            <div className="text-accent-red">Cannot reach the dashboard backend: {setupError}</div>
+            <button
+              type="button"
+              onClick={() => {
+                setSetupError('')
+                setAttempt((n) => n + 1)
+              }}
+              className="border border-border px-3 py-1 tracking-wider hover:border-border-active"
+            >
+              RETRY
+            </button>
+          </>
+        ) : (
+          <div className="text-text-muted">Loading…</div>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -113,7 +147,7 @@ export function LoginPage() {
 
         <button
           type="submit"
-          disabled={pending || setupRequired === null}
+          disabled={pending}
           className="w-full border border-accent-green/40 bg-accent-green/10 py-2 text-[11px] tracking-[2px] text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-50"
         >
           {pending ? (creating ? 'CREATING…' : 'SIGNING IN…') : creating ? 'CREATE ACCOUNT' : 'SIGN IN'}

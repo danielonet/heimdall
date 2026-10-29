@@ -85,7 +85,7 @@ export async function login(username, password) {
 /** True while the dashboard has no admin yet (a new install): the login page then offers account creation. */
 export async function fetchSetupRequired() {
   const resp = await rawFetch('/setup', { method: 'GET' })
-  if (!resp.ok) return false
+  if (!resp.ok) throw new Error(`The dashboard backend answered ${resp.status}`)
   return Boolean((await resp.json()).setup_required)
 }
 
