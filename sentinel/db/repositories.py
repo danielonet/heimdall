@@ -755,6 +755,9 @@ class SettingsRepository:
                 'smtp_use_tls': (
                     row.smtp_use_tls if row and row.smtp_use_tls is not None else settings.SMTP_USE_TLS
                 ),
+                'telegram_chat_id': (
+                    row.telegram_chat_id if row and row.telegram_chat_id else settings.TELEGRAM_CHAT_ID
+                ),
                 'auto_block_on_threat': row.auto_block_on_threat if row else True,
                 'auto_block_expiry_hours': row.auto_block_expiry_hours if row else 24,
                 'last_digest_sent_at': row.last_digest_sent_at if row else None,
@@ -822,6 +825,14 @@ class SettingsRepository:
         async with get_session() as session:
             row = await self._get_or_create(session)
             row.ntfy_url = url
+
+    async def get_telegram_chat_id(self) -> str:
+        return (await self.get_all())['telegram_chat_id']
+
+    async def set_telegram_chat_id(self, chat_id: str) -> None:
+        async with get_session() as session:
+            row = await self._get_or_create(session)
+            row.telegram_chat_id = chat_id
 
     async def get_smtp_settings(self) -> dict:
         """The non-secret SMTP fields — host/port/from/to/username/use_tls.

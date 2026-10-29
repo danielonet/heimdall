@@ -54,6 +54,8 @@ case "$cmd" in
     upgrade)
         need_root upgrade; need_setup
         # `apt upgrade` already moved IMAGE_TAG (postinst); this fetches the images and restarts.
+        # A file added since the installed version is created empty here; otherwise Docker would make a directory.
+        [ -e "$DIR/secrets/telegram_bot_token.txt" ] || install -m 600 /dev/null "$DIR/secrets/telegram_bot_token.txt"
         compose pull && compose up -d
         ;;
     status)

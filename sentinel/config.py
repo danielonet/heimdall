@@ -275,6 +275,9 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ''        # populated from SMTP_PASSWORD_FILE if blank
     SMTP_PASSWORD_FILE: str = ''   # also the write target for PATCH /api/settings
     SMTP_USE_TLS: bool = True
+    TELEGRAM_CHAT_ID: str = ''     # channel (@name) or numeric chat id the bot posts to
+    TELEGRAM_BOT_TOKEN: str = ''   # populated from TELEGRAM_BOT_TOKEN_FILE if blank
+    TELEGRAM_BOT_TOKEN_FILE: str = ''   # also the write target for PATCH /api/settings
 
     class Config:
         env_file = '.env'
@@ -292,6 +295,9 @@ class Settings(BaseSettings):
 
         if not self.SMTP_PASSWORD and self.SMTP_PASSWORD_FILE:
             object.__setattr__(self, 'SMTP_PASSWORD', _read_secret_file(self.SMTP_PASSWORD_FILE))
+
+        if not self.TELEGRAM_BOT_TOKEN and self.TELEGRAM_BOT_TOKEN_FILE:
+            object.__setattr__(self, 'TELEGRAM_BOT_TOKEN', _read_secret_file(self.TELEGRAM_BOT_TOKEN_FILE))
 
         if not self.JWT_SECRET_KEY:
             path = os.environ.get('JWT_SECRET_FILE', '')

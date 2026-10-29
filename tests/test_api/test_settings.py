@@ -500,6 +500,58 @@ class TestRouterCredentials:
         resp = client.patch('/api/settings', json={'router_password': ''}, headers=auth_headers)
         assert resp.status_code == 200
 
+    def test_telegram_chat_is_saved_and_returned(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'telegram_chat_id': ' @homealerts '}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['telegram_chat_id'] == '@homealerts'
+        assert client.get('/api/settings').get_json()['telegram_chat_id'] == '@homealerts'
+        resp = client.patch('/api/settings', json={'telegram_chat_id': ''}, headers=auth_headers)
+        assert resp.get_json()['telegram_chat_id'] == ''
+
+    @pytest.mark.parametrize('chat', ['homealerts', '@ab', 'two words', 'http://t.me/x'])
+    def test_telegram_chat_rejects_bad_values(self, client, auth_headers, chat):
+        resp = client.patch('/api/settings', json={'telegram_chat_id': chat}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_telegram_token_rejects_a_malformed_token(self, client, auth_headers):
+        resp = client.patch('/api/settings', json={'telegram_bot_token': 'not a token'}, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_telegram_token_rejected_when_no_secret_file_configured(self, client, auth_headers):
+        from sentinel.config import settings
+        assert not settings.TELEGRAM_BOT_TOKEN_FILE
+        resp = client.patch(
+            '/api/settings', json={'telegram_bot_token': '123456:ABCdefGhIJKlmNoPQRsTUVwxyZ-0123456'},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 503
+
+    def test_telegram_token_goes_to_the_file_and_is_never_returned(self, client, auth_headers, tmp_path):
+        import sentinel.config as config_module
+        token = '123456:ABCdefGhIJKlmNoPQRsTUVwxyZ-0123456'
+        token_file = tmp_path / 'telegram_bot_token.txt'
+        original = config_module.settings.TELEGRAM_BOT_TOKEN_FILE
+        object.__setattr__(config_module.settings, 'TELEGRAM_BOT_TOKEN_FILE', str(token_file))
+        try:
+            resp = client.patch('/api/settings', json={'telegram_bot_token': token}, headers=auth_headers)
+            assert resp.status_code == 200
+            assert token_file.read_text().strip() == token
+            body = resp.get_json()
+            assert body['telegram_bot_token_configured'] is True
+            assert token not in resp.get_data(as_text=True)
+        finally:
+            object.__setattr__(config_module.settings, 'TELEGRAM_BOT_TOKEN_FILE', original)
+            object.__setattr__(config_module.settings, 'TELEGRAM_BOT_TOKEN', '')
+
+    def test_telegram_test_endpoint_reports_missing_setup(self, client, auth_headers):
+        resp = client.post('/api/settings/telegram/test', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['ok'] is False
+        assert 'not configured' in resp.get_json()['error']
+
+    def test_telegram_test_endpoint_requires_login(self, client):
+        assert client.post('/api/settings/telegram/test').status_code == 401
+
     def test_password_writes_to_the_configured_file_and_applies_live(self, client, auth_headers, tmp_path):
         import sentinel.config as config_module
         pw_file = tmp_path / 'router_password.txt'

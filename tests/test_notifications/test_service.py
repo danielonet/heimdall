@@ -412,3 +412,91 @@ class TestFormattedBody:
             async with get_session() as session:
                 await session.execute(delete(Device).where(Device.mac_address == mac))
             await get_engine().dispose()
+
+
+class _TelegramResponse:
+    def __init__(self, status_code=200, body=None):
+        self.status_code = status_code
+        self._body = body if body is not None else {'ok': True}
+
+    def json(self):
+        return self._body
+
+
+def _telegram_client(response=None, error=None):
+    """An httpx.AsyncClient stand-in that records the JSON POSTs sent to Telegram."""
+    calls = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def post(self, url, json=None):
+            calls.append({'url': url, 'json': json})
+            if error is not None:
+                raise error
+            return response or _TelegramResponse()
+
+    return _Client, calls
+
+
+_TOKEN = '123456:ABCdefGhIJKlmNoPQRsTUVwxyZ-0123456'
+
+
+class TestTelegramNotification:
+    async def test_posts_title_and_message_to_the_configured_chat(self, monkeypatch):
+        client, calls = _telegram_client()
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', client)
+        notifier = NotificationService(NotificationConfig(telegram_bot_token=_TOKEN, telegram_chat_id='@homealerts'))
+
+        await notifier.notify('ARP_SPOOF', 'something happened', severity='CRITICAL')
+
+        assert len(calls) == 1
+        assert calls[0]['url'] == f'https://api.telegram.org/bot{_TOKEN}/sendMessage'
+        assert calls[0]['json']['chat_id'] == '@homealerts'
+        assert calls[0]['json']['text'] == 'ARP_SPOOF\n\nsomething happened'
+
+    async def test_skipped_without_token_or_chat(self, monkeypatch):
+        client, calls = _telegram_client()
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', client)
+        await NotificationService(NotificationConfig(telegram_chat_id='@x')).notify('t', 'm')
+        await NotificationService(NotificationConfig(telegram_bot_token=_TOKEN)).notify('t', 'm')
+        assert calls == []
+
+    async def test_long_message_is_cut_to_telegrams_limit(self, monkeypatch):
+        client, calls = _telegram_client()
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', client)
+        notifier = NotificationService(NotificationConfig(telegram_bot_token=_TOKEN, telegram_chat_id='@x'))
+        await notifier.notify('t', 'x' * 10000)
+        assert len(calls[0]['json']['text']) == 4096
+
+    async def test_refusal_is_reported_without_the_token(self, monkeypatch):
+        client, _ = _telegram_client(_TelegramResponse(401, {'ok': False, 'description': 'Unauthorized'}))
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', client)
+        notifier = NotificationService(NotificationConfig(telegram_bot_token=_TOKEN, telegram_chat_id='@x'))
+
+        error = await notifier.send_telegram('t', 'm')
+
+        assert error == 'Telegram refused the message (HTTP 401): Unauthorized'
+        assert _TOKEN not in error
+
+    async def test_network_failure_does_not_raise_or_leak_the_token(self, monkeypatch):
+        error = service_module.httpx.ConnectError(f'cannot connect to https://api.telegram.org/bot{_TOKEN}/sendMessage')
+        client, _ = _telegram_client(error=error)
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', client)
+        notifier = NotificationService(NotificationConfig(telegram_bot_token=_TOKEN, telegram_chat_id='@x'))
+
+        await notifier.notify('t', 'm')  # must not raise
+        reason = await notifier.send_telegram('t', 'm')
+        assert reason == 'Could not reach Telegram (ConnectError).'
+        assert _TOKEN not in reason
+
+    async def test_send_telegram_says_when_unconfigured(self):
+        reason = await NotificationService(NotificationConfig()).send_telegram('t', 'm')
+        assert 'not configured' in reason

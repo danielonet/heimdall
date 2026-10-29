@@ -95,6 +95,7 @@ OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
 ABUSECH_AUTH_KEY_FILE="${REPO_ROOT}/secrets/abusech_auth_key.txt"
 ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
 SMTP_PASSWORD_FILE="${REPO_ROOT}/secrets/smtp_password.txt"
+TELEGRAM_BOT_TOKEN_FILE="${REPO_ROOT}/secrets/telegram_bot_token.txt"
 MIWIFI_PASSWORD_FILE="${REPO_ROOT}/secrets/miwifi_password.txt"
 ROUTER_SECRETS_DIR="${REPO_ROOT}/secrets/routers"
 mkdir -p "${ROUTER_SECRETS_DIR}"
@@ -114,6 +115,7 @@ export OTX_API_KEY_FILE
 export ABUSECH_AUTH_KEY_FILE
 export ADMIN_PASSWORD_FILE
 export SMTP_PASSWORD_FILE
+export TELEGRAM_BOT_TOKEN_FILE
 export MIWIFI_PASSWORD_FILE
 export ROUTER_SECRETS_DIR
 
@@ -247,6 +249,7 @@ if $NO_BACKEND; then
     echo "      \"JWT_SECRET_FILE\": \"${JWT_SECRET_FILE}\","
     echo "      \"OTX_API_KEY_FILE\": \"${OTX_API_KEY_FILE}\","
     echo "      \"SMTP_PASSWORD_FILE\": \"${SMTP_PASSWORD_FILE}\","
+    echo "      \"TELEGRAM_BOT_TOKEN_FILE\": \"${TELEGRAM_BOT_TOKEN_FILE}\","
     echo "      \"MIWIFI_PASSWORD_FILE\": \"${MIWIFI_PASSWORD_FILE}\","
     echo "      \"ROUTER_SECRETS_DIR\": \"${ROUTER_SECRETS_DIR}\","
     if [ "${DISABLE_AUTO_BLOCK:-}" = "true" ]; then

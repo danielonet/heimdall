@@ -78,3 +78,6 @@ def _configure_logging(app: Flask) -> None:
         level=level,
         format='%(asctime)s %(levelname)s %(name)s %(message)s',
     )
+    # httpx logs every request URL at INFO, and a Telegram request URL contains the bot token.
+    for noisy in ('httpx', 'httpcore'):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

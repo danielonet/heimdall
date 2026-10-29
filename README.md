@@ -48,7 +48,7 @@
 - **SOC — detect and respond.** Real-time detectors, per-device ML anomaly detection, Suricata IDS, Zeek traffic inspection, an OpenCanary honeypot and threat-intel feeds raise alerts you can act on — block, quarantine, or just get notified.
 - **NOC — see and understand.** A full device inventory, WiFi access-point and radio visibility, and per-device traffic show what is connected, where, and how it behaves.
 
-Alerts and a daily security digest reach you through the dashboard, ntfy push or email.
+Alerts and a daily security digest reach you through the dashboard, ntfy push, a Telegram channel or email.
 
 > **Status: alpha.** Built and tested on one home network with the routers listed under [Supported routers](#supported-routers). It monitors and can block devices on your LAN — read [Known, documented limits](#known-documented-limits) and [`SECURITY.md`](SECURITY.md) before relying on it. No router? Try it with the built-in [mock router](MOCK-ROUTER-SETUP.md). Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
@@ -137,7 +137,7 @@ Blocking and quarantining a device are manual actions. Automatic blocking (`auto
 
 ### Notifications & reporting
 
-- Push (ntfy.sh) and email (SMTP) channels, configurable from the Settings page
+- Push (ntfy.sh), Telegram channel and email (SMTP) notifications, configurable from the Settings page (the Telegram bot token is kept in a secret file)
 - Daily security digest — a summary of alert counts by severity/type since the last digest, including a calm "all clear" message on a quiet day
 - CSV alert export for audit trails / incident record-keeping
 - Prometheus-style `/api/metrics` endpoint (device counts, alert rates, poll latency) for pointing an existing Grafana/Prometheus home-lab setup at Heimdall
@@ -292,7 +292,7 @@ The backend container applies the database migrations itself on every start (`py
 
 Dashboard: `http://<host-ip>:3000` — if `secrets/admin_password.txt` is empty, the first visit asks you to create the admin account (only a hash is stored). If you put a password in that file, log in with `admin` (or the `ADMIN_USERNAME` you set in `.env`) and that password.
 
-Notifications (ntfy/SMTP) are configured from the Settings page after first login, not via `.env` — see the **NOTIFICATIONS** section there.
+Notifications (ntfy/Telegram/SMTP) are configured from the Settings page after first login, not via `.env` — see the **NOTIFICATIONS** section there.
 
 ### Offline development (no real router needed)
 

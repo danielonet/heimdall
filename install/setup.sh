@@ -99,6 +99,7 @@ blank admin_password.txt "the admin account is created in the dashboard"
 blank router_password.txt "set from the Equipment tab"
 blank miwifi_password.txt "set from the Equipment tab"
 blank smtp_password.txt "set from Settings → Notifications"
+blank telegram_bot_token.txt "set from Settings → Notifications"
 blank otx_api_key.txt "optional AlienVault OTX key"
 blank abusech_auth_key.txt "optional free key from https://auth.abuse.ch/ for the URLhaus feed"
 

@@ -114,6 +114,7 @@ OTX_API_KEY_FILE="${REPO_ROOT}/secrets/otx_api_key.txt"
 ABUSECH_AUTH_KEY_FILE="${REPO_ROOT}/secrets/abusech_auth_key.txt"
 ADMIN_PASSWORD_FILE="${REPO_ROOT}/secrets/admin_password.txt"
 SMTP_PASSWORD_FILE="${REPO_ROOT}/secrets/smtp_password.txt"
+TELEGRAM_BOT_TOKEN_FILE="${REPO_ROOT}/secrets/telegram_bot_token.txt"
 
 # Source .env for non-secret settings (ROUTER_IP, SNIFF_IFACE, etc.) when available
 if [ -f "${REPO_ROOT}/.env" ]; then
@@ -132,6 +133,7 @@ export OTX_API_KEY_FILE
 export ABUSECH_AUTH_KEY_FILE
 export ADMIN_PASSWORD_FILE
 export SMTP_PASSWORD_FILE
+export TELEGRAM_BOT_TOKEN_FILE
 # DB_PASS exported so docker compose can interpolate ${DB_PASS} in compose file
 export DB_PASS
 

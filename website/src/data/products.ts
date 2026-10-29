@@ -199,7 +199,7 @@ export const products: Product[] = [
       { alert: 'AUTO_BLOCK_EXPIRED', severity: 'INFO', meaning: 'A timed automatic block ended and the device was unblocked.' },
       { alert: 'BLOCK_ENFORCEMENT_DRIFT', severity: 'WARNING / INFO', meaning: 'The router’s block state no longer matches Heimdall’s record.' },
     ],
-    plugs: ['Alert store', 'Correlation', 'Block · Quarantine · Auto-block', 'Dashboard (WebSocket)', 'ntfy · email · daily digest · CSV · /api/metrics'],
+    plugs: ['Alert store', 'Correlation', 'Block · Quarantine · Auto-block', 'Dashboard (WebSocket)', 'ntfy · Telegram · email · daily digest · CSV · /api/metrics'],
     tier: 'minimal', tierNote: 'Every tier. Block and quarantine need a router adapter that supports them.',
     limits: [
       'Auto-block is one global switch for all eligible alert types. It is on by default for a new install and can be turned off in Settings. An automatic block expires after 24 hours by default.',

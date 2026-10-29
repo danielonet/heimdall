@@ -25,6 +25,13 @@ export function useUpdateSettings() {
   })
 }
 
+/** Sends a test message through the saved Telegram settings; resolves {ok, error}. */
+export function useTestTelegram() {
+  return useMutation({
+    mutationFn: () => apiJson('/settings/telegram/test', { method: 'POST' }),
+  })
+}
+
 export function usePurgeDatabase() {
   const qc = useQueryClient()
   return useMutation({

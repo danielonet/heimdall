@@ -128,7 +128,7 @@ class TestSetup:
             f = tmp_path / 'secrets' / f'{name}.txt'
             assert len(f.read_text().strip()) == 64 and stat.S_IMODE(f.stat().st_mode) == 0o600
         assert stat.S_IMODE((tmp_path / 'secrets').stat().st_mode) == 0o700
-        for name in ('admin_password', 'router_password', 'miwifi_password', 'smtp_password', 'otx_api_key', 'abusech_auth_key'):
+        for name in ('admin_password', 'router_password', 'miwifi_password', 'smtp_password', 'telegram_bot_token', 'otx_api_key', 'abusech_auth_key'):
             assert (tmp_path / 'secrets' / f'{name}.txt').read_text() == ''  # no CHANGE_ME placeholders
         assert (tmp_path / 'secrets' / 'routers').is_dir()
         env = dict(line.split('=', 1) for line in (tmp_path / '.env').read_text().splitlines() if '=' in line)

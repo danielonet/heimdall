@@ -2281,6 +2281,8 @@ class SentinelScheduler:
                 smtp_username=smtp['smtp_username'] or '',
                 smtp_password=fallback.smtp_password,
                 smtp_use_tls=smtp['smtp_use_tls'] if smtp['smtp_use_tls'] is not None else True,
+                telegram_bot_token=fallback.telegram_bot_token,
+                telegram_chat_id=await repo.get_telegram_chat_id(),
             )
         except Exception:
             logger.exception('Failed to read notification config from SettingsRepository — using env defaults')
@@ -2686,6 +2688,8 @@ def init_scheduler(app: Flask) -> None:
         smtp_username=app.config['SMTP_USERNAME'],
         smtp_password=app.config['SMTP_PASSWORD'],
         smtp_use_tls=app.config['SMTP_USE_TLS'],
+        telegram_bot_token=app.config['TELEGRAM_BOT_TOKEN'],
+        telegram_chat_id=app.config['TELEGRAM_CHAT_ID'],
     )
     _scheduler = SentinelScheduler(
         poll_interval_s=app.config['POLL_INTERVAL_SECONDS'],

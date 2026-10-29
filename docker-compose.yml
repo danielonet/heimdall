@@ -39,6 +39,7 @@ services:
       - ABUSECH_AUTH_KEY_FILE=/run/secrets/abusech_auth_key
       - THREAT_FEED_CACHE_DIR=/data/feeds
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
+      - TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_bot_token
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
       # minimal | intermediate | full — which optional containers below this
@@ -65,6 +66,7 @@ services:
       # *directory* at that path.
       - ./secrets/router_password.txt:/run/secrets/router_password
       - ./secrets/smtp_password.txt:/run/secrets/smtp_password
+      - ./secrets/telegram_bot_token.txt:/run/secrets/telegram_bot_token
       - ./secrets/miwifi_password.txt:/run/secrets/miwifi_password
       - ./secrets/routers:/run/secrets/routers   # one <router-id>.txt per router picked on the Equipment tab
       - ./secrets/abusech_auth_key.txt:/run/secrets/abusech_auth_key   # entered from the Threats tab
@@ -199,7 +201,7 @@ secrets:
   otx_api_key:     { file: ./secrets/otx_api_key.txt }
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
-  # router_password, smtp_password, miwifi_password and abusech_auth_key are
+  # router_password, smtp_password, telegram_bot_token, miwifi_password and abusech_auth_key are
   # deliberately NOT here: the Settings / Threats tabs rewrite them, so
   # sentinel-backend bind-mounts them read-write instead (see its `volumes:`).
 

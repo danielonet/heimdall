@@ -315,6 +315,15 @@ else
     log_skip "secrets/smtp_password.txt"
 fi
 
+# Telegram bot token: optional, blank until entered on the Notifications page. Compose needs the file to exist.
+if [ ! -f "${SECRETS_DIR}/telegram_bot_token.txt" ]; then
+    touch "${SECRETS_DIR}/telegram_bot_token.txt"
+    chmod 600 "${SECRETS_DIR}/telegram_bot_token.txt"
+    log_success "Created empty secrets/telegram_bot_token.txt (set it from the Notifications page)"
+else
+    log_skip "secrets/telegram_bot_token.txt"
+fi
+
 # MiWiFi password: optional second router, same "blank is a real working
 # state" reasoning as smtp_password.txt above — not configuring a Redmi
 # router at all is the common case.

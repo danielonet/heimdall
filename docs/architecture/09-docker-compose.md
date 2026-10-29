@@ -25,6 +25,7 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}   # only for installs that still sign in with secrets/admin_password.txt
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
+      - TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_bot_token   # bind-mounted read-write like smtp_password in the real docker-compose.yml
       - SNIFF_IFACE=${SNIFF_IFACE:-eth0}   # LAN-facing interface on monitoring machine
       - POLL_INTERVAL_SECONDS=15
       - DEPLOYMENT_TIER=${DEPLOYMENT_TIER:-full}  # minimal|intermediate|full — see "Installation tiers" below
@@ -35,6 +36,7 @@ services:
       - db_pass
       - admin_password
       - smtp_password
+      - telegram_bot_token
     depends_on:
       - postgres
       - redis
@@ -146,6 +148,7 @@ secrets:
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
   smtp_password:   { file: ./secrets/smtp_password.txt }  # optional — blank file is valid (unauthenticated relay)
+  telegram_bot_token: { file: ./secrets/telegram_bot_token.txt }  # optional — blank until entered on Settings → Notifications
 
 volumes:
   pgdata:

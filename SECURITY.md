@@ -37,7 +37,7 @@ Only the latest commit on `main` is supported. There are no tagged releases yet.
   Treat the Heimdall host (and its Docker socket/group) as a sensitive asset.
 - **Active scanning.** The nightly nmap scan and block/quarantine actions
   affect devices on your network. Only enable them on networks you own.
-- **Threat-intel and notification integrations** (OTX, ntfy, SMTP) send data
+- **Threat-intel and notification integrations** (OTX, ntfy, Telegram, SMTP) send data
   to third parties if you configure them.
 
 ## Scope

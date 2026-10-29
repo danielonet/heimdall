@@ -17,7 +17,7 @@ from sentinel.config import secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
 from sentinel.ml.model_store import ModelStore
-from sentinel.notifications.service import NotificationConfig
+from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.scheduler import get_scheduler
 from sentinel.security.interfaces import list_network_interfaces
 from sentinel.security.wifi_iface import list_monitor_capable_interfaces
@@ -42,6 +42,8 @@ MIN_DEVICE_PURGE_AFTER_DAYS = 7
 MAX_DEVICE_PURGE_AFTER_DAYS = 730  # 2 years — must match frontend/src/components/settings/DataRetentionSection.jsx
 MAX_WIFI_SSIDS = 20
 MAX_WIFI_BSSIDS = 20
+_TELEGRAM_CHAT_RE = re.compile(r'^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[0-9]{5,20})$')
+_TELEGRAM_TOKEN_RE = re.compile(r'^[0-9]{3,20}:[A-Za-z0-9_-]{20,80}$')
 _MAC_RE = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 
@@ -77,6 +79,8 @@ async def _serialize(repo: SettingsRepository, *, include_db_size: bool = False)
         smtp_username=data['smtp_username'],
         smtp_use_tls=data['smtp_use_tls'],
         smtp_password_configured=bool(settings.SMTP_PASSWORD),
+        telegram_chat_id=data['telegram_chat_id'],
+        telegram_bot_token_configured=bool(settings.TELEGRAM_BOT_TOKEN),
         auto_block_on_threat=data['auto_block_on_threat'],
         alert_stale_hours=data['alert_stale_hours'],
         alert_auto_resolve_hours=data['alert_auto_resolve_hours'],
@@ -210,6 +214,33 @@ async def update_settings():
 
     if 'smtp_use_tls' in body and not isinstance(body.get('smtp_use_tls'), bool):
         return jsonify(error='smtp_use_tls must be a boolean'), 400
+
+    telegram_chat_id = body.get('telegram_chat_id')
+    if 'telegram_chat_id' in body:
+        if not isinstance(telegram_chat_id, str):
+            return jsonify(error='telegram_chat_id must be a string'), 400
+        telegram_chat_id = telegram_chat_id.strip()
+        if telegram_chat_id and not _TELEGRAM_CHAT_RE.match(telegram_chat_id):
+            return jsonify(
+                error='telegram_chat_id must be a channel name like @mychannel or a numeric id like -1001234567890'
+            ), 400
+
+    telegram_token = body.get('telegram_bot_token')
+    if 'telegram_bot_token' in body and not isinstance(telegram_token, str):
+        return jsonify(error='telegram_bot_token must be a string'), 400
+    telegram_token = (telegram_token or '').strip()
+    change_telegram_token = bool(telegram_token)
+    if change_telegram_token and not _TELEGRAM_TOKEN_RE.match(telegram_token):
+        return jsonify(error='That does not look like a bot token (it should be like 123456:ABC-DEF…).'), 400
+    if change_telegram_token and not settings.TELEGRAM_BOT_TOKEN_FILE:
+        return jsonify(
+            error='TELEGRAM_BOT_TOKEN_FILE is not configured on this deployment — telegram_bot_token '
+                  'cannot be saved from the dashboard.'
+        ), 503
+    if change_telegram_token and not secret_file_writable(settings.TELEGRAM_BOT_TOKEN_FILE):
+        return jsonify(
+            error=f'telegram_bot_token cannot be saved: {settings.TELEGRAM_BOT_TOKEN_FILE} is not writable by the backend.'
+        ), 503
 
     smtp_password = body.get('smtp_password')
     if 'smtp_password' in body and not isinstance(smtp_password, str):
@@ -384,7 +415,15 @@ async def update_settings():
     if change_smtp_password:
         write_secret_file(settings.SMTP_PASSWORD_FILE, smtp_password)
         object.__setattr__(settings, 'SMTP_PASSWORD', smtp_password.strip())
-    if 'ntfy_url' in body or smtp_fields_changed or change_smtp_password:
+    if 'telegram_chat_id' in body:
+        await repo.set_telegram_chat_id(telegram_chat_id)
+    if change_telegram_token:
+        write_secret_file(settings.TELEGRAM_BOT_TOKEN_FILE, telegram_token)
+        object.__setattr__(settings, 'TELEGRAM_BOT_TOKEN', telegram_token)
+    if (
+        'ntfy_url' in body or smtp_fields_changed or change_smtp_password
+        or 'telegram_chat_id' in body or change_telegram_token
+    ):
         smtp = await repo.get_smtp_settings()
         current_ntfy_url = await repo.get_ntfy_url()
         try:
@@ -397,6 +436,8 @@ async def update_settings():
                 smtp_username=smtp['smtp_username'] or '',
                 smtp_password=settings.SMTP_PASSWORD,
                 smtp_use_tls=smtp['smtp_use_tls'] if smtp['smtp_use_tls'] is not None else True,
+                telegram_bot_token=settings.TELEGRAM_BOT_TOKEN,
+                telegram_chat_id=await repo.get_telegram_chat_id(),
             ))
         except RuntimeError:
             pass  # scheduler not running (e.g. tests) — takes effect on next start
@@ -431,6 +472,21 @@ async def update_settings():
             pass  # scheduler not running (e.g. tests) — takes effect on next start
 
     return jsonify(await _serialize(repo))
+
+
+@bp.route('/telegram/test', methods=['POST'])
+@jwt_required()
+async def test_telegram():
+    """Send a test message through the saved Telegram settings, so the admin sees at once
+    whether the token and chat work. Returns {ok: true} or {ok: false, error}."""
+    notifier = NotificationService(NotificationConfig(
+        telegram_bot_token=settings.TELEGRAM_BOT_TOKEN,
+        telegram_chat_id=await SettingsRepository().get_telegram_chat_id(),
+    ))
+    error = await notifier.send_telegram(
+        'Heimdall test', 'This is a test message. Telegram notifications are working.',
+    )
+    return jsonify(ok=error is None, error=error)
 
 
 @bp.route('/purge', methods=['POST'])

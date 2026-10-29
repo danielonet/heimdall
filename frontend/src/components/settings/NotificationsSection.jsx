@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSettings, useUpdateSettings } from '../../hooks/useSettings'
+import { useSettings, useTestTelegram, useUpdateSettings } from '../../hooks/useSettings'
 
 const EMPTY_SMTP_FORM = {
   smtp_host: '', smtp_port: '587', smtp_from: '', smtp_to: '', smtp_username: '', smtp_use_tls: true,
@@ -19,14 +19,18 @@ const EMPTY_SMTP_FORM = {
 export function NotificationsSection() {
   const { data, isLoading } = useSettings()
   const mutation = useUpdateSettings()
+  const telegramTest = useTestTelegram()
 
   const [ntfyUrl, setNtfyUrl] = useState('')
   const [smtpForm, setSmtpForm] = useState(EMPTY_SMTP_FORM)
   const [smtpPassword, setSmtpPassword] = useState('')
+  const [telegramChat, setTelegramChat] = useState('')
+  const [telegramToken, setTelegramToken] = useState('')
 
   useEffect(() => {
     if (!data) return
     setNtfyUrl(data.ntfy_url || '')
+    setTelegramChat(data.telegram_chat_id || '')
     setSmtpForm({
       smtp_host: data.smtp_host || '',
       smtp_port: String(data.smtp_port || 587),
@@ -42,6 +46,14 @@ export function NotificationsSection() {
   }
 
   const ntfyDirty = data && ntfyUrl !== (data.ntfy_url || '')
+  const telegramDirty = data && (telegramChat.trim() !== (data.telegram_chat_id || '') || telegramToken !== '')
+
+  function saveTelegram() {
+    const body = { telegram_chat_id: telegramChat.trim() }
+    if (telegramToken) body.telegram_bot_token = telegramToken
+    telegramTest.reset()
+    mutation.mutate(body, { onSuccess: () => setTelegramToken('') })
+  }
 
   const smtpPort = Number(smtpForm.smtp_port)
   const isSmtpPortValid = Number.isInteger(smtpPort) && smtpPort >= 1 && smtpPort <= 65535
@@ -73,9 +85,9 @@ export function NotificationsSection() {
     <div className="border border-border bg-surface p-3">
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">NOTIFICATIONS</div>
       <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        Both channels below get the same events: an immediate push the moment a CRITICAL alert fires
+        All channels below get the same events: an immediate push the moment a CRITICAL alert fires
         (confirmed attacks, new devices, unauthorized access), plus a daily 7am digest covering
-        everything else. Leave a channel's fields blank to disable it. Both apply immediately, no
+        everything else. Leave a channel's fields blank to disable it. Changes apply immediately, no
         restart needed.
       </p>
 
@@ -106,6 +118,70 @@ export function NotificationsSection() {
               >
                 {mutation.isPending ? 'SAVING…' : 'SAVE'}
               </button>
+            </div>
+          </div>
+
+          <div className="border-t border-border/50 pt-3">
+            <div className="mb-1 text-[8px] tracking-[2px] text-text-muted">TELEGRAM</div>
+            <p className="mb-2 text-[9px] leading-relaxed text-text-muted">
+              Create a bot with @BotFather and paste its token. Add the bot to your channel as an
+              administrator that may post messages, then enter the channel name (for example @myhomealerts) or its
+              numeric id. The token is kept in a secret file on the Heimdall machine, never in the database.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[10rem]">
+                <label htmlFor="telegram-token" className="mb-1 block text-[9px] tracking-wider text-text-muted">
+                  BOT TOKEN
+                </label>
+                <input
+                  id="telegram-token"
+                  type="password"
+                  autoComplete="off"
+                  value={telegramToken}
+                  onChange={(e) => setTelegramToken(e.target.value)}
+                  placeholder={data?.telegram_bot_token_configured ? '••••••••' : '(not set)'}
+                  className="w-full border border-border bg-bg px-3 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active"
+                />
+              </div>
+              <div className="flex-1 min-w-[10rem]">
+                <label htmlFor="telegram-chat" className="mb-1 block text-[9px] tracking-wider text-text-muted">
+                  CHANNEL OR CHAT
+                </label>
+                <input
+                  id="telegram-chat"
+                  value={telegramChat}
+                  onChange={(e) => setTelegramChat(e.target.value)}
+                  placeholder="@myhomealerts"
+                  className="w-full border border-border bg-bg px-3 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active"
+                />
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={!telegramDirty || mutation.isPending}
+                onClick={saveTelegram}
+                className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
+              >
+                {mutation.isPending ? 'SAVING…' : 'SAVE'}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  telegramDirty || telegramTest.isPending || !data?.telegram_bot_token_configured || !data?.telegram_chat_id
+                }
+                onClick={() => telegramTest.mutate()}
+                className="border border-border px-3 py-1.5 text-[10px] tracking-wider text-text-secondary hover:border-border-active disabled:opacity-40"
+              >
+                {telegramTest.isPending ? 'SENDING…' : 'SEND TEST MESSAGE'}
+              </button>
+              {telegramTest.data?.ok && (
+                <span className="text-[10px] text-accent-green">✓ Sent. Check your channel.</span>
+              )}
+              {telegramTest.data && !telegramTest.data.ok && (
+                <span className="text-[10px] text-accent-red">✗ {telegramTest.data.error}</span>
+              )}
+              {telegramTest.isError && <span className="text-[10px] text-accent-red">✗ {telegramTest.error.message}</span>}
             </div>
           </div>
 

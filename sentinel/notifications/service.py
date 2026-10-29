@@ -1,6 +1,6 @@
-"""Push notifications (ntfy.sh) and email alerts.
+"""Push notifications (ntfy.sh, Telegram) and email alerts.
 
-Both channels are optional and independent — an unconfigured or failing
+Every channel is optional and independent — an unconfigured or failing
 channel is logged and skipped, never raised, since a notification failure
 must never block the rule/alert that triggered it.
 """
@@ -21,6 +21,8 @@ from sentinel.notifications.alert_notification import render_alert_html, render_
 
 logger = logging.getLogger(__name__)
 
+_TELEGRAM_API = 'https://api.telegram.org'
+_TELEGRAM_MAX_CHARS = 4096   # Telegram's per-message limit
 _NTFY_PRIORITY = {'CRITICAL': 'urgent', 'WARNING': 'high', 'INFO': 'default'}
 
 # Same PNG as frontend/src/assets/heimdall-icon.png — copied rather than
@@ -44,10 +46,12 @@ class NotificationConfig:
     smtp_username: str = ''
     smtp_password: str = ''
     smtp_use_tls: bool = True
+    telegram_bot_token: str = ''  # secret: from TELEGRAM_BOT_TOKEN_FILE, never the database
+    telegram_chat_id: str = ''    # '@channelname' or a numeric chat id
 
 
 class NotificationService:
-    """Sends a message over every configured channel (ntfy, email)."""
+    """Sends a message over every configured channel (ntfy, Telegram, email)."""
 
     def __init__(self, config: NotificationConfig) -> None:
         self._ntfy_url = config.ntfy_url
@@ -58,6 +62,8 @@ class NotificationService:
         self._smtp_username = config.smtp_username
         self._smtp_password = config.smtp_password
         self._smtp_use_tls = config.smtp_use_tls
+        self._telegram_token = config.telegram_bot_token
+        self._telegram_chat_id = config.telegram_chat_id.strip()
 
     async def notify(
         self, title: str, message: str, severity: str = 'WARNING', html_message: str | None = None,
@@ -73,6 +79,10 @@ class NotificationService:
         """
         if self._ntfy_url:
             await self._send_ntfy(title, message, severity)
+        if self._telegram_token and self._telegram_chat_id:
+            error = await self.send_telegram(title, message)
+            if error:
+                logger.warning('Telegram notification failed: %s', error)
         if self._smtp_host and self._smtp_from:
             await asyncio.to_thread(self._send_email, title, message, html_message)
 
@@ -87,6 +97,33 @@ class NotificationService:
                 resp.raise_for_status()
         except Exception as exc:
             logger.warning('ntfy notification failed: %s', exc)
+
+    async def send_telegram(self, title: str, message: str) -> str | None:
+        """Post to the configured Telegram chat; return None on success, else a
+        short reason. Never raises, and the reason never contains the bot token
+        (it is part of the request URL, so exception text is not passed on)."""
+        if not self._telegram_token or not self._telegram_chat_id:
+            return 'Telegram is not configured: set the bot token and the chat.'
+        text = f'{title}\n\n{message}'
+        if len(text) > _TELEGRAM_MAX_CHARS:
+            text = text[:_TELEGRAM_MAX_CHARS - 1] + '…'
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f'{_TELEGRAM_API}/bot{self._telegram_token}/sendMessage',
+                    json={'chat_id': self._telegram_chat_id, 'text': text, 'disable_web_page_preview': True},
+                )
+        except httpx.HTTPError as exc:
+            return f'Could not reach Telegram ({type(exc).__name__}).'
+        except Exception as exc:
+            return f'Unexpected error ({type(exc).__name__}).'
+        if resp.status_code == 200:
+            return None
+        try:
+            reason = resp.json().get('description') or ''
+        except Exception:
+            reason = ''
+        return f'Telegram refused the message (HTTP {resp.status_code}): {reason}'.rstrip(': ')
 
     async def notify_new_critical_alert(self, alert) -> None:
         """Immediate notification for a genuinely new CRITICAL alert — the

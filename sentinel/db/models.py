@@ -202,6 +202,8 @@ class AppSettings(Base):
     smtp_to: Mapped[str | None] = mapped_column(String(255))
     smtp_username: Mapped[str | None] = mapped_column(String(255))
     smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean)
+    # The Telegram bot token is a secret and never stored here — see Settings.TELEGRAM_BOT_TOKEN_FILE.
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(255))
 
     # Security tab. When True, SentinelScheduler._raise_threat_alert() calls
     # adapter.block_device() the instant ArpWatcher/PassiveFingerprinter/
