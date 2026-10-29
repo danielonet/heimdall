@@ -78,3 +78,46 @@ class TestPassiveMode:
     def test_cannot_make_passive_primary_before_picking_it(self, client, auth_headers):
         resp = client.patch('/api/settings', json={'active_router': 'passive'}, headers=auth_headers)
         assert resp.status_code == 400
+
+
+class TestRouterLoginTest:
+    """POST /api/routers/<id>/test: say whether the saved login works."""
+
+    def test_requires_auth(self, client):
+        assert client.post('/api/routers/openwrt-ubus/test').status_code == 401
+
+    def test_unknown_router_is_404(self, client, auth_headers):
+        assert client.post('/api/routers/nope/test', headers=auth_headers).status_code == 404
+
+    def test_router_without_an_adapter_says_so(self, client, auth_headers):
+        from sentinel.adapter.catalog import CATALOG
+        spec = next(s for s in CATALOG if not s.implemented)
+        body = client.post(f'/api/routers/{spec.id}/test', headers=auth_headers).get_json()
+        assert body['ok'] is False and 'no' in body['error'].lower()
+
+    def test_refused_login_is_reported_not_raised(self, client, auth_headers, monkeypatch):
+        async def refuse(_key):
+            raise RuntimeError('Router rejected the login (wrong password)')
+        monkeypatch.setattr('sentinel.api.routes.routers.create_router_adapter', refuse)
+        resp = client.post('/api/routers/openwrt-ubus/test', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json() == {'ok': False, 'error': 'Router rejected the login (wrong password)'}
+
+    def test_working_login_reports_model_and_device_count(self, client, auth_headers, monkeypatch):
+        from types import SimpleNamespace
+
+        class FakeAdapter:
+            closed = False
+            async def get_router_info(self):
+                return SimpleNamespace(model='RT-1', firmware='1.2')
+            async def get_connected_devices(self):
+                return [object(), object(), object()]
+            async def aclose(self):
+                FakeAdapter.closed = True
+
+        async def build(_key):
+            return FakeAdapter()
+        monkeypatch.setattr('sentinel.api.routes.routers.create_router_adapter', build)
+        body = client.post('/api/routers/openwrt-ubus/test', headers=auth_headers).get_json()
+        assert body == {'ok': True, 'model': 'RT-1', 'firmware': '1.2', 'devices': 3}
+        assert FakeAdapter.closed

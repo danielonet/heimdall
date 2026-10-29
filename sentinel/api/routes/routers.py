@@ -8,6 +8,7 @@ also hot-reloads the live adapters) and are only *reported* here.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -16,9 +17,10 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from sentinel.adapter.catalog import CATALOG, RouterSpec, get_spec
-from sentinel.adapter.factory import PASSIVE_ROUTER
+from sentinel.adapter.factory import PASSIVE_ROUTER, create_router_adapter
 from sentinel.config import _read_secret_file, router_secret_path, secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import RouterProfileRepository, SettingsRepository
+from sentinel.scheduler.scheduler import get_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,9 @@ bp = Blueprint('routers', __name__)
 
 MAX_HOST_LENGTH = 255
 MAX_USERNAME_LENGTH = 100
+TEST_TIMEOUT_S = 25
+# Catalog id -> the name create_router_adapter() and AppSettings.active_router use for the two original routers.
+_ADAPTER_KEY = {'sagemcom-xmo': 'sagemcom', 'miwifi-stok': 'miwifi'}
 _HOST_RE = re.compile(r'^[A-Za-z0-9.\-:\[\]]+$')  # host or IP, optional :port — no scheme/path
 
 
@@ -132,3 +137,42 @@ async def remove_router(router_id: str):
     if path and os.path.isfile(path) and secret_file_writable(path):
         write_secret_file(path, '')
     return jsonify(ok=True)
+
+
+@bp.route('/<router_id>/test', methods=['POST'])
+@jwt_required()
+async def test_router(router_id: str):
+    """Try the saved login for real and say what happened, so the Equipment
+    page can show "connected" or the reason it was refused instead of leaving
+    the admin to guess. Always 200 with ok true/false once the router is known:
+    a refused login is an answer, not a server error.
+
+    The router that is currently the primary one is asked through the live
+    scheduler adapter rather than a second login: a Sagemcom allows one
+    session at a time, and a second login would knock the poller out.
+    """
+    spec = get_spec(router_id)
+    if spec is None:
+        return jsonify(error=f'Unknown router: {router_id!r}'), 404
+    if not spec.implemented:
+        return jsonify(ok=False, error=f'Heimdall has no {spec.family} adapter yet, so there is nothing to test.')
+
+    key = _ADAPTER_KEY.get(router_id, router_id)
+    adapter = None
+    try:
+        if key == await SettingsRepository().get_active_router():
+            info = await asyncio.to_thread(get_scheduler().get_router_info, TEST_TIMEOUT_S)
+            return jsonify(ok=True, model=info.model, firmware=info.firmware, devices=None)
+        adapter = await create_router_adapter(key)
+        async with asyncio.timeout(TEST_TIMEOUT_S):
+            info = await adapter.get_router_info()
+            devices = await adapter.get_connected_devices()
+        return jsonify(ok=True, model=info.model, firmware=info.firmware, devices=len(devices))
+    except (TimeoutError, asyncio.TimeoutError):
+        return jsonify(ok=False, error=f'No answer within {TEST_TIMEOUT_S} seconds. Check the address and that the router is reachable from this machine.')
+    except Exception as exc:  # noqa: BLE001 — every adapter has its own failure types; the message is the point
+        logger.info('Router %s login test failed: %s', router_id, exc)
+        return jsonify(ok=False, error=str(exc) or exc.__class__.__name__)
+    finally:
+        if adapter is not None and hasattr(adapter, 'aclose'):
+            await adapter.aclose()

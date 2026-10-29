@@ -3,6 +3,7 @@ import { useHealth } from '../hooks/useHealth'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { Badge } from '../components/Badge'
 import { NetworkInterfaceSection } from '../components/settings/NetworkInterfaceSection'
+import { WifiMonitorSection } from '../components/settings/WifiMonitorSection'
 import { PrimaryRouterSelect } from '../components/equipment/PrimaryRouterSelect'
 import { RouterSelector } from '../components/equipment/RouterSelector'
 
@@ -25,7 +26,8 @@ function Field({ label, children }) {
 
 // Everything about the network equipment Heimdall talks to: the router(s)
 // today, managed switches next (docs/router-and-switch-expansion-plan.md).
-// Moved here from the Settings page, which keeps the Heimdall-wide options.
+// Moved here from the Settings page, which keeps the Heimdall-wide options;
+// the WiFi monitor (evil-twin detection) followed, since it is set up from the router's own WiFi names.
 export function EquipmentPage() {
   const { data: router, isLoading, isError, error } = useRouterInfo()
   const { data: health } = useHealth()
@@ -79,6 +81,10 @@ export function EquipmentPage() {
         <RouterSelector />
         <PrimaryRouterSelect />
         <NetworkInterfaceSection />
+      </div>
+
+      <div className="border border-border bg-surface p-3">
+        <WifiMonitorSection />
       </div>
 
       <div className="border border-border bg-surface p-3">

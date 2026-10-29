@@ -8,21 +8,19 @@
 #   2. downloads heimdall-bundle.tar.gz and its .sha256 from the GitHub release and verifies the checksum
 #   3. unpacks it into --dir (default ~/heimdall); an existing .env and secrets/ are never overwritten
 #   4. runs the bundle's setup.sh (generates secrets, detects your LAN interface and subnet).
-#      On a fresh install it first asks for the dashboard user name and password (Enter keeps the
-#      user "admin" and generates a password). Unattended: --admin-user and --admin-password-file.
+#      No dashboard password is asked for or stored: you create the admin account in the browser.
 #   5. runs 'docker compose pull && docker compose up -d' (skip with --no-start)
 # It does not touch your router or network configuration. It needs no sudo unless Docker itself does.
 #
 # Options: --tier=minimal|intermediate|full  --dir=PATH  --version=vX.Y.Z (default: latest)
 #          --router=sagemcom|passive  --install-docker  --no-start  --yes (no prompts)  --iface=NAME  --subnet=CIDR
-#          --admin-user=NAME  --admin-password-file=PATH (the password lives in that file, never on the command line)
 set -euo pipefail
 
 REPO="danielonet/heimdall"
 BASE_OVERRIDE="${HEIMDALL_BUNDLE_URL_BASE:-}"   # tests / mirrors
 
 main() {
-    local tier="" dir="" version="latest" install_docker=false start=true yes=false setup_args=() admin_pw="" pw_file=""
+    local tier="" dir="" version="latest" install_docker=false start=true yes=false setup_args=()
     for arg in "$@"; do
         case "$arg" in
             --tier=*) tier="${arg#--tier=}" ;;
@@ -31,9 +29,8 @@ main() {
             --install-docker) install_docker=true ;;
             --no-start) start=false ;;
             --yes|-y) yes=true ;;
-            --iface=*|--subnet=*|--router=*|--admin-user=*) setup_args+=("$arg") ;;
-            --admin-password-file=*) pw_file="$(readlink -f "${arg#--admin-password-file=}")"; setup_args+=("--admin-password-file=$pw_file") ;;
-            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR] [--admin-user=NAME] [--admin-password-file=PATH]"; return 0 ;;
+            --iface=*|--subnet=*|--router=*) setup_args+=("$arg") ;;
+            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR]"; return 0 ;;
             *) die "Unknown option: $arg" ;;
         esac
     done
@@ -67,34 +64,6 @@ main() {
         case "${rchoice:-3}" in 1) setup_args+=("--router=sagemcom") ;; 2) setup_args+=("--router=passive") ;; 3) ;; *) die "Invalid choice: $rchoice" ;; esac
     fi
 
-    # The dashboard login, on a fresh install only (an existing one keeps its login). The password is held in
-    # a variable, handed to setup.sh through a private temp file, and never appears in argv or `ps`.
-    if [ -z "$pw_file" ] && [ ! -f "$dir/secrets/admin_password.txt" ] && ! $yes && [ -r /dev/tty ]; then
-        local user_given=false
-        [[ " ${setup_args[*]-} " == *" --admin-user="* ]] && user_given=true
-        echo ""
-        echo "Dashboard login — what you will sign in with the first time."
-        if ! $user_given; then
-            local entered
-            while :; do
-                read -rp "User name [admin]: " entered < /dev/tty
-                entered="${entered:-admin}"
-                if [[ "$entered" =~ ^[A-Za-z0-9._-]{3,32}$ ]]; then setup_args+=("--admin-user=$entered"); break; fi
-                warn "Use 3-32 letters, digits, dots, dashes or underscores."
-            done
-        fi
-        local again
-        while :; do
-            read -rsp "Password (at least 12 characters; press Enter to generate one): " entered < /dev/tty; echo >&2
-            [ -n "$entered" ] || break
-            if [ "${#entered}" -lt 12 ]; then warn "The password must be at least 12 characters."; continue; fi
-            if [[ "$entered" =~ ^[[:space:]]|[[:space:]]$ ]]; then warn "The password must not start or end with a space."; continue; fi
-            read -rsp "Repeat the password: " again < /dev/tty; echo >&2
-            if [ "$entered" = "$again" ]; then admin_pw="$entered"; break; fi
-            warn "The two entries differ — try again."
-        done
-    fi
-
     ensure_docker "$install_docker"
     local docker=(docker)
     if ! docker info >/dev/null 2>&1; then
@@ -119,12 +88,6 @@ main() {
     curl -fsSL -o "$tmp/heimdall-bundle.tar.gz.sha256" "$base/heimdall-bundle.tar.gz.sha256" || die "Could not download the checksum file"
     (cd "$tmp" && sha256sum -c heimdall-bundle.tar.gz.sha256 >/dev/null) || die "Checksum mismatch — refusing to install."
     ok "Checksum verified"
-    if [ -n "$admin_pw" ]; then
-        # $tmp is mode 700 (mktemp -d) and removed by the EXIT trap; setup.sh copies the password into secrets/.
-        ( umask 077; printf '%s\n' "$admin_pw" > "$tmp/admin_password" )
-        setup_args+=("--admin-password-file=$tmp/admin_password")
-        admin_pw=""
-    fi
 
     local upgrading=false; [ -f "$dir/docker-compose.yml" ] && upgrading=true
     mkdir -p "$dir"

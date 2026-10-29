@@ -35,7 +35,7 @@ App
 | `/ports` | `PortsPage` | PHY1–5 port status and history |
 | `/threats` | `ThreatIntelPage` | Feed status, IP lookup |
 | `/rules` | `RulesPage` | Rule list + editor |
-| `/settings` | `SettingsPage` | Config, notifications, router info |
+| `/settings` | `SettingsPage` | Config, notifications |
 
 ---
 

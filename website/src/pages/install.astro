@@ -11,7 +11,7 @@ import { installTabs } from '../data/commands';
   </div>
   <div class="wrap">
     <Terminal id="install" tabs={installTabs} />
-    <p class="faint small">Tiers: <code>minimal</code> | <code>intermediate</code> | <code>full</code>. Add <code>--router=passive</code> if your router is not listed. Then open <code>http://&lt;this-machine&gt;:3000</code>, user <code>admin</code>; the password is in <code>secrets/admin_password.txt</code> (or <code>sudo heimdall password</code>).</p>
+    <p class="faint small">Tiers: <code>minimal</code> | <code>intermediate</code> | <code>full</code>. Add <code>--router=passive</code> if your router is not listed. Then open <code>http://&lt;this-machine&gt;:3000</code>: the first visit asks you to create your admin account.</p>
     <div class="callout caution"><strong>Do not expose it</strong>Never forward ports 3000 or 5000 to the internet. Heimdall is for your LAN. Reach it remotely through a VPN you already trust.</div>
   </div>
   <section><div class="wrap"><h2>Choose a tier</h2><div class="grid g3">
@@ -26,7 +26,7 @@ import { installTabs } from '../data/commands';
     <tr><td class="k">Architecture</td><td>x86-64 today. ARM images are not published yet.</td></tr>
   </tbody></table></div></div></section>
   <section><div class="wrap"><h2>What the installer changes</h2><div class="grid g2">
-    <div class="card"><h3>It does</h3><ul class="muted tight"><li>Create <code>~/heimdall</code> (or <code>/opt/heimdall</code> for the .deb) with the compose file and config.</li><li>Ask for the dashboard user name and password you will sign in with (Enter keeps <code>admin</code> and generates a password).</li><li>Generate secrets unique to this machine in <code>secrets/</code>, readable only by you. Your password is stored only there.</li><li>Write <code>.env</code> with your tier, interface and subnet.</li><li>Pull images and start the containers (the .deb waits until you run <code>sudo heimdall start</code>).</li></ul></div>
+    <div class="card"><h3>It does</h3><ul class="muted tight"><li>Create <code>~/heimdall</code> (or <code>/opt/heimdall</code> for the .deb) with the compose file and config.</li><li>Generate secrets unique to this machine in <code>secrets/</code>, readable only by you. It never asks for, or writes, your dashboard password.</li><li>Write <code>.env</code> with your tier, interface and subnet.</li><li>Pull images and start the containers (the .deb waits until you run <code>sudo heimdall start</code>).</li></ul></div>
     <div class="card crit"><h3>It does not</h3><ul class="muted tight"><li>Touch your router’s settings or password.</li><li>Open any port to the internet.</li><li>Send your network data anywhere. Threat-intel lookups send an address to a public feed only when you ask for one.</li></ul></div>
   </div></div></section>
   <section id="verify"><div class="wrap"><h2>Verify before you run</h2>

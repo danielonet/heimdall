@@ -35,3 +35,9 @@ export function useMarkSightingMine() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['wifi', 'sightings'] }),
   })
 }
+
+// Reads the router's SSIDs and the access points the monitor adapter hears with those names. Nothing is saved;
+// it is a mutation (not a query) because the admin asks for it and the router call is slow.
+export function useWifiSuggestions() {
+  return useMutation({ mutationFn: () => apiJson('/wifi/suggestions') })
+}

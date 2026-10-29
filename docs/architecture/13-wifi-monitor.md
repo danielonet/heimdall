@@ -71,7 +71,7 @@ below wraps exactly this mechanism.
 | `sentinel/db/repositories.py:WifiSightingRepository` | Upsert-by-MAC + recent-list query. |
 | `sentinel/api/routes/wifi.py` | `GET /api/wifi/sightings`, `GET /api/wifi/monitor-interfaces`. |
 | `frontend/src/pages/WifiScanPage.jsx` | The WIFI nav tab — read-only sightings table. |
-| `frontend/src/components/settings/WifiMonitorSection.jsx` | Settings panel: adapter picker + protected-SSID/trusted-BSSID chip editors. |
+| `frontend/src/components/settings/WifiMonitorSection.jsx` | Equipment-page panel (moved from Settings): adapter picker + protected-SSID/trusted-BSSID chip editors, and "Detect from my router" (`GET /api/wifi/suggestions`, `build_suggestions()` in `sentinel/api/routes/wifi.py`): the SSIDs come from `RouterInfo.ssids`, the BSSID candidates from heard `wifi_networks` rows; a candidate whose OUI equals the router's MAC is pre-ticked, nothing is saved until the admin presses SAVE. |
 
 ### 2.2 `WifiMonitorWatcher` — the house sniffer pattern, extended
 
@@ -154,9 +154,9 @@ to `ServiceStatusPanel.jsx`'s `ALERT_TYPES_BY_SERVICE`/`system.py`'s `_SERVICE_A
 across languages, same convention every other service row already follows) so an open rogue-AP alert lights
 up the WIFI MONITOR row on the dashboard exactly like every other service's ALERT state.
 
-## 5. Settings tab
+## 5. Equipment tab
 
-New "WIFI MONITOR" panel (`WifiMonitorSection.jsx`): an adapter dropdown sourced from `GET
+The "WIFI MONITOR" panel (it began on the Settings tab and now sits in its own card on the Equipment tab) (`WifiMonitorSection.jsx`): an adapter dropdown sourced from `GET
 /api/wifi/monitor-interfaces` (only genuinely monitor-capable adapters — confirmed live that a laptop's
 built-in WiFi card can legitimately report monitor-mode support too, so this isn't just "USB dongles"), plus
 two chip-list editors for protected SSIDs and trusted BSSIDs. `PATCH /api/settings` validates all three

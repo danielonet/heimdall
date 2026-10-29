@@ -60,6 +60,6 @@ async def _truncate_all() -> None:
         await session.execute(text(
             'TRUNCATE devices, traffic_samples, port_stats, wan_status_history, '
             'alerts, rules, threat_intel_cache, trusted_macs, app_settings, dns_queries, wan_stats, '
-            'alert_snoozes, port_allowlist '
+            'alert_snoozes, port_allowlist, admin_account, wifi_sightings, wifi_networks '
             'RESTART IDENTITY'
         ))

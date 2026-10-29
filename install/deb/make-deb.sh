@@ -37,11 +37,11 @@ tar -xzf "${STAGE}/bundle/heimdall-bundle.tar.gz" -C "$PKG/opt"
 cat > "$PKG/opt/heimdall/README.txt" <<TXT
 Heimdall ${VERSION} — installed by the heimdall package.
 
-  sudo heimdall setup      choose tier, router and dashboard login; generates secrets and .env
+  sudo heimdall setup      choose tier and router; generates secrets and .env
   sudo heimdall start      pull images, start now and at boot
-  sudo heimdall status | logs | password | upgrade | stop
+  sudo heimdall status | logs | upgrade | stop | reset-login
 
-Dashboard: http://<this-machine>:3000, signed in with the user name and password you chose at setup (sudo heimdall password shows the password).
+Dashboard: http://<this-machine>:3000, the first visit asks you to create the admin account (forgotten it: sudo heimdall reset-login).
 Docs: https://heimdall.it.com
 TXT
 

@@ -36,9 +36,18 @@ def create_app(config=None) -> Flask:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/login` | Username + password → JWT access token (15 min) + refresh token (7 days) |
+| GET | `/api/setup` | `{setup_required}`: true until an admin account exists (none in `admin_account`, no `admin_password` secret) |
+| POST | `/api/setup` | First run only: create the admin account (user name 3-32 chars, password 12-128) and sign in. 409 once any admin exists. Only a scrypt hash is stored (`admin_account`, one row) |
+| POST | `/api/login` | Username + password → JWT access token (15 min) + refresh token (7 days). Checks `admin_account` first, then the legacy `admin_password` secret file |
 | POST | `/api/refresh` | Exchange refresh token for new access token |
 | POST | `/api/logout` | Revoke refresh token |
+
+### Routers and WiFi helpers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/routers/<id>/test` | Try the saved login and report `{ok, model, firmware, devices}` or `{ok: false, error}`. The primary router is asked through the live scheduler adapter (a Sagemcom allows one session) — JWT required |
+| GET | `/api/wifi/suggestions` | Evil-twin setup helper: the router's SSIDs plus the nearby access points broadcasting them, each flagged `matches_router` when its manufacturer prefix equals the router's MAC. Saves nothing |
 
 ### Devices
 

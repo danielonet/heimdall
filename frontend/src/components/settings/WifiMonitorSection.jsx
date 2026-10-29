@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useSettings, useUpdateSettings } from '../../hooks/useSettings'
-import { useMonitorInterfaces } from '../../hooks/useWifi'
+import { useMonitorInterfaces, useWifiSuggestions } from '../../hooks/useWifi'
 
-function ChipList({ label, placeholder, values, onChange, validate }) {
+function ChipList({ label, hint, placeholder, values, onChange, validate }) {
   const [draft, setDraft] = useState('')
 
   function add() {
@@ -16,6 +16,7 @@ function ChipList({ label, placeholder, values, onChange, validate }) {
   return (
     <div>
       <label className="mb-1 block text-[9px] tracking-wider text-text-muted">{label}</label>
+      {hint && <p className="mb-1.5 text-[9px] leading-relaxed text-text-muted">{hint}</p>}
       <div className="mb-1.5 flex flex-wrap gap-1.5">
         {values.map((v) => (
           <span
@@ -59,6 +60,85 @@ function ChipList({ label, placeholder, values, onChange, validate }) {
   )
 }
 
+// "Detect from my router": fills the two lists below without typing. The SSIDs come from the router itself; the
+// access points are the ones the monitor adapter has heard broadcasting those names. An attacker's copy would be
+// heard too, so only the ones whose manufacturer prefix matches the router are ticked, and nothing is saved until
+// the admin presses SAVE.
+function DetectPanel({ onApply }) {
+  const mutation = useWifiSuggestions()
+  const [picked, setPicked] = useState({})
+  const data = mutation.data
+
+  function detect() {
+    mutation.mutate(undefined, {
+      onSuccess: (d) => setPicked(Object.fromEntries(d.candidates.map((c) => [c.bssid, c.matches_router]))),
+    })
+  }
+
+  return (
+    <div className="border border-border bg-bg p-2.5">
+      <p className="mb-2 text-[9px] leading-relaxed text-text-muted">
+        Don't know these values? Heimdall can ask your router for its WiFi names and listen for the access points
+        broadcasting them. Needs the adapter above to be set and saved.
+      </p>
+      <button
+        type="button"
+        onClick={detect}
+        disabled={mutation.isPending}
+        className="border border-border px-2 py-1 text-[10px] tracking-wider text-text-secondary hover:border-border-active disabled:opacity-40"
+      >
+        {mutation.isPending ? 'ASKING THE ROUTER…' : 'DETECT FROM MY ROUTER'}
+      </button>
+      {mutation.isError && <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>}
+      {data && (
+        <div className="mt-2 space-y-1.5">
+          <div className="text-[10px] text-text-secondary">
+            {data.protected_ssids.length === 0
+              ? 'The router reported no WiFi names.'
+              : `Your router broadcasts: ${data.protected_ssids.join(', ')}`}
+          </div>
+          {data.candidates.map((c) => (
+            <label key={c.bssid} className="flex items-center gap-2 text-[10px] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={Boolean(picked[c.bssid])}
+                onChange={(e) => setPicked((p) => ({ ...p, [c.bssid]: e.target.checked }))}
+              />
+              <span className="font-mono">{c.bssid}</span>
+              <span>
+                {c.ssid} · ch {c.channel ?? '?'} · {c.signal_dbm ?? '?'} dBm
+              </span>
+              <span className={c.matches_router ? 'text-accent-green' : 'text-accent-amber'}>
+                {c.matches_router ? 'same maker as your router' : 'different maker — check it is yours'}
+              </span>
+            </label>
+          ))}
+          {data.not_heard.length > 0 && (
+            <div className="text-[9px] text-text-muted">
+              Not heard yet: {data.not_heard.join(', ')}. The adapter sweeps the channels every few seconds, so try
+              again in a minute.
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              onApply(
+                data.protected_ssids,
+                data.candidates.filter((c) => picked[c.bssid]).map((c) => c.bssid),
+              )
+            }
+            disabled={data.protected_ssids.length === 0}
+            className="border border-accent-green/30 bg-accent-green/5 px-2 py-1 text-[10px] tracking-wider text-accent-green hover:bg-accent-green/20 disabled:opacity-40"
+          >
+            USE THESE
+          </button>
+          <span className="ml-2 text-[9px] text-text-muted">Adds them to the lists below. Press SAVE to keep them.</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // The "WIFI MONITOR" settings panel — configures the passive 802.11
 // monitor-mode watcher (rogue-AP detection + nearby-device sightings, see
 // sentinel/security/wifi_monitor.py and the WIFI nav tab). Mirrors
@@ -95,9 +175,10 @@ export function WifiMonitorSection() {
     <div>
       <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">WIFI MONITOR</div>
       <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
-        Passive 802.11 monitoring for rogue/evil-twin access points and nearby unassociated devices —
-        needs a dedicated WiFi adapter that supports monitor mode (can't be the same NIC serving your
-        LAN connection). See the WIFI tab.
+        An "evil twin" is a fake access point that copies the name of your WiFi so devices connect to it
+        instead of your router. This watches the airwaves and alerts when a network with one of your names
+        is broadcast by hardware that is not yours. It needs a second, USB WiFi adapter that supports monitor
+        mode (not the one your connection uses). See the WIFI tab.
       </p>
 
       {(isLoading || interfacesLoading) && <div className="text-[10px] text-text-muted">Loading…</div>}
@@ -132,14 +213,23 @@ export function WifiMonitorSection() {
             )}
           </div>
 
+          <DetectPanel
+            onApply={(newSsids, newBssids) => {
+              setSsids((cur) => [...cur, ...newSsids.filter((v) => !cur.includes(v))])
+              setBssids((cur) => [...cur, ...newBssids.filter((v) => !cur.includes(v))])
+            }}
+          />
+
           <ChipList
-            label="PROTECTED SSIDS"
+            label="YOUR WIFI NAMES (PROTECTED SSIDS)"
+            hint="The names of your own WiFi networks, as devices see them (for example the 2.4 GHz and the 5 GHz name)."
             placeholder="e.g. MyHomeWiFi"
             values={ssids}
             onChange={setSsids}
           />
           <ChipList
-            label="TRUSTED BSSIDS (your own APs' real MACs)"
+            label="YOUR ACCESS POINTS (TRUSTED BSSIDS)"
+            hint="The hardware address of each WiFi radio that really belongs to you: your router and any extender. A network using your name from any other address is reported as a rogue access point."
             placeholder="aa:bb:cc:dd:ee:ff"
             values={bssids}
             onChange={setBssids}

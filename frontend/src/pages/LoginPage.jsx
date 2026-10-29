@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { login } from '../lib/api'
+import { createAccount, fetchSetupRequired, login } from '../lib/api'
 import { nextWisdomPhrase } from '../lib/wisdom'
 import heimdallLogo from '../assets/heimdall-icon.png'
 
@@ -8,7 +8,10 @@ export function LoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [pending, setPending] = useState(false)
+  // null while we ask the backend whether this is a new install with no admin yet.
+  const [setupRequired, setSetupRequired] = useState(null)
   // nextWisdomPhrase() has a side effect (advances localStorage), so it can't
   // be a useState lazy initializer — Strict Mode deliberately double-invokes
   // those in dev, which would silently burn two rotation slots per visit.
@@ -18,12 +21,25 @@ export function LoginPage() {
   const wisdom = wisdomRef.current
   const navigate = useNavigate()
 
+  useEffect(() => {
+    fetchSetupRequired()
+      .then(setSetupRequired)
+      .catch(() => setSetupRequired(false))
+  }, [])
+
+  const creating = setupRequired === true
+  const mismatch = creating && confirm !== '' && confirm !== password
+
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    if (creating) {
+      if (password.length < 12) return setError('Choose a password of at least 12 characters.')
+      if (password !== confirm) return setError('The two passwords do not match.')
+    }
     setPending(true)
     try {
-      await login(username, password)
+      await (creating ? createAccount(username, password) : login(username, password))
       navigate('/', { replace: true })
     } catch (err) {
       setError(err.message)
@@ -41,9 +57,16 @@ export function LoginPage() {
           <div className="mt-1 text-[9px] tracking-widest text-text-muted">HOME NET MONITOR</div>
         </div>
 
-        <p className="mb-6 border-l-2 border-border-active pl-3 font-nordic text-[15px] leading-relaxed tracking-wide text-text-secondary">
-          {wisdom}
-        </p>
+        {creating ? (
+          <p className="mb-6 border-l-2 border-accent-amber pl-3 text-[11px] leading-relaxed text-text-secondary">
+            Welcome. This is a new install, so there is no login yet. Choose the user name and password you will
+            use to sign in. The password is stored only as a salted hash.
+          </p>
+        ) : (
+          <p className="mb-6 border-l-2 border-border-active pl-3 font-nordic text-[15px] leading-relaxed tracking-wide text-text-secondary">
+            {wisdom}
+          </p>
+        )}
 
         <label htmlFor="username" className="mb-1 block text-[9px] tracking-wider text-text-secondary">
           USERNAME
@@ -53,6 +76,7 @@ export function LoginPage() {
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           autoFocus
+          autoComplete="username"
           className="mb-4 w-full border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-border-active"
         />
 
@@ -64,17 +88,35 @@ export function LoginPage() {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="mb-6 w-full border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-border-active"
+          autoComplete={creating ? 'new-password' : 'current-password'}
+          className="mb-4 w-full border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-border-active"
         />
+
+        {creating && (
+          <>
+            <label htmlFor="confirm" className="mb-1 block text-[9px] tracking-wider text-text-secondary">
+              REPEAT PASSWORD
+            </label>
+            <input
+              id="confirm"
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+              className="mb-1 w-full border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-border-active"
+            />
+            <div className="mb-4 h-4 text-[10px] text-accent-red">{mismatch ? 'Does not match yet.' : ''}</div>
+          </>
+        )}
 
         {error && <div className="mb-4 text-[11px] text-accent-red">{error}</div>}
 
         <button
           type="submit"
-          disabled={pending}
+          disabled={pending || setupRequired === null}
           className="w-full border border-accent-green/40 bg-accent-green/10 py-2 text-[11px] tracking-[2px] text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-50"
         >
-          {pending ? 'SIGNING IN…' : 'SIGN IN'}
+          {pending ? (creating ? 'CREATING…' : 'SIGNING IN…') : creating ? 'CREATE ACCOUNT' : 'SIGN IN'}
         </button>
       </form>
     </div>

@@ -82,6 +82,28 @@ export async function login(username, password) {
   return data
 }
 
+/** True while the dashboard has no admin yet (a new install): the login page then offers account creation. */
+export async function fetchSetupRequired() {
+  const resp = await rawFetch('/setup', { method: 'GET' })
+  if (!resp.ok) return false
+  return Boolean((await resp.json()).setup_required)
+}
+
+/** First run only: create the admin account and sign in with it. */
+export async function createAccount(username, password) {
+  const resp = await rawFetch('/setup', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.error || `Could not create the account (${resp.status})`)
+  useAuthStore.getState().setTokens({
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+  })
+  return data
+}
+
 export async function logout() {
   const { accessToken } = useAuthStore.getState()
   if (accessToken) {

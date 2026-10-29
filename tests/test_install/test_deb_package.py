@@ -155,20 +155,34 @@ class TestCommand:
         (cmd.home / 'secrets' / 'admin_password.txt').write_text('s3cret\n')
         assert cmd('password').stdout.strip() == 's3cret'
 
-    def test_setup_passes_the_dashboard_login_to_setup_sh(self, cmd, tmp_path):
+    def test_setup_writes_no_password_and_the_password_command_says_why(self, cmd, tmp_path):
         fake = tmp_path / 'bin'
         fake.mkdir()
         (fake / 'docker').write_text('#!/bin/sh\nexit 0\n')
         (fake / 'docker').chmod(0o755)
-        pw = tmp_path / 'pw.txt'
-        pw.write_text('correct-horse-battery\n')
-        env = {**os.environ, 'PATH': f'{fake}:{os.environ["PATH"]}'}
-        r = subprocess.run([cmd.exe, 'setup', '--tier=minimal', '--router=passive', '--admin-user=carol',
-                            f'--admin-password-file={pw}'],
-                           capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, 'HEIMDALL_HOME': str(cmd.home)})
+        env = {**os.environ, 'PATH': f'{fake}:{os.environ["PATH"]}', 'HEIMDALL_HOME': str(cmd.home)}
+        r = subprocess.run([cmd.exe, 'setup', '--tier=minimal', '--router=passive'],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
         assert r.returncode == 0, r.stderr
-        assert (cmd.home / 'secrets' / 'admin_password.txt').read_text().strip() == 'correct-horse-battery'
-        assert 'ADMIN_USERNAME=carol' in (cmd.home / '.env').read_text()
+        assert (cmd.home / 'secrets' / 'admin_password.txt').read_text() == ''
+        pw = cmd('password')
+        assert pw.returncode != 0 and 'reset-login' in pw.stderr
+
+    def test_reset_login_empties_the_old_password_file_and_removes_the_account(self, cmd, tmp_path):
+        fake = tmp_path / 'bin'
+        fake.mkdir()
+        log = tmp_path / 'docker.log'
+        (fake / 'docker').write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit 0\n')
+        (fake / 'docker').chmod(0o755)
+        (cmd.home / 'secrets').mkdir()
+        (cmd.home / 'secrets' / 'admin_password.txt').write_text('old\n')
+        (cmd.home / '.env').write_text('x=1\n')
+        env = {**os.environ, 'PATH': f'{fake}:{os.environ["PATH"]}', 'HEIMDALL_HOME': str(cmd.home)}
+        r = subprocess.run([cmd.exe, 'reset-login'], capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
+        assert r.returncode == 0, r.stderr
+        calls = log.read_text()
+        assert 'DELETE FROM admin_account' in calls and 'restart sentinel-backend' in calls
+        assert (cmd.home / 'secrets' / 'admin_password.txt').read_text() == ''
 
     def test_reset_needs_explicit_confirmation(self, cmd):
         (cmd.home / '.env').write_text('x=1\n')

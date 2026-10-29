@@ -124,11 +124,11 @@ class TestSetup:
         extract(dist, tmp_path)
         r = run(['./setup.sh', '--tier=intermediate'], tmp_path, fake_bin)
         assert r.returncode == 0, r.stderr
-        for name in ('jwt_secret', 'db_pass', 'admin_password'):
+        for name in ('jwt_secret', 'db_pass'):
             f = tmp_path / 'secrets' / f'{name}.txt'
             assert len(f.read_text().strip()) == 64 and stat.S_IMODE(f.stat().st_mode) == 0o600
         assert stat.S_IMODE((tmp_path / 'secrets').stat().st_mode) == 0o700
-        for name in ('router_password', 'miwifi_password', 'smtp_password', 'otx_api_key', 'abusech_auth_key'):
+        for name in ('admin_password', 'router_password', 'miwifi_password', 'smtp_password', 'otx_api_key', 'abusech_auth_key'):
             assert (tmp_path / 'secrets' / f'{name}.txt').read_text() == ''  # no CHANGE_ME placeholders
         assert (tmp_path / 'secrets' / 'routers').is_dir()
         env = dict(line.split('=', 1) for line in (tmp_path / '.env').read_text().splitlines() if '=' in line)
@@ -181,140 +181,45 @@ class TestSetup:
         assert r.returncode != 0 and 'Invalid --tier' in r.stderr
 
 
-class TestDashboardLogin:
-    """The user name and password asked for at install time and used for the first sign-in."""
+class TestDashboardAccount:
+    """The admin account is created in the browser: the installer asks for no password and writes none."""
 
-    def _pwfile(self, tmp_path, text=PASSWORD + '\n'):
-        f = tmp_path / 'pw.txt'
-        f.write_text(text)
-        return f
-
-    def test_unattended_defaults_to_admin_with_a_generated_password(self, dist, tmp_path, fake_bin):
+    def test_a_new_install_has_an_empty_password_file_and_no_user_name_in_env(self, dist, tmp_path, fake_bin):
         extract(dist, tmp_path)
         assert run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin).returncode == 0
-        assert env_file(tmp_path)['ADMIN_USERNAME'] == 'admin'
-        assert len((tmp_path / 'secrets' / 'admin_password.txt').read_text().strip()) == 64
+        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text() == ''
+        assert 'ADMIN_USERNAME' not in (tmp_path / '.env').read_text()
 
-    def test_flags_set_the_login_and_the_password_stays_in_its_secret_file(self, dist, tmp_path, fake_bin):
+    def test_the_summary_points_at_the_browser_not_a_password_file(self, dist, tmp_path, fake_bin):
         extract(dist, tmp_path)
-        pw = self._pwfile(tmp_path)
-        r = run(['./setup.sh', '--tier=minimal', '--admin-user=alice', f'--admin-password-file={pw}'], tmp_path, fake_bin)
-        assert r.returncode == 0, r.stderr
-        secret = tmp_path / 'secrets' / 'admin_password.txt'
-        assert secret.read_text() == PASSWORD + '\n' and stat.S_IMODE(secret.stat().st_mode) == 0o600
-        assert env_file(tmp_path)['ADMIN_USERNAME'] == 'alice'
-        assert PASSWORD not in (tmp_path / '.env').read_text()
-        assert PASSWORD not in r.stdout + r.stderr
-        assert 'alice' in r.stdout
-
-    def test_a_password_file_without_a_trailing_newline_works(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        pw = self._pwfile(tmp_path, PASSWORD)
-        assert run(['./setup.sh', '--tier=minimal', f'--admin-password-file={pw}'], tmp_path, fake_bin).returncode == 0
-        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-
-    @pytest.mark.parametrize('args, message', [
-        (['--admin-user=ab'], 'Invalid --admin-user'),
-        (['--admin-user=has space'], 'Invalid --admin-user'),
-        (['--admin-user=bad/name'], 'Invalid --admin-user'),
-    ])
-    def test_rejects_a_bad_user_name_before_writing_anything(self, dist, tmp_path, fake_bin, args, message):
-        extract(dist, tmp_path)
-        r = run(['./setup.sh', '--tier=minimal', *args], tmp_path, fake_bin)
-        assert r.returncode != 0 and message in r.stderr
-        assert not (tmp_path / 'secrets').exists() and not (tmp_path / '.env').exists()
-
-    @pytest.mark.parametrize('text, message', [
-        ('short\n', 'at least 12'),
-        ('x' * 129 + '\n', 'at most 128'),
-        ('   leading-space-pw\n', 'start or end with a space'),
-    ])
-    def test_rejects_an_unusable_password_before_writing_anything(self, dist, tmp_path, fake_bin, text, message):
-        extract(dist, tmp_path)
-        pw = self._pwfile(tmp_path, text)
-        r = run(['./setup.sh', '--tier=minimal', '--admin-user=bob', f'--admin-password-file={pw}'], tmp_path, fake_bin)
-        assert r.returncode != 0 and message in r.stderr
-        assert not (tmp_path / 'secrets').exists()
-
-    def test_rejects_a_password_equal_to_the_user_name(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        pw = self._pwfile(tmp_path, 'same-name-1234\n')
-        r = run(['./setup.sh', '--tier=minimal', '--admin-user=same-name-1234', f'--admin-password-file={pw}'], tmp_path, fake_bin)
-        assert r.returncode != 0 and 'differ from the user name' in r.stderr
-
-    def test_a_missing_or_empty_password_file_is_an_error(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        r = run(['./setup.sh', '--tier=minimal', f'--admin-password-file={tmp_path / "nope"}'], tmp_path, fake_bin)
-        assert r.returncode != 0 and 'not found' in r.stderr
-        empty = self._pwfile(tmp_path, '')
-        r = run(['./setup.sh', '--tier=minimal', f'--admin-password-file={empty}'], tmp_path, fake_bin)
-        assert r.returncode != 0 and 'is empty' in r.stderr
-
-    def test_rerun_keeps_the_existing_login_and_says_so(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        pw = self._pwfile(tmp_path)
-        run(['./setup.sh', '--tier=minimal', '--admin-user=alice', f'--admin-password-file={pw}'], tmp_path, fake_bin)
-        other = self._pwfile(tmp_path, 'a-completely-other-pass\n')
-        r = run(['./setup.sh', '--tier=minimal', '--admin-user=mallory', f'--admin-password-file={other}'], tmp_path, fake_bin)
-        assert r.returncode == 0 and 'ignoring --admin-user' in r.stderr
-        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-        assert env_file(tmp_path)['ADMIN_USERNAME'] == 'alice'
-        assert 'alice' in r.stdout
-
-    def test_an_install_from_before_the_choice_existed_keeps_working(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
-        (tmp_path / '.env').write_text('\n'.join(l for l in (tmp_path / '.env').read_text().splitlines()
-                                                 if not l.startswith('ADMIN_USERNAME')) + '\n')
         r = run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
-        assert r.returncode == 0 and 'user admin' in r.stdout.replace('\x1b[1m', '').replace('\x1b[0m', '')
-        assert 'ADMIN_USERNAME' not in (tmp_path / '.env').read_text()  # compose defaults it to admin
+        assert 'create your admin account' in r.stdout
+        assert 'admin_password.txt' not in r.stdout.split('Ready.')[1]
 
-    def test_the_compose_file_passes_the_user_name_to_the_backend(self, dist, tmp_path):
+    def test_the_removed_password_flags_are_refused(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        for flag in ('--admin-user=alice', '--admin-password-file=/tmp/x'):
+            r = run(['./setup.sh', '--tier=minimal', flag], tmp_path, fake_bin)
+            assert r.returncode != 0 and 'Unknown argument' in r.stderr
+
+    def test_a_terminal_install_never_asks_for_a_password(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        code, out = run_on_tty(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin, [])
+        assert code == 0, out
+        assert 'Password' not in out and 'User name' not in out
+
+    def test_an_older_install_keeps_its_password_file_and_says_so(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        (tmp_path / 'secrets').mkdir()
+        (tmp_path / 'secrets' / 'admin_password.txt').write_text('from-an-older-install\n')
+        r = run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
+        assert r.returncode == 0
+        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text() == 'from-an-older-install\n'
+        assert 'existing one' in r.stdout and 'create your admin account' not in r.stdout
+
+    def test_the_compose_file_still_passes_the_user_name_for_older_installs(self, dist, tmp_path):
         extract(dist, tmp_path)
         assert 'ADMIN_USERNAME=${ADMIN_USERNAME:-admin}' in (tmp_path / 'docker-compose.yml').read_text()
-
-    def test_asks_on_a_terminal_and_hides_the_password(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        code, out = run_on_tty(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin, [
-            ('User name [admin]: ', 'alice'),
-            ('Password (', PASSWORD),
-            ('Repeat the password: ', PASSWORD),
-        ])
-        assert code == 0, out
-        assert PASSWORD not in out  # typed into a hidden prompt: never echoed back
-        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-        assert env_file(tmp_path)['ADMIN_USERNAME'] == 'alice'
-
-    def test_enter_alone_gives_admin_and_a_generated_password(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        code, out = run_on_tty(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin, [
-            ('User name [admin]: ', ''), ('Password (', ''),
-        ])
-        assert code == 0, out
-        assert env_file(tmp_path)['ADMIN_USERNAME'] == 'admin'
-        assert len((tmp_path / 'secrets' / 'admin_password.txt').read_text().strip()) == 64
-
-    def test_the_prompt_asks_again_after_a_bad_answer(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        code, out = run_on_tty(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin, [
-            ('User name [admin]: ', 'x'),            # too short
-            ('User name [admin]: ', 'alice'),
-            ('Password (', 'tooshort'),              # under 12
-            ('Password (', PASSWORD),
-            ('Repeat the password: ', 'different-one-12345'),
-            ('Password (', PASSWORD),                # mismatch sends it back to the start
-            ('Repeat the password: ', PASSWORD),
-        ])
-        assert code == 0, out
-        assert 'Use 3-32 letters' in out and 'at least 12 characters' in out and 'differ' in out
-        assert (tmp_path / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-
-    def test_a_rerun_on_a_terminal_does_not_ask_again(self, dist, tmp_path, fake_bin):
-        extract(dist, tmp_path)
-        run(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin)
-        code, out = run_on_tty(['./setup.sh', '--tier=minimal', '--router=passive'], tmp_path, fake_bin, [])
-        assert code == 0 and 'Dashboard login' not in out
 
 
 class TestBootstrap:
@@ -372,40 +277,18 @@ class TestBootstrap:
         assert r.returncode != 0 and 'Docker with the compose plugin is required' in r.stderr
         assert not (tmp_path / 'h').exists()
 
-    def test_login_flags_pass_through_the_bootstrap(self, dist, tmp_path, fake_bin):
-        pw = tmp_path / 'pw.txt'
-        pw.write_text(PASSWORD + '\n')
-        r = self._install(dist, tmp_path, fake_bin, '--tier=minimal', '--no-start', '--admin-user=alice', f'--admin-password-file={pw}')
-        assert r.returncode == 0, r.stderr + r.stdout
-        home = tmp_path / 'h'
-        assert (home / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-        assert env_file(home)['ADMIN_USERNAME'] == 'alice'
-        assert PASSWORD not in r.stdout + r.stderr
-
-    def test_asks_for_the_login_on_a_terminal_and_never_puts_the_password_in_argv(self, dist, tmp_path, fake_bin):
-        # A fake `docker` that records the whole process table would be overkill; instead make setup.sh's
-        # argv visible: wrap it so every invocation's arguments are logged, then check the password is absent.
+    def test_a_terminal_install_through_the_bootstrap_asks_no_password_and_leaves_none_on_disk(self, dist, tmp_path, fake_bin):
         code, out = run_on_tty(
             ['bash', str(dist / 'install.sh'), f'--dir={tmp_path / "h"}', '--tier=minimal', '--no-start'],
-            tmp_path, fake_bin,
-            [('Enter 1/2/3 [3]: ', '3'), ('User name [admin]: ', 'alice'), ('Password (', PASSWORD), ('Repeat the password: ', PASSWORD)],
+            tmp_path, fake_bin, [('Enter 1/2/3 [3]: ', '3')],
             env={'HEIMDALL_BUNDLE_URL_BASE': f'file://{dist}'})
         home = tmp_path / 'h'
         assert code == 0, out
-        assert (home / 'secrets' / 'admin_password.txt').read_text().strip() == PASSWORD
-        assert env_file(home)['ADMIN_USERNAME'] == 'alice'
-        assert PASSWORD not in out
-
-    def test_a_terminal_upgrade_does_not_ask_for_the_login_again(self, dist, tmp_path, fake_bin):
-        self._install(dist, tmp_path, fake_bin, '--tier=minimal', '--no-start', '--admin-user=alice')
-        code, out = run_on_tty(
-            ['bash', str(dist / 'install.sh'), f'--dir={tmp_path / "h"}', '--tier=minimal', '--no-start'], tmp_path, fake_bin, [],
-            env={'HEIMDALL_BUNDLE_URL_BASE': f'file://{dist}'})
-        assert code == 0 and 'Dashboard login' not in out, out
-        assert env_file(tmp_path / 'h')['ADMIN_USERNAME'] == 'alice'
+        assert 'Password' not in out and 'User name' not in out
+        assert (home / 'secrets' / 'admin_password.txt').read_text() == ''
 
     def test_yes_never_prompts_even_on_a_terminal(self, dist, tmp_path, fake_bin):
         code, out = run_on_tty(
             ['bash', str(dist / 'install.sh'), f'--dir={tmp_path / "h"}', '--yes', '--tier=minimal', '--no-start'], tmp_path, fake_bin, [],
             env={'HEIMDALL_BUNDLE_URL_BASE': f'file://{dist}'})
-        assert code == 0 and 'Dashboard login' not in out, out
+        assert code == 0, out

@@ -64,3 +64,12 @@ export function useRemoveRouter() {
     },
   })
 }
+
+// Tries the saved login for real: { ok, model, firmware, devices } or { ok: false, error }.
+export function useTestRouter() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ spec }) => apiJson(`/routers/${spec.id}/test`, { method: 'POST' }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['routers', 'selected'] }),
+  })
+}

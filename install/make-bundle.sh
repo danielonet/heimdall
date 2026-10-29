@@ -52,11 +52,11 @@ echo "$VERSION" > "${DIR}/VERSION"
 cat > "${DIR}/README.txt" <<TXT
 Heimdall ${VERSION} — install bundle
 
-  ./setup.sh                          # asks for the dashboard login; generates secrets and .env for this machine
+  ./setup.sh                          # generates secrets and .env for this machine
   docker compose pull && docker compose up -d
 
-Dashboard: http://<this-machine>:3000, signed in with the user name and password you chose at setup
-(the password is in secrets/admin_password.txt; the user name is ADMIN_USERNAME in .env).
+Dashboard: http://<this-machine>:3000. The first visit asks you to create the admin account; only a
+hash of the password is kept (in the database), never a file.
 Docs: https://github.com/danielonet/heimdall   Security policy: SECURITY.md in that repo.
 TXT
 

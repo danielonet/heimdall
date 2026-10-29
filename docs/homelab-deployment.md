@@ -178,7 +178,7 @@ Check everything came up: `docker compose ps` — `sentinel-backend`,
 ## 7. Verify
 
 - Dashboard: `http://10.100.102.240:3000` (your chosen static IP) — log in
-  with `admin` / whatever you put in `secrets/admin_password.txt`.
+  with `admin` / whatever you put in `secrets/admin_password.txt` (or, if that file is empty, create the account on first visit).
 - From another device on the LAN (phone, laptop), not just the box itself —
   confirms the static IP and host networking are actually reachable
   network-wide, not just on loopback.

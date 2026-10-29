@@ -7,13 +7,11 @@
 # overwrites an existing secret or .env, so it is safe to re-run.
 #
 # Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24]
-#                    [--admin-user=NAME] [--admin-password-file=PATH]
 #
-# The dashboard login: on a fresh install it asks for a user name and password (Enter for the
-# default user "admin" and a generated password). The password is written only to
-# secrets/admin_password.txt, never to .env or the screen. For unattended installs pass
-# --admin-user and --admin-password-file (a file, so the password never shows in `ps`).
-# An existing secrets/admin_password.txt is never replaced.
+# The dashboard login is not made here: the first time you open the dashboard it asks you to
+# create the admin account, and keeps only a salted hash of the password in its database. No
+# password is written to disk by this script. An install that already has a non-empty
+# secrets/admin_password.txt keeps logging in with it.
 #
 # Afterwards:  docker compose pull && docker compose up -d
 # (.env sets COMPOSE_PROFILES, so the same command works for every tier.)
@@ -27,16 +25,14 @@ ok()   { echo "${G}✔${N} $*"; }
 warn() { echo "${Y}⚠${N} $*" >&2; }
 die()  { echo "${R}✖${N} $*" >&2; exit 1; }
 
-TIER="" IFACE="" SUBNET="" ROUTER="" ADMIN_USER="" ADMIN_PW_FILE=""
+TIER="" IFACE="" SUBNET="" ROUTER=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
         --router=*) ROUTER="${arg#--router=}" ;;
         --iface=*)  IFACE="${arg#--iface=}" ;;
         --subnet=*) SUBNET="${arg#--subnet=}" ;;
-        --admin-user=*) ADMIN_USER="${arg#--admin-user=}" ;;
-        --admin-password-file=*) ADMIN_PW_FILE="${arg#--admin-password-file=}" ;;
-        -h|--help)  sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown argument: $arg" ;;
     esac
 done
@@ -85,68 +81,6 @@ fi
 [ -n "$SUBNET" ] || { SUBNET=192.168.1.0/24; warn "Could not detect the LAN subnet — defaulting to $SUBNET. Edit LAN_SUBNET in .env."; }
 info "Tier: $TIER · interface: $IFACE · subnet: $SUBNET"
 
-# ── Dashboard login ─────────────────────────────────────────────────────────
-USER_RE='^[A-Za-z0-9._-]{3,32}$'
-MIN_PW=12
-
-# Says why a password is unusable, or prints nothing when it is fine. The backend strips whitespace
-# around the secret file's contents, so a password that starts or ends with a space could never log in.
-password_problem() {
-    local pw="$1" user="$2"
-    if [ "${#pw}" -lt "$MIN_PW" ]; then echo "must be at least $MIN_PW characters"
-    elif [ "${#pw}" -gt 128 ]; then echo "must be at most 128 characters"
-    elif [[ "$pw" =~ ^[[:space:]]|[[:space:]]$ ]]; then echo "must not start or end with a space"
-    elif [ "$pw" = "$user" ]; then echo "must differ from the user name"
-    fi
-}
-
-ADMIN_PW="" ADMIN_PW_SOURCE=generated
-if [ -f secrets/admin_password.txt ]; then
-    # Re-run or upgrade: the login already exists and is never replaced.
-    ADMIN_PW_SOURCE=kept
-    if [ -n "$ADMIN_USER" ] || [ -n "$ADMIN_PW_FILE" ]; then
-        warn "secrets/admin_password.txt already exists — ignoring --admin-user / --admin-password-file. To change the login, see the manual (First login)."
-    fi
-    ADMIN_USER=$(sed -n 's/^ADMIN_USERNAME=//p' .env 2>/dev/null | head -n 1)
-    ADMIN_USER="${ADMIN_USER:-admin}"
-else
-    if [ -n "$ADMIN_PW_FILE" ]; then
-        [ -f "$ADMIN_PW_FILE" ] || die "--admin-password-file: $ADMIN_PW_FILE not found"
-        IFS= read -r ADMIN_PW < "$ADMIN_PW_FILE" || true   # read fails on a last line without a newline; the value is still set
-        [ -n "$ADMIN_PW" ] || die "--admin-password-file: $ADMIN_PW_FILE is empty"
-    fi
-    if [ -t 0 ] && { [ -z "$ADMIN_USER" ] || [ -z "$ADMIN_PW_FILE" ]; }; then
-        echo ""
-        echo "${B}Dashboard login${N} — what you will sign in with the first time."
-        if [ -z "$ADMIN_USER" ]; then
-            while :; do
-                read -rp "User name [admin]: " entered
-                entered="${entered:-admin}"
-                if [[ "$entered" =~ $USER_RE ]]; then ADMIN_USER="$entered"; break; fi
-                warn "Use 3-32 letters, digits, dots, dashes or underscores."
-            done
-        fi
-        if [ -z "$ADMIN_PW_FILE" ]; then
-            while :; do
-                read -rsp "Password (at least $MIN_PW characters; press Enter to generate one): " entered; echo >&2
-                [ -n "$entered" ] || break
-                problem=$(password_problem "$entered" "$ADMIN_USER")
-                if [ -n "$problem" ]; then warn "The password $problem."; continue; fi
-                read -rsp "Repeat the password: " again; echo >&2
-                if [ "$entered" = "$again" ]; then ADMIN_PW="$entered"; break; fi
-                warn "The two entries differ — try again."
-            done
-        fi
-    fi
-    ADMIN_USER="${ADMIN_USER:-admin}"
-    [[ "$ADMIN_USER" =~ $USER_RE ]] || die "Invalid --admin-user: use 3-32 letters, digits, dots, dashes or underscores."
-    if [ -n "$ADMIN_PW" ]; then
-        problem=$(password_problem "$ADMIN_PW" "$ADMIN_USER")
-        [ -z "$problem" ] || die "The dashboard password $problem."
-        ADMIN_PW_SOURCE=chosen
-    fi
-fi
-
 # ── Secrets ─────────────────────────────────────────────────────────────────
 umask 077
 mkdir -p secrets secrets/routers
@@ -157,11 +91,8 @@ blank() { [ -f "secrets/$1" ] && return; : > "secrets/$1"; ok "Created empty sec
 
 gen jwt_secret.txt
 gen db_pass.txt
-case "$ADMIN_PW_SOURCE" in
-    kept) ok "secrets/admin_password.txt already exists — kept" ;;
-    chosen) printf '%s\n' "$ADMIN_PW" > secrets/admin_password.txt; chmod 600 secrets/admin_password.txt; ok "Saved your dashboard password to secrets/admin_password.txt" ;;
-    *) gen admin_password.txt ;;
-esac
+# Empty on a new install: the admin account is created in the browser. A file left by an older install is kept.
+blank admin_password.txt "the admin account is created in the dashboard"
 # Blank is a valid, working state for all of these; the dashboard writes them
 # when you enter a router login, API key or SMTP password. Compose needs the
 # files to exist, or Docker creates a directory at the mount path instead.
@@ -181,10 +112,6 @@ if [ -f .env ]; then
     ok ".env already exists — kept"
     grep -q "^COMPOSE_PROFILES=${TIER}\$" .env 2>/dev/null || [ "$TIER" = minimal ] \
         || warn "Requested tier '$TIER' differs from the existing .env. Edit COMPOSE_PROFILES and DEPLOYMENT_TIER there to change tier."
-    # An install from before the login was configurable has no ADMIN_USERNAME line; only add one for a new, non-default user.
-    if [ "$ADMIN_PW_SOURCE" != kept ] && ! grep -q '^ADMIN_USERNAME=' .env && [ "$ADMIN_USER" != admin ]; then
-        printf 'ADMIN_USERNAME=%s\n' "$ADMIN_USER" >> .env
-    fi
 else
     profiles=""; [ "$TIER" = minimal ] || profiles="$TIER"
     cat > .env <<ENV
@@ -202,9 +129,6 @@ IMAGE_TAG=${VERSION_TAG}
 # Applied once, on first start; change it afterwards on the Equipment tab.
 INITIAL_ROUTER=${ROUTER}
 
-# The dashboard user name. The password is secrets/admin_password.txt.
-ADMIN_USERNAME=${ADMIN_USER}
-
 # LAN-facing interface to sniff, and its subnet (used by Zeek).
 SNIFF_IFACE=${IFACE}
 LAN_SUBNET=${SUBNET}
@@ -221,10 +145,12 @@ echo "${B}Ready.${N} Start Heimdall:"
 echo ""
 echo "    docker compose pull && docker compose up -d"
 echo ""
-echo "  Dashboard:  http://<this-machine>:3000   user ${B}${ADMIN_USER}${N}"
-case "$ADMIN_PW_SOURCE" in
-    chosen) echo "  Password:   the one you entered (kept in $(pwd)/secrets/admin_password.txt)" ;;
-    *)      echo "  Password:   $(pwd)/secrets/admin_password.txt" ;;
-esac
+echo "  Dashboard:  http://<this-machine>:3000"
+if [ -s secrets/admin_password.txt ]; then
+    echo "  Login:      the existing one (user and password file kept from before: $(pwd)/secrets/admin_password.txt)"
+else
+    echo "  First visit: the dashboard asks you to create your admin account (user name and password)."
+    echo "               Do that straight away, before anyone else on your network opens the page."
+fi
 echo "  Then open the Equipment tab and pick your router (or 'Other / not listed')."
 echo "  Do not expose ports 3000 or 5000 to the internet."

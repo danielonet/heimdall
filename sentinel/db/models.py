@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ARRAY, TIMESTAMP, BigInteger, Boolean, Float, Integer, String, Text, func, text
+from sqlalchemy import ARRAY, TIMESTAMP, BigInteger, Boolean, Float, Integer, SmallInteger, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -542,3 +542,17 @@ class RouterProfile(Base):
     username: Mapped[str] = mapped_column(String(100), server_default='')
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class AdminAccount(Base):
+    """The dashboard's single admin login, created from the browser on first
+    run. Only a salted hash is stored (never the password), and `id` is pinned
+    to 1 so a second account cannot exist. Installs from before this table
+    keep logging in with the admin_password secret file until it is used."""
+
+    __tablename__ = 'admin_account'
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    username: Mapped[str] = mapped_column(String(32))
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

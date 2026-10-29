@@ -69,11 +69,11 @@ export const products: Product[] = [
       { alert: 'ROGUE_AP', severity: 'CRITICAL', meaning: 'Something that is not one of your access points is broadcasting a network name you listed as protected: the signature of an “evil twin” attack.' },
     ],
     plugs: ['Monitor-mode WiFi adapter', 'Beacon and probe frames', 'WiFi monitor', 'ROGUE_AP', 'Alert store', 'Correlation'],
-    tier: 'minimal', tierNote: 'Runs inside the core backend in every tier, but stays off until you add a second WiFi adapter that supports monitor mode and choose it under WiFi monitor in Settings.',
+    tier: 'minimal', tierNote: 'Runs inside the core backend in every tier, but stays off until you add a second WiFi adapter that supports monitor mode and choose it under WiFi monitor on the Equipment page.',
     limits: [
       'It needs extra hardware: a USB WiFi adapter that supports monitor mode, separate from the one that connects the Heimdall machine to your network.',
       'It listens on 2.4 GHz channels 1, 6 and 11 only, so an access point on 5 GHz or another channel can be missed.',
-      'You must list your own access points’ real addresses (BSSIDs) next to the protected names. A protected name with one of your own access points left out raises a false alarm.',
+      'You must list your own access points’ real addresses (BSSIDs) next to the protected names; “Detect from my router” in Settings suggests them, but you confirm them. A protected name with one of your own access points left out raises a false alarm.',
       'It cannot block a rogue access point, because it is not a device on your network. The alert tells you; the response is physical.',
       'The nearby-device and network lists on the WiFi page are for your information only and do not raise alerts.',
     ],

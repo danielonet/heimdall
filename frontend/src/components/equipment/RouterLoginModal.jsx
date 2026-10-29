@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Modal } from '../Modal'
-import { useSaveRouter } from '../../hooks/useRouters'
+import { useSaveRouter, useTestRouter } from '../../hooks/useRouters'
 
 const FIELD_LABELS = { host: 'IP ADDRESS / HOST', username: 'USERNAME', password: 'PASSWORD' }
 const INPUT_CLASS =
@@ -12,6 +12,7 @@ const INPUT_CLASS =
 // file — leave it blank to keep the stored one.
 export function RouterLoginModal({ spec, current, onClose }) {
   const mutation = useSaveRouter()
+  const test = useTestRouter()
   const [values, setValues] = useState({
     host: current?.host || '',
     username: current?.username || spec.default_username || '',
@@ -25,12 +26,15 @@ export function RouterLoginModal({ spec, current, onClose }) {
     (!needsUsername || values.username.trim()) &&
     (!needsHost || values.host.trim()) &&
     (hasPassword || values.password) &&
-    !mutation.isPending
+    !mutation.isPending &&
+    !test.isPending
 
   function handleSubmit(e) {
     e.preventDefault()
     if (!canSave) return
-    mutation.mutate({ spec, ...values }, { onSuccess: onClose })
+    test.reset()
+    // Save, then really try the login: closing silently on "saved" left people unsure whether it worked.
+    mutation.mutate({ spec, ...values }, { onSuccess: () => test.mutate({ spec }) })
   }
 
   return (
@@ -63,20 +67,37 @@ export function RouterLoginModal({ spec, current, onClose }) {
           </p>
         )}
         {mutation.isError && <div className="text-[9px] text-accent-red">{mutation.error.message}</div>}
+        {test.isPending && (
+          <div role="status" className="border border-border bg-bg px-3 py-2 text-[10px] text-text-secondary">
+            Saved. Signing in to the router…
+          </div>
+        )}
+        {test.isSuccess && test.data.ok && (
+          <div role="status" className="border border-accent-green/40 bg-accent-green/10 px-3 py-2 text-[10px] text-accent-green">
+            ✓ Signed in{test.data.model ? ` to ${test.data.model}` : ''}
+            {test.data.devices != null ? ` · ${test.data.devices} devices found` : ''}.
+          </div>
+        )}
+        {((test.isSuccess && !test.data.ok) || test.isError) && (
+          <div role="alert" className="border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-[10px] text-accent-red">
+            ✗ Saved, but the router did not accept the login:{' '}
+            {test.isError ? test.error.message : test.data.error}
+          </div>
+        )}
         <div className="flex justify-end gap-2 pt-1">
           <button
             type="button"
             onClick={onClose}
             className="border border-border px-3 py-1.5 text-[10px] tracking-wider text-text-secondary hover:bg-surface"
           >
-            CANCEL
+            {test.isSuccess && test.data.ok ? 'CLOSE' : 'CANCEL'}
           </button>
           <button
             type="submit"
             disabled={!canSave}
             className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
           >
-            {mutation.isPending ? 'SAVING…' : 'SAVE'}
+            {mutation.isPending ? 'SAVING…' : test.isPending ? 'TESTING…' : 'SAVE & TEST'}
           </button>
         </div>
       </form>

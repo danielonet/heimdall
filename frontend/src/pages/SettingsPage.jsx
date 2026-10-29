@@ -7,7 +7,6 @@ import { DataRetentionSection } from '../components/settings/DataRetentionSectio
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
 import { NotificationsSection } from '../components/settings/NotificationsSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
-import { WifiMonitorSection } from '../components/settings/WifiMonitorSection'
 import heimdallLogo from '../assets/heimdall-icon.png'
 
 export function SettingsPage() {
@@ -21,8 +20,8 @@ export function SettingsPage() {
   // auto-resolve, DataRetentionSection = DB retention + device archive/
   // purge, NotificationsSection = ntfy + SMTP)
   // specifically so the whole page reads as fewer, richer cards instead of
-  // many thin ones — the actual ask, not just a relocation. Router and
-  // (future) switch configuration lives on the EQUIPMENT page, not here.
+  // many thin ones — the actual ask, not just a relocation. Router,
+  // WiFi monitor and (future) switch configuration live on the EQUIPMENT page, not here.
   //
   // Responsive beyond the binary mobile/desktop split this codebase
   // otherwise uses everywhere else: base desktop is 2-up, xl (>=1280px) is
@@ -52,9 +51,6 @@ export function SettingsPage() {
         </div>
         <div className={wideTileClass}>
           <NotificationsSection />
-        </div>
-        <div className={wideTileClass}>
-          <WifiMonitorSection />
         </div>
       </div>
 

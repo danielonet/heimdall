@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sentinel.config import settings
 from sentinel.db.models import (
-    Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, RouterProfile,
+    AdminAccount, Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, RouterProfile,
     TrafficSample, TrustedMac, WifiNetwork, WifiSighting,
 )
 from sentinel.db.session import get_session
@@ -1086,3 +1086,21 @@ class WifiNetworkRepository:
         async with get_session() as session:
             result = await session.execute(select(WifiNetwork).order_by(WifiNetwork.last_seen.desc()).limit(limit))
             return list(result.scalars().all())
+
+
+class AdminAccountRepository:
+    """Read/write access to admin_account — the one dashboard login created on first run."""
+
+    async def get(self) -> AdminAccount | None:
+        async with get_session() as session:
+            return await session.get(AdminAccount, 1)
+
+    async def create(self, username: str, password_hash: str) -> bool:
+        """Insert the account; False if one already exists. The primary key makes this
+        safe against two browsers racing through first-run setup: exactly one wins."""
+        async with get_session() as session:
+            result = await session.execute(
+                pg_insert(AdminAccount).values(id=1, username=username, password_hash=password_hash)
+                .on_conflict_do_nothing()
+            )
+            return result.rowcount == 1

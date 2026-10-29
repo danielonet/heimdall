@@ -87,7 +87,7 @@ Runs continuously via packet sniffing (Scapy) and the router's own polled state 
 | **Signal-Strength Anomaly** | A WiFi device's RSSI shifting and holding at a new level — a possible sign of a MAC-cloned device swap |
 | **Hostname/Vendor Mismatch** | A hostname implying a different hardware vendor than the device's actual MAC OUI |
 | **AP Trust-Boundary Crossing** | A device moving between the guest and private WiFi networks — CRITICAL if it gains private access it didn't have before |
-| **WiFi Monitor (Rogue AP)** | With a second, monitor-mode WiFi adapter: a non-yours access point broadcasting one of your protected network names — the signature of an "evil twin" attack. Also lists nearby WiFi devices and networks on the WIFI tab. Off until the adapter is chosen in Settings |
+| **WiFi Monitor (Rogue AP)** | With a second, monitor-mode WiFi adapter: a non-yours access point broadcasting one of your protected network names — the signature of an "evil twin" attack. Also lists nearby WiFi devices and networks on the WIFI tab. Off until the adapter is chosen on the Equipment page |
 
 ### Active investigation
 
@@ -146,7 +146,7 @@ Blocking and quarantining a device are manual actions. Automatic blocking (`auto
 
 Being upfront about what Heimdall does **not** do, rather than leaving it to be discovered:
 
-- **Rogue AP / "evil twin" detection** needs extra hardware: it runs only when you add a second, monitor-mode WiFi adapter and choose it in Settings, listens on 2.4 GHz channels 1, 6 and 11 only, and cannot block anything. It is off by default.
+- **Rogue AP / "evil twin" detection** needs extra hardware: it runs only when you add a second, monitor-mode WiFi adapter and choose it on the Equipment page, listens on 2.4 GHz channels 1, 6 and 11 only, and cannot block anything. It is off by default.
 - **On an ordinary switch, Heimdall does not see other devices' private traffic** — the sniff interface hears broadcast, multicast and its own machine's traffic. Suricata and Zeek see more only if the switch or router mirrors traffic to Heimdall's port.
 - **Active port-scan detection** (someone scanning *you*) has no dedicated signature — Heimdall's own nightly scan runs *outward* against devices it already knows, it doesn't detect incoming scans.
 - **DNS-over-HTTPS/TLS** traffic bypasses DNS visibility (only cleartext UDP/53 is inspected), and **TLS-encrypted downloads** bypass the ClamAV file-extraction pipeline (no TLS interception is configured).
@@ -225,7 +225,7 @@ Each release also carries `heimdall_<version>_all.deb` (plus a `.sha256`). It in
 ```bash
 curl -fsSLO https://github.com/danielonet/heimdall/releases/latest/download/heimdall_all.deb
 sudo apt install ./heimdall_all.deb     # pulls in docker.io, the compose plugin, openssl, iproute2
-sudo heimdall setup                     # tier, router, your dashboard user name and password; generates this machine's secrets
+sudo heimdall setup                     # tier and router; generates this machine's secrets
 sudo heimdall start                     # pulls the images; starts now and at every boot
 ```
 
@@ -290,7 +290,7 @@ exact command at the end of step 1.
 
 The backend container applies the database migrations itself on every start (`python -m sentinel.db.migrate`), so there is no separate schema step. Dev mode (`run.sh`/`dev.sh`) runs `alembic upgrade head` for you.
 
-Dashboard: `http://<host-ip>:3000` — log in with `admin` (or the `ADMIN_USERNAME` you set in `.env`) and the password you put in `secrets/admin_password.txt`.
+Dashboard: `http://<host-ip>:3000` — if `secrets/admin_password.txt` is empty, the first visit asks you to create the admin account (only a hash is stored). If you put a password in that file, log in with `admin` (or the `ADMIN_USERNAME` you set in `.env`) and that password.
 
 Notifications (ntfy/SMTP) are configured from the Settings page after first login, not via `.env` — see the **NOTIFICATIONS** section there.
 

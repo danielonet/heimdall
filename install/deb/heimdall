@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # heimdall — control the Heimdall stack installed by the heimdall .deb package.
 #
-#   heimdall setup [setup.sh options]   asks for the dashboard user name and password, generates secrets and .env (first time only)
+#   heimdall setup [setup.sh options]   generates secrets and .env (first time only)
 #   heimdall start                      start now and at every boot
 #   heimdall stop                       stop, and do not start at boot
 #   heimdall upgrade                    pull the images for the installed version and restart
 #   heimdall status | logs [service] | password | version
+#   heimdall reset-login                remove the dashboard admin account so a new one can be created (data is kept)
 #   heimdall reset                      DELETE all data, secrets and .env (asks first)
 #
 # Everything except `version` and `help` needs root (sudo): it controls Docker
@@ -19,16 +20,13 @@ die() { echo "heimdall: $*" >&2; exit 1; }
 
 version() { tr -d '[:space:]' < "$DIR/VERSION" 2>/dev/null || echo unknown; }
 
-usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 has_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null; }
 
 compose() { (cd "$DIR" && docker compose "$@"); }
 
 need_root() { [ "$(id -u)" -eq 0 ] || [ -n "${HEIMDALL_HOME:-}" ] || die "run this with sudo: sudo heimdall ${1:-}"; }
-
-# The dashboard user name chosen at setup (written to .env); "admin" for installs that predate the choice.
-admin_user() { sed -n 's/^ADMIN_USERNAME=//p' "$DIR/.env" 2>/dev/null | head -n 1 | grep . || echo admin; }
 
 need_setup() { [ -f "$DIR/.env" ] || die "not set up yet — run: sudo heimdall setup"; }
 
@@ -45,7 +43,9 @@ case "$cmd" in
     start)
         need_root start; need_setup
         if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d; fi
-        echo "Dashboard: http://<this-machine>:3000   user $(admin_user)   password: the one you chose at setup (forgotten? sudo heimdall password)"
+        echo "Dashboard: http://<this-machine>:3000"
+        if [ -s "$DIR/secrets/admin_password.txt" ]; then echo "Sign in with the existing login (sudo heimdall password shows the password)."
+        else echo "First visit: create your admin account in the browser (forgotten it later? sudo heimdall reset-login)."; fi
         ;;
     stop)
         need_root stop
@@ -67,7 +67,18 @@ case "$cmd" in
         ;;
     password)
         need_root password
-        cat "$DIR/secrets/admin_password.txt" 2>/dev/null || die "no admin password yet — run: sudo heimdall setup"
+        [ -s "$DIR/secrets/admin_password.txt" ] || die "no password file: this install's admin account was created in the dashboard and only a hash is kept. Forgotten it? sudo heimdall reset-login"
+        cat "$DIR/secrets/admin_password.txt"
+        ;;
+    reset-login)
+        # Removes the dashboard admin account so the next visit offers account creation again. Data is kept.
+        need_root reset-login; need_setup
+        compose exec -T postgres psql -U sentinel -d sentinel -c "DELETE FROM admin_account" >/dev/null \
+            || die "could not reach the database — is Heimdall running? (sudo heimdall start)"
+        : > "$DIR/secrets/admin_password.txt"
+        # An older install holds its password file's contents in memory: restart so the page opens for setup.
+        compose restart sentinel-backend >/dev/null
+        echo "Done. Open the dashboard and create a new admin account; do it now, the page is open to anyone who reaches it until you do."
         ;;
     reset)
         need_root reset
