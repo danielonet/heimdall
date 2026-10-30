@@ -78,6 +78,11 @@ jobs:
       - name: Lowercase the image name (registries require it)
         run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.image }}" >> "$GITHUB_ENV"
 
+      # Lets the amd64 runner build the arm64 half of each image (Raspberry Pi, Ampere, Apple-silicon Linux VMs).
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -100,9 +105,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
-          # linux/arm64 (Raspberry Pi etc.) can be added here: "linux/amd64,linux/arm64",
-          # at the cost of much slower builds because arm64 is emulated.
-          platforms: linux/amd64
+          # arm64 is emulated on the amd64 runner, so these builds are slower. The Python wheels the backend
+          # needs all exist for aarch64; the frontend's node build runs natively (see frontend/Dockerfile).
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -6,7 +6,7 @@
 # secrets, detects the LAN interface and subnet, and writes .env. It never
 # overwrites an existing secret or .env, so it is safe to re-run.
 #
-# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24]
+# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24] [--skip-disk-check]
 #
 # The dashboard login is not made here: the first time you open the dashboard it asks you to
 # create the admin account, and keeps only a salted hash of the password in its database. No
@@ -25,13 +25,14 @@ ok()   { echo "${G}✔${N} $*"; }
 warn() { echo "${Y}⚠${N} $*" >&2; }
 die()  { echo "${R}✖${N} $*" >&2; exit 1; }
 
-TIER="" IFACE="" SUBNET="" ROUTER=""
+TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
         --router=*) ROUTER="${arg#--router=}" ;;
         --iface=*)  IFACE="${arg#--iface=}" ;;
         --subnet=*) SUBNET="${arg#--subnet=}" ;;
+        --skip-disk-check) SKIP_DISK_CHECK=1 ;;
         -h|--help)  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "Unknown argument: $arg" ;;
     esac
@@ -81,6 +82,70 @@ fi
 [ -n "$SUBNET" ] || { SUBNET=192.168.1.0/24; warn "Could not detect the LAN subnet — defaulting to $SUBNET. Edit LAN_SUBNET in .env."; }
 info "Tier: $TIER · interface: $IFACE · subnet: $SUBNET"
 
+# ── Disk space ──────────────────────────────────────────────────────────────
+# Stop before anything is written or pulled if the images for this tier will not fit. The need is the on-disk
+# size of every image of the tier that is not already pulled, plus a reserve for the operating system and the
+# database's own growth. Sizes are in MB: backend, frontend, database and Redis were measured; Suricata, ClamAV
+# (with its signature database), OpenCanary and Zeek are rounded-up estimates, so treat the total as approximate.
+VERSION_TAG=latest
+[ -f VERSION ] && VERSION_TAG=$(tr -d '[:space:]' < VERSION)
+# Release tags are vX.Y.Z but the published image tags drop the 'v'.
+VERSION_TAG="${VERSION_TAG#v}"
+
+RESERVE_MB=1024
+image_mb() {
+    case "$1" in
+        */sentinel-backend:*) echo 1350 ;;
+        */frontend:*) echo 100 ;;
+        timescale/timescaledb-ha:*) echo 4550 ;;
+        redis:*) echo 60 ;;
+        *suricata*) echo 450 ;;
+        *clamav*) echo 800 ;;
+        *opencanary*) echo 1100 ;;
+        *zeek*) echo 500 ;;
+        *) echo 500 ;;
+    esac
+}
+# MB still to download for a tier: images of that tier that are not on this machine yet.
+tier_need_mb() {
+    local total=0 img
+    while IFS= read -r img; do
+        [ -n "$img" ] || continue
+        docker image inspect "$img" >/dev/null 2>&1 && continue
+        total=$((total + $(image_mb "$img")))
+    done < <(IMAGE_TAG="$VERSION_TAG" docker compose --profile "$1" config --images 2>/dev/null)
+    echo "$total"
+}
+gb() { awk -v mb="$1" 'BEGIN { printf "%.1f GB", mb / 1024 }'; }
+
+if [ -z "$SKIP_DISK_CHECK" ]; then
+    check_dir=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)
+    check_dir=${check_dir:-/var/lib/docker}
+    # Images are stored under Docker's data directory; if it cannot be read or does not exist yet, use the nearest parent.
+    while [ "$check_dir" != / ] && { [ ! -d "$check_dir" ] || ! df -Pk "$check_dir" >/dev/null 2>&1; }; do check_dir=$(dirname "$check_dir"); done
+    free_mb=$(df -Pk "$check_dir" 2>/dev/null | awk 'NR == 2 { print int($4 / 1024) }')
+    if [ -z "$free_mb" ]; then
+        warn "Could not measure the free disk space on $check_dir — skipping the disk check."
+    else
+        images_mb=$(tier_need_mb "$TIER")
+        need_mb=$((images_mb + RESERVE_MB))
+        if [ "$free_mb" -lt "$need_mb" ]; then
+            echo "${R}✖${N} Not enough disk space to install the '$TIER' tier." >&2
+            echo "    Free on $check_dir:  $(gb "$free_mb")" >&2
+            echo "    Needed:  $(gb "$need_mb")  (images $(gb "$images_mb") + $(gb "$RESERVE_MB") reserved for the system and the database)" >&2
+            echo "    Short by:  $(gb $((need_mb - free_mb)))" >&2
+            if [ "$TIER" != minimal ]; then
+                minimal_mb=$(($(tier_need_mb minimal) + RESERVE_MB))
+                [ "$free_mb" -lt "$minimal_mb" ] || echo "    The minimal tier needs $(gb "$minimal_mb") and would fit: ./setup.sh --tier=minimal" >&2
+            fi
+            echo "    Free some space (for example 'docker system prune') or use a larger disk, then run setup again." >&2
+            echo "    To install anyway: ./setup.sh --skip-disk-check" >&2
+            exit 1
+        fi
+        ok "Disk space: $(gb "$free_mb") free on $check_dir, this tier needs about $(gb "$need_mb")"
+    fi
+fi
+
 # ── Secrets ─────────────────────────────────────────────────────────────────
 umask 077
 mkdir -p secrets secrets/routers
@@ -104,17 +169,15 @@ blank otx_api_key.txt "optional AlienVault OTX key"
 blank abusech_auth_key.txt "optional free key from https://auth.abuse.ch/ for the URLhaus feed"
 
 # ── .env ────────────────────────────────────────────────────────────────────
-VERSION_TAG=latest
-[ -f VERSION ] && VERSION_TAG=$(tr -d '[:space:]' < VERSION)
-# Release tags are vX.Y.Z but the published image tags drop the 'v'.
-VERSION_TAG="${VERSION_TAG#v}"
-
 if [ -f .env ]; then
     ok ".env already exists — kept"
     grep -q "^COMPOSE_PROFILES=${TIER}\$" .env 2>/dev/null || [ "$TIER" = minimal ] \
         || warn "Requested tier '$TIER' differs from the existing .env. Edit COMPOSE_PROFILES and DEPLOYMENT_TIER there to change tier."
 else
     profiles=""; [ "$TIER" = minimal ] || profiles="$TIER"
+    # clamav/clamav:stable is published for x86-64 only; the Debian build of the same scanner has an arm64 image.
+    clamav_line="# CLAMAV_IMAGE=clamav/clamav:stable"
+    case "$(uname -m)" in aarch64|arm64) clamav_line="CLAMAV_IMAGE=clamav/clamav-debian:stable" ;; esac
     cat > .env <<ENV
 # Heimdall — written by setup.sh. Secrets live in secrets/, not here.
 
@@ -133,6 +196,9 @@ INITIAL_ROUTER=${ROUTER}
 # LAN-facing interface to sniff, and its subnet (used by Zeek).
 SNIFF_IFACE=${IFACE}
 LAN_SUBNET=${SUBNET}
+
+# ClamAV image (full tier). Set automatically to the Debian build on ARM, where the default image does not exist.
+${clamav_line}
 
 # Read by docker-compose.yml to build the database URL.
 DB_PASS=$(tr -d '[:space:]' < secrets/db_pass.txt)

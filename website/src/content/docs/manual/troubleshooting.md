@@ -39,3 +39,7 @@ The stock rule set is tuned for enterprise traffic. Add suppressions for the rul
 
 ## Upgrading
 Script install: run the install command again. .deb: install the newer package. Your data and secrets are kept.
+
+## The installer stops with "Not enough disk space"
+Before it writes or downloads anything, the installer adds up the images of the tier you chose (the ones not already on the machine) plus a 1 GB reserve for the system and the database, and compares that with the free space on the disk that holds Docker's data. If it does not fit it prints the free space, the space needed and the shortfall, and exits without changing anything. Free some space (for example `docker system prune`, which removes unused images and stopped containers) or use a bigger disk, then run it again. A smaller tier may fit: the message says so when it does. The sizes are approximate; if you are sure there is room, `--skip-disk-check` skips the check.
+

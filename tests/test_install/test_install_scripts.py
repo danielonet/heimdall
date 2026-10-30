@@ -28,7 +28,23 @@ def fake_bin(tmp_path):
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     log = tmp_path / 'docker.log'
-    (bin_dir / 'docker').write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit 0\n')
+    # `docker info` names a data directory, `image inspect` says nothing is pulled yet, and `compose config --images`
+    # lists the images of the tier, so setup.sh's disk check has something to add up. `df` reports FAKE_DF_FREE_KB
+    # (plenty by default), so a test chooses how much room the machine has.
+    (bin_dir / 'docker').write_text(
+        f'#!/bin/sh\necho "$@" >> {log}\n'
+        'case "$*" in\n'
+        '  "info --format"*) echo /var/lib/docker ;;\n'
+        '  "image inspect"*) exit 1 ;;\n'
+        '  *"config --images"*)\n'
+        '    echo ghcr.io/danielonet/heimdall/sentinel-backend:9.9.9; echo ghcr.io/danielonet/heimdall/frontend:9.9.9\n'
+        '    echo timescale/timescaledb-ha:pg16; echo redis:7-alpine\n'
+        '    case "$*" in *intermediate*|*full*) echo thinkst/opencanary:latest ;; esac\n'
+        '    case "$*" in *full*) echo zeek/zeek:latest; echo clamav/clamav:stable; echo jasonish/suricata:latest ;; esac ;;\n'
+        'esac\nexit 0\n')
+    (bin_dir / 'df').write_text(
+        '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/x 1 1 %s 1%% /\\n" '
+        '"${FAKE_DF_FREE_KB:-999999999}"\n')
     (bin_dir / 'ip').write_text(
         '#!/bin/sh\n'
         'case "$*" in\n'
@@ -179,6 +195,77 @@ class TestSetup:
         extract(dist, tmp_path)
         r = run(['./setup.sh', '--tier=huge'], tmp_path, fake_bin)
         assert r.returncode != 0 and 'Invalid --tier' in r.stderr
+
+
+GB_KB = 1024 * 1024
+
+
+class TestDiskSpace:
+    """setup.sh stops before writing anything when the tier's images plus a 1 GB reserve will not fit."""
+
+    def _setup(self, dist, tmp_path, fake_bin, tier, free_gb, *extra):
+        extract(dist, tmp_path)
+        return run(['./setup.sh', f'--tier={tier}', *extra], tmp_path, fake_bin, env={'FAKE_DF_FREE_KB': str(int(free_gb * GB_KB))})
+
+    def test_stops_and_says_how_much_is_free_and_needed(self, dist, tmp_path, fake_bin):
+        r = self._setup(dist, tmp_path, fake_bin, 'full', 5)
+        assert r.returncode == 1
+        assert 'Not enough disk space' in r.stderr
+        assert 'Free on /var/lib/docker:  5.0 GB' in r.stderr
+        assert 'Needed:  9.7 GB' in r.stderr   # 8.7 GB of images + 1 GB reserve
+        assert 'Short by:  4.7 GB' in r.stderr
+        assert not (tmp_path / 'secrets').exists() and not (tmp_path / '.env').exists()  # nothing was written
+
+    def test_each_tier_needs_more_than_the_one_before(self, dist, tmp_path, fake_bin):
+        needed = {}
+        for tier in ('minimal', 'intermediate', 'full'):
+            root = tmp_path / tier
+            root.mkdir()
+            extract(dist, root)
+            r = run(['./setup.sh', f'--tier={tier}'], root, fake_bin, env={'FAKE_DF_FREE_KB': '1024'})
+            assert r.returncode == 1
+            needed[tier] = float(r.stderr.split('Needed:  ')[1].split(' GB')[0])
+        assert needed['minimal'] < needed['intermediate'] < needed['full']
+        assert needed['minimal'] > 1   # the reserve alone is 1 GB, so the images count too
+
+    def test_suggests_the_minimal_tier_when_only_that_fits(self, dist, tmp_path, fake_bin):
+        r = self._setup(dist, tmp_path, fake_bin, 'full', 7.5)
+        assert r.returncode == 1 and './setup.sh --tier=minimal' in r.stderr
+
+    def test_passes_when_there_is_room(self, dist, tmp_path, fake_bin):
+        r = self._setup(dist, tmp_path, fake_bin, 'full', 20)
+        assert r.returncode == 0, r.stderr
+        assert 'Disk space: 20.0 GB free' in r.stdout
+        assert (tmp_path / '.env').exists()
+
+    def test_the_reserve_is_always_required(self, dist, tmp_path, fake_bin):
+        # An image already on the machine costs nothing, but the 1 GB reserve still has to be free.
+        (fake_bin[0] / 'docker').write_text('#!/bin/sh\ncase "$*" in "info --format"*) echo /var/lib/docker ;; esac\nexit 0\n')
+        r = self._setup(dist, tmp_path, fake_bin, 'minimal', 0.5)
+        assert r.returncode == 1 and 'Needed:  1.0 GB' in r.stderr
+
+    def test_can_be_skipped_explicitly(self, dist, tmp_path, fake_bin):
+        r = self._setup(dist, tmp_path, fake_bin, 'full', 0.1, '--skip-disk-check')
+        assert r.returncode == 0, r.stderr
+        assert 'Disk space' not in r.stdout
+
+
+class TestArm:
+    def _uname(self, fake_bin, machine):
+        (fake_bin[0] / 'uname').write_text(f'#!/bin/sh\ncase "$1" in -m) echo {machine} ;; *) echo Linux ;; esac\n')
+        (fake_bin[0] / 'uname').chmod(0o755)
+
+    def test_arm_gets_a_clamav_image_that_exists_for_arm(self, dist, tmp_path, fake_bin):
+        self._uname(fake_bin, 'aarch64')
+        extract(dist, tmp_path)
+        assert run(['./setup.sh', '--tier=full'], tmp_path, fake_bin).returncode == 0
+        assert env_file(tmp_path)['CLAMAV_IMAGE'] == 'clamav/clamav-debian:stable'
+
+    def test_x86_keeps_the_default_clamav_image(self, dist, tmp_path, fake_bin):
+        self._uname(fake_bin, 'x86_64')
+        extract(dist, tmp_path)
+        assert run(['./setup.sh', '--tier=full'], tmp_path, fake_bin).returncode == 0
+        assert 'CLAMAV_IMAGE' not in env_file(tmp_path)
 
 
 class TestDashboardAccount:

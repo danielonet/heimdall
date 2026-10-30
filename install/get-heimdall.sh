@@ -13,7 +13,7 @@
 # It does not touch your router or network configuration. It needs no sudo unless Docker itself does.
 #
 # Options: --tier=minimal|intermediate|full  --dir=PATH  --version=vX.Y.Z (default: latest)
-#          --router=sagemcom|passive  --install-docker  --no-start  --yes (no prompts)  --iface=NAME  --subnet=CIDR
+#          --router=sagemcom|passive  --install-docker  --no-start  --yes (no prompts)  --iface=NAME  --subnet=CIDR  --skip-disk-check
 set -euo pipefail
 
 REPO="danielonet/heimdall"
@@ -29,8 +29,8 @@ main() {
             --install-docker) install_docker=true ;;
             --no-start) start=false ;;
             --yes|-y) yes=true ;;
-            --iface=*|--subnet=*|--router=*) setup_args+=("$arg") ;;
-            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR]"; return 0 ;;
+            --iface=*|--subnet=*|--router=*|--skip-disk-check) setup_args+=("$arg") ;;
+            -h|--help) echo "Usage: install.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--dir=PATH] [--version=vX.Y.Z] [--install-docker] [--no-start] [--yes] [--iface=NAME] [--subnet=CIDR] [--skip-disk-check]"; return 0 ;;
             *) die "Unknown option: $arg" ;;
         esac
     done
