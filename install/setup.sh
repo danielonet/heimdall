@@ -171,6 +171,14 @@ blank abusech_auth_key.txt "optional free key from https://auth.abuse.ch/ for th
 # ── .env ────────────────────────────────────────────────────────────────────
 if [ -f .env ]; then
     ok ".env already exists — kept"
+    # An .env written before ARM was handled still names the x86-only ClamAV image, which cannot be pulled on ARM.
+    case "$(uname -m)" in
+        aarch64|arm64)
+            if ! grep -q '^CLAMAV_IMAGE=' .env; then
+                printf '\n# Added by setup.sh: the default ClamAV image has no ARM version.\nCLAMAV_IMAGE=clamav/clamav-debian:stable\n' >> .env
+                ok "Set CLAMAV_IMAGE in .env to an image that exists for ARM"
+            fi ;;
+    esac
     grep -q "^COMPOSE_PROFILES=${TIER}\$" .env 2>/dev/null || [ "$TIER" = minimal ] \
         || warn "Requested tier '$TIER' differs from the existing .env. Edit COMPOSE_PROFILES and DEPLOYMENT_TIER there to change tier."
 else

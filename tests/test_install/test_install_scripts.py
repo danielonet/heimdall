@@ -261,6 +261,16 @@ class TestArm:
         assert run(['./setup.sh', '--tier=full'], tmp_path, fake_bin).returncode == 0
         assert env_file(tmp_path)['CLAMAV_IMAGE'] == 'clamav/clamav-debian:stable'
 
+    def test_an_existing_env_on_arm_gets_the_clamav_image_added_once(self, dist, tmp_path, fake_bin):
+        self._uname(fake_bin, 'x86_64')
+        extract(dist, tmp_path)
+        assert run(['./setup.sh', '--tier=full'], tmp_path, fake_bin).returncode == 0   # an earlier install
+        self._uname(fake_bin, 'aarch64')
+        for _ in range(2):
+            assert run(['./setup.sh', '--tier=full'], tmp_path, fake_bin).returncode == 0
+        assert env_file(tmp_path)['CLAMAV_IMAGE'] == 'clamav/clamav-debian:stable'
+        assert sum(l.startswith('CLAMAV_IMAGE=') for l in (tmp_path / '.env').read_text().splitlines()) == 1
+
     def test_x86_keeps_the_default_clamav_image(self, dist, tmp_path, fake_bin):
         self._uname(fake_bin, 'x86_64')
         extract(dist, tmp_path)
