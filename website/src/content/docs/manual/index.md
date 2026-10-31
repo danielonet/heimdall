@@ -15,6 +15,7 @@ This manual explains the dashboard: what each page shows, what its controls do, 
 | Understand and clear an alert | [Alerts](/manual/alerts/) |
 | Add or switch my router | [Equipment](/manual/equipment/) |
 | Get notifications or turn on auto-block | [Settings](/manual/settings/) |
+| Move to a newer version | [Upgrade](/manual/upgrade/) |
 | Fix something | [Troubleshooting](/manual/troubleshooting/) |
 
 :::note

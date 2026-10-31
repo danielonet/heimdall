@@ -229,22 +229,6 @@ class TestCorrectBlockDrift:
         alert = await _drift_alert(_MAC)
         assert alert.severity == 'INFO'
 
-    async def test_disable_auto_block_is_irrelevant_here_since_nothing_is_auto_blocked(self, monkeypatch):
-        """This method never calls block_device()/unblock_device() at all
-        any more — DISABLE_AUTO_BLOCK has nothing to gate here."""
-        from sentinel.config import settings
-        monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
-        await _seed_device(_MAC, is_blocked=True)
-        scheduler = object.__new__(SentinelScheduler)
-        scheduler._adapter = AsyncMock()
-
-        await scheduler._correct_block_drift(_MAC, db_blocked=True, router_blocked=False)
-
-        device = await _get_device(_MAC)
-        assert device.is_blocked is False
-        alert = await _drift_alert(_MAC)
-        assert 'AUTO-BLOCK DISABLED' not in alert.description
-
     async def test_repeated_drift_touches_one_alert_row_instead_of_spamming(self):
         await _seed_device(_MAC, is_blocked=True)
         scheduler = object.__new__(SentinelScheduler)

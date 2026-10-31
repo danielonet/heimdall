@@ -4,7 +4,7 @@ import { useSettings, useUpdateSettings } from '../../hooks/useSettings'
 export function AutoBlockSection() {
   const { data, isLoading } = useSettings()
   const mutation = useUpdateSettings()
-  const [enabled, setEnabled] = useState(true)
+  const [enabled, setEnabled] = useState(false)
 
   useEffect(() => {
     if (data) setEnabled(data.auto_block_on_threat)
@@ -18,7 +18,7 @@ export function AutoBlockSection() {
       <p className="mb-2 text-[10px] leading-relaxed text-text-secondary">
         When armed, ARP Watch, Passive Fingerprint, and Nmap Scanner block the offending MAC the instant
         they detect an attack (spoofing, fingerprint mismatch, a new high-risk port, a vulnerability) —
-        instead of only alerting.
+        instead of only alerting. This is the NOC / SOC switch in the header: armed is SOC, off is NOC.
       </p>
 
       {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}

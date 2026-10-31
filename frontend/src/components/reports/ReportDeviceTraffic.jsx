@@ -14,6 +14,7 @@ export function ReportDeviceTraffic({ traffic }) {
 
   return (
     <div>
+      <div className="overflow-x-auto">
       <table className="w-full text-left text-[10px]">
         <thead>
           <tr className="text-[9px] tracking-wider text-text-muted">
@@ -38,6 +39,7 @@ export function ReportDeviceTraffic({ traffic }) {
           ))}
         </tbody>
       </table>
+      </div>
       <div className="border-t border-border/50 p-2 text-[9px] leading-relaxed text-text-muted">
         Wired devices sharing a physical port aren't broken out individually — only a combined port total is
         measurable for them.

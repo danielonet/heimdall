@@ -17,7 +17,7 @@ App
 ├── AuthGuard              — redirects to /login if no valid JWT
 ├── Layout
 │   ├── Sidebar            — desktop: fixed left nav (220px)
-│   ├── TopBar             — breadcrumb, live status pills, clock
+│   ├── TopBar             — breadcrumb, live status pills, NOC/SOC ModeSwitch, clock
 │   ├── BottomNav          — mobile only: 5-tab bottom bar
 │   └── <Outlet>           — page content
 └── SocketProvider         — initialises socket.io, exposes context
@@ -102,8 +102,7 @@ const TrafficDisplay = ({ sample }) => {
 
 ```
 DeviceDetailPage
-├── DeviceHeader            — hostname, MAC, IP, vendor, OS, tags
-├── BlockUnblockButton
+├── DeviceHeader            — hostname, MAC, IP, vendor, OS, tags, DeviceStatusSelect
 ├── TrafficTimelineChart    — 24h throughput sparkline (Recharts)
 ├── AnomalyScoreChart       — ML score over time
 ├── OpenPortsPanel          — from last Nmap scan
@@ -166,8 +165,9 @@ RulesPage
 | `Badge` | Small pill — variant: `success \| warning \| danger \| info \| port` |
 | `MetricCard` | Large number + label + sub-label, colour-coded |
 | `SeverityBar` | 3px left border strip — red/amber/blue/green |
-| `BlockButton` | Red bordered button — issues POST /api/devices/:mac/block |
-| `UnblockButton` | Green bordered button |
+| `BlockButton` | Red bordered button — issues POST /api/devices/:mac/block. Used on the Dashboard (connected hosts, selected alert) |
+| `DeviceStatusSelect` | One drop-down per device: TRUSTED / SUSPECT / QUARANTINED / BLOCKED (blocked wins over quarantined over trust). Replaces the TRUSTED/SUSPECT toggle and the Block, Unblock, Quarantine and Unquarantine buttons on the Devices list (both layouts) and the device page. Moving to a state first undoes a block or quarantine that is in the way, using the existing `/block`, `/unblock`, `/quarantine`, `/unquarantine` and `PATCH` routes; choosing BLOCKED asks to confirm |
+| `ModeSwitch` | NOC / SOC segmented switch in the desktop header and under the title on mobile. It reads and writes the `auto_block_on_threat` setting (NOC = off, only alert, the default for a new install; SOC = on, auto-block); SOC asks to confirm. Same value as Settings → AUTO-BLOCK ON THREAT |
 | `LiveIndicator` | Pulsing dot + "LIVE" text |
 | `TimeAgo` | Relative timestamp: "3m ago", "just now" |
 | `MacAddress` | Monospace MAC with vendor tooltip |

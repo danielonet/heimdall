@@ -650,6 +650,16 @@ class TestSettingsRepository:
         await SettingsRepository().set_router_username('newadmin')
         assert await SettingsRepository().get_router_username() == 'newadmin'
 
+    async def test_a_new_install_starts_in_noc_mode_with_auto_block_off(self):
+        """No settings row means a fresh install: it only watches and alerts
+        (NOC) until the admin switches to SOC. An existing row keeps its value."""
+        async with get_session() as session:
+            await session.execute(delete(AppSettings))
+        assert await SettingsRepository().get_auto_block_on_threat() is False
+
+        await SettingsRepository().set_auto_block_on_threat(True)
+        assert await SettingsRepository().get_auto_block_on_threat() is True
+
     async def test_smtp_settings_fall_back_to_env_defaults_with_no_row(self):
         """Needs a genuinely absent AppSettings row — used to rely on a
         previous test's teardown having deleted it and never restored it

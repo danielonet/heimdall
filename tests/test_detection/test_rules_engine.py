@@ -289,26 +289,6 @@ class TestBlockDeviceAction:
             result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
             assert len(result.scalars().all()) == 1
 
-    async def test_disable_auto_block_dev_override_skips_the_adapter_entirely(self, engine, adapter, monkeypatch):
-        from sentinel.config import settings
-        monkeypatch.setattr(settings, 'DISABLE_AUTO_BLOCK', True)
-        await _seed_device()
-        await _create_rule(
-            {'trigger': 'TRAFFIC_SAMPLE', 'field': 'throughput_up_kbps', 'op': 'GT', 'value': 50},
-            {'type': 'BLOCK_DEVICE', 'severity': 'CRITICAL'},
-        )
-        await engine.load_active_rules()
-        await engine.process_traffic(_sample(throughput_up_kbps=100), _snapshot())
-
-        assert adapter.blocked_macs == []
-        async with get_session() as session:
-            device = await session.get(Device, _MAC)
-            assert device.is_blocked is False
-            result = await session.execute(select(Alert).where(Alert.device_mac == _MAC))
-            alerts = result.scalars().all()
-        assert len(alerts) == 1
-        assert 'AUTO-BLOCK DISABLED' in alerts[0].description
-
     async def test_adapter_failure_does_not_falsely_claim_device_blocked(self, notifier):
         """Regression: this used to append ' — device blocked' to the alert
         unconditionally, regardless of whether block_device() actually

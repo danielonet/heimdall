@@ -40,7 +40,7 @@ import { installTabs } from '../data/commands';
     </ol>
   </div></section>
   <section><div class="wrap"><div class="grid g2">
-    <div><h2>Upgrade</h2><p class="muted">Script: run the same command again. Secrets and <code>.env</code> are kept and the image version moves up. .deb: install the newer .deb. Database migrations run on start.</p></div>
+    <div><h2>Upgrade</h2><p class="muted">Script: run the same command again. Secrets and <code>.env</code> are kept and the image version moves up. .deb: install the newer .deb, then <code>sudo heimdall upgrade</code>. Database migrations run on start. Step by step, and what is kept: <a href="/manual/upgrade/">the upgrade guide</a>.</p></div>
     <div><h2>Uninstall</h2><p class="muted">Stop it with <code>sudo heimdall stop</code>, then <code>sudo apt remove heimdall</code>. Your data and secrets stay. To delete everything: <code>sudo heimdall reset</code> (asks first).</p></div>
   </div></div></section>
 </Base>

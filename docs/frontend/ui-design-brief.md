@@ -54,6 +54,26 @@ palette and typography. Choose one as the production layout:
 | `mobile-1-tactical-hud.html` | Alert-forward, bottom tabs | Quick incident response on phone |
 | `mobile-2-minimal-recon.html` | Clean tabs, icon-per-device | Daily casual checking on phone |
 
+## Operating mode (NOC / SOC)
+
+The header always shows which mode Heimdall is in, as a two-part switch: **NOC** (green)
+only watches and alerts, **SOC** (red) also blocks an offending device automatically. It is
+the existing auto-block-on-threat setting, not a second one, so the header and Settings
+cannot disagree. A new install starts in NOC; the admin moves to SOC later. Switching to SOC asks for confirmation because it can cut a device off.
+On a phone it sits under the title beside the status pills.
+
+## Device status control
+
+A device's trust, quarantine and block are one drop-down (TRUSTED, SUSPECT, QUARANTINED,
+BLOCKED), not a row of toggle buttons: green for trusted, amber for suspect or quarantined,
+red for blocked. It appears in the same place on the Devices list, on a phone card and on
+the device page. The Dashboard keeps its single BLOCK button for a one-click response.
+
+## Phone layout rules
+
+Nothing may be wider than the screen. A table that cannot shrink scrolls sideways inside its
+own box; a form grid with fixed columns (device-type profiles) becomes stacked blocks.
+
 ## Component conventions
 
 ### Status indicators

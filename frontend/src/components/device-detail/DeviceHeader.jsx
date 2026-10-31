@@ -6,10 +6,7 @@ import { deviceDisplayName, isLocallyAdministeredMac } from '../../lib/deviceDis
 import { StatusDot } from '../StatusDot'
 import { MacAddress } from '../MacAddress'
 import { Badge } from '../Badge'
-import { BlockButton } from '../BlockButton'
-import { UnblockButton } from '../UnblockButton'
-import { QuarantineButton } from '../QuarantineButton'
-import { UnquarantineButton } from '../UnquarantineButton'
+import { DeviceStatusSelect } from '../DeviceStatusSelect'
 
 // device.blocked_until is only set for auto-blocks (see
 // SentinelScheduler._raise_threat_alert/_block_expiry_job) — manual blocks
@@ -40,18 +37,6 @@ export function DeviceHeader({ device }) {
       qc.invalidateQueries({ queryKey: ['devices'] })
       qc.invalidateQueries({ queryKey: ['device', device.mac_address] })
       setRenaming(false)
-    },
-  })
-
-  const setTrusted = useMutation({
-    mutationFn: (is_trusted) =>
-      apiJson(`/devices/${device.mac_address}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ is_trusted }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['devices'] })
-      qc.invalidateQueries({ queryKey: ['device', device.mac_address] })
     },
   })
 
@@ -189,43 +174,13 @@ export function DeviceHeader({ device }) {
                 {device.ap_alias}
               </Badge>
             )}
-            {device.is_quarantined && (
-              <Badge variant="warning" title="Internet access cut, still reachable on the LAN">
-                QUARANTINED
-              </Badge>
-            )}
-            <button
-              type="button"
-              disabled={setTrusted.isPending}
-              onClick={() => setTrusted.mutate(!device.is_trusted)}
-              title={device.is_trusted ? 'Click to mark as untrusted' : 'Click to mark as trusted'}
-              className={`whitespace-nowrap border px-1.5 py-0.5 text-[9px] tracking-wider transition-colors disabled:opacity-50 ${
-                device.is_trusted
-                  ? 'border-accent-green/30 bg-accent-green/5 text-accent-green hover:bg-accent-green/20'
-                  : 'border-accent-amber/30 bg-accent-amber/5 text-accent-amber hover:bg-accent-amber/20'
-              }`}
-            >
-              {device.is_trusted ? 'TRUSTED' : 'SUSPECT'}
-            </button>
+            <DeviceStatusSelect device={device} />
             {(device.tags || []).map((tag) => (
               <Badge key={tag} variant="info">
                 {tag}
               </Badge>
             ))}
           </div>
-        </div>
-
-        <div className="flex flex-shrink-0 items-center gap-1.5">
-          {device.is_quarantined ? (
-            <UnquarantineButton mac={device.mac_address} />
-          ) : (
-            <QuarantineButton mac={device.mac_address} disabled={device.is_blocked} />
-          )}
-          {device.is_blocked ? (
-            <UnblockButton mac={device.mac_address} />
-          ) : (
-            <BlockButton mac={device.mac_address} />
-          )}
         </div>
       </div>
     </div>

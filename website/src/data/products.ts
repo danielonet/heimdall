@@ -202,7 +202,7 @@ export const products: Product[] = [
     plugs: ['Alert store', 'Correlation', 'Block · Quarantine · Auto-block', 'Dashboard (WebSocket)', 'ntfy · Telegram · email · daily digest · CSV · /api/metrics'],
     tier: 'minimal', tierNote: 'Every tier. Block and quarantine need a router adapter that supports them.',
     limits: [
-      'Auto-block is one global switch for all eligible alert types. It is on by default for a new install and can be turned off in Settings. An automatic block expires after 24 hours by default.',
+      'Auto-block is one global switch for all eligible alert types. It is off on a new install (NOC mode, alert only) and is turned on by switching to SOC in the header or in Settings. An automatic block expires after 24 hours by default.',
       'In passive-router mode and on several adapters, Heimdall cannot block: use the router’s own admin page.',
       'Quarantine (cut internet, keep LAN) needs a router firewall rule; not every adapter has one.',
     ],

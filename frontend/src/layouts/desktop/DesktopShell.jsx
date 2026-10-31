@@ -5,6 +5,7 @@ import { useHealth } from '../../hooks/useHealth'
 import { useThemeStore } from '../../store/themeStore'
 import { StatusDot } from '../../components/StatusDot'
 import { CreditsModal } from '../../components/CreditsModal'
+import { ModeSwitch } from '../../components/ModeSwitch'
 import heimdallLogo from '../../assets/heimdall-icon.png'
 
 const PALETTES = [['amber', 'AMBER'], ['slate', 'SLATE']]
@@ -122,6 +123,7 @@ export function DesktopShell() {
             <StatusDot variant={schedulerOk ? 'green' : 'red'} pulse={schedulerOk} />
             <span className="text-[9px] tracking-wide text-text-muted">XMO</span>
           </div>
+          <ModeSwitch />
           <PaletteToggle />
           <button
             type="button"

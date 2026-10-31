@@ -107,6 +107,7 @@ feature before you change it, not for how it behaves today.
 | `docs/website/mockups/README.md` | mockup | You compare the built site with the reviewed mockups. |
 | `website/README.md` | guide | You build, develop or deploy the site; lists which files are generated and must not be committed. |
 | `website/src/content/docs/manual/index.md` | guide | You want the manual's table of contents. One chapter per dashboard page: change a page, change its chapter. |
+| `website/src/content/docs/manual/upgrade.md` | guide | You change how an installed Heimdall is upgraded (script, .deb, by hand) or what an upgrade keeps. |
 | `website/src/content/docs/manual/first-login.md` | guide | You change sign-in, first-run setup or the initial password flow. |
 | `website/src/content/docs/manual/dashboard.md` | guide | You change the Dashboard page. |
 | `website/src/content/docs/manual/network-map.md` | guide | You change the Network Map page. |

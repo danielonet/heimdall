@@ -6,8 +6,7 @@ import { TrafficDisplay } from '../../components/TrafficDisplay'
 import { Badge } from '../../components/Badge'
 import { SignalBars } from '../../components/SignalBars'
 import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
-import { BlockButton } from '../../components/BlockButton'
-import { UnblockButton } from '../../components/UnblockButton'
+import { DeviceStatusSelect } from '../../components/DeviceStatusSelect'
 import { isDeviceOnline } from '../../lib/deviceFilters'
 import { groupByAp, isGuestApGroup } from '../../lib/apGroups'
 
@@ -48,15 +47,8 @@ function DeviceCard({ device: d, onClick }) {
             <SignalBars dbm={d.signal_strength_dbm} />
           )}
           <Badge variant="info">{d.interface_name === 'Ethernet' ? 'ETH' : 'WiFi'}</Badge>
-          {d.is_trusted ? (
-            <Badge variant="success">OK</Badge>
-          ) : (
-            <Badge variant="warning">SUS</Badge>
-          )}
         </div>
-        <div onClick={(e) => e.stopPropagation()}>
-          {d.is_blocked ? <UnblockButton mac={d.mac_address} /> : <BlockButton mac={d.mac_address} />}
-        </div>
+        <DeviceStatusSelect device={d} />
       </div>
     </div>
   )

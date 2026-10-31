@@ -6,6 +6,7 @@ import {
 } from '../../hooks/useDeviceTypeProfiles'
 import { useDevices } from '../../hooks/useDevices'
 import { TimeAgo } from '../TimeAgo'
+import { useLayoutMode } from '../../hooks/useLayoutMode'
 
 // Must match sentinel/api/routes/device_type_profiles.py's MIN_*/MAX_* constants.
 const RATIO_MIN = 0.1, RATIO_MAX = 1000
@@ -19,6 +20,11 @@ const CONTAMINATION_MIN = 0.001, CONTAMINATION_MAX = 0.5
 // column flexes with available width; the three threshold columns and the
 // action column stay fixed.
 const GRID_COLS = 'grid-cols-[minmax(9rem,1fr)_repeat(3,6.5rem)_6.5rem]'
+// On a phone that template is wider than the screen, so each row becomes a
+// block: the name on its own line, the three thresholds side by side with
+// their label above, the buttons below.
+const MOBILE_GRID = 'grid-cols-3'
+const MOBILE_FULL = 'col-span-3'
 
 // format() renders the read-only "measured" reference value under each
 // input — same field keys the profile itself uses, so a configured number
@@ -78,9 +84,10 @@ function sanitizeNumericInput(raw, integer) {
  * unrelated lists. isDirty rings the specific field that changed (not just
  * the row as a whole), so editing one of three numbers doesn't leave it
  * ambiguous which one is actually pending a save. */
-function NumCell({ field, value, onChange, measured, isDirty }) {
+function NumCell({ field, value, onChange, measured, isDirty, showLabel }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
+      {showLabel && <div className="text-[8px] tracking-wider text-text-muted">{field.label}</div>}
       <input
         type="text"
         inputMode={field.integer ? 'numeric' : 'decimal'}
@@ -108,6 +115,7 @@ function NumCell({ field, value, onChange, measured, isDirty }) {
 }
 
 function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDelete, isSaving, isDeleting }) {
+  const mobile = useLayoutMode() === 'mobile'
   const [values, setValues] = useState(() =>
     Object.fromEntries(FIELDS.map(({ key }) => [key, String(profile[key])]))
   )
@@ -116,8 +124,8 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
   const canSave = isDirty && isValid(values) && !isSaving
 
   return (
-    <div className={`grid ${GRID_COLS} items-center gap-3 border-b border-border/40 px-1 py-2.5 text-[10px] transition-colors last:border-none hover:bg-border/10`}>
-      <div className="flex min-w-0 items-baseline gap-1.5">
+    <div className={`grid ${mobile ? MOBILE_GRID : GRID_COLS} items-center gap-3 border-b border-border/40 px-1 py-2.5 text-[10px] transition-colors last:border-none hover:bg-border/10`}>
+      <div className={`flex min-w-0 items-baseline gap-1.5 ${mobile ? MOBILE_FULL : ''}`}>
         <span className="truncate text-[11px] text-text-primary" title={deviceType}>
           {deviceType}
         </span>
@@ -133,9 +141,10 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
           onChange={(k, v) => setValues((prev) => ({ ...prev, [k]: v }))}
           measured={measured?.[field.key]}
           isDirty={dirtyKeys.has(field.key)}
+          showLabel={mobile}
         />
       ))}
-      <div className="flex justify-end gap-1.5 self-start pt-0.5">
+      <div className={`flex justify-end gap-1.5 self-start pt-0.5 ${mobile ? MOBILE_FULL : ''}`}>
         <button
           type="button"
           disabled={!canSave}
@@ -168,6 +177,7 @@ function ProfileRow({ deviceType, profile, measured, hasOverride, onSave, onDele
 }
 
 function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
+  const mobile = useLayoutMode() === 'mobile'
   const [deviceType, setDeviceType] = useState('')
   const [values, setValues] = useState({
     high_upload_ratio_threshold: '3.0', volume_sustained_polls: '3', contamination: '0.05',
@@ -182,7 +192,7 @@ function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
   }
 
   return (
-    <div className={`grid ${GRID_COLS} items-center gap-3 border border-dashed border-border-active/50 bg-bg/50 px-1 py-2.5 text-[10px]`}>
+    <div className={`grid ${mobile ? MOBILE_GRID : GRID_COLS} items-center gap-3 border border-dashed border-border-active/50 bg-bg/50 px-1 py-2.5 text-[10px]`}>
       <input
         type="text"
         autoFocus
@@ -191,11 +201,13 @@ function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
         value={deviceType}
         onChange={(e) => setDeviceType(e.target.value)}
         onKeyDown={(e) => e.key === 'Escape' && onDone()}
-        className="min-w-0 border border-border bg-bg px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active"
+        className={`min-w-0 border border-border bg-bg px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-border-active ${mobile ? MOBILE_FULL : ''}`}
       />
       {FIELDS.map((field) => (
         <input
           key={field.key}
+          aria-label={field.label}
+          title={field.label}
           type="text"
           inputMode={field.integer ? 'numeric' : 'decimal'}
           value={values[field.key]}
@@ -205,7 +217,7 @@ function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
           className="min-w-0 border border-border bg-bg px-2 py-1.5 text-[11px] tabular-nums text-text-primary outline-none focus:border-border-active"
         />
       ))}
-      <div className="flex justify-end gap-1.5">
+      <div className={`flex justify-end gap-1.5 ${mobile ? MOBILE_FULL : ''}`}>
         <button
           type="button"
           disabled={!canAdd || isSaving}
@@ -228,6 +240,7 @@ function AddProfileForm({ onAdd, isSaving, existingTypes, onDone }) {
 }
 
 export function DeviceTypeProfilesSection() {
+  const mobile = useLayoutMode() === 'mobile'
   const { data: profiles, isLoading: profilesLoading } = useDeviceTypeProfiles()
   const { data: extremesData, isLoading: extremesLoading } = useObservedThresholdExtremes()
   const { data: devices } = useDevices()
@@ -334,7 +347,7 @@ export function DeviceTypeProfilesSection() {
 
       {!isLoading && (
         <>
-          <div className={`grid ${GRID_COLS} gap-3 px-1 pb-1.5 text-[9px] tracking-wider text-text-muted`}>
+          <div className={`${mobile ? 'hidden' : `grid ${GRID_COLS}`} gap-3 px-1 pb-1.5 text-[9px] tracking-wider text-text-muted`}>
             <div>DEVICE TYPE</div>
             {FIELDS.map((f) => (
               <div key={f.key}>{f.label}</div>

@@ -4,6 +4,7 @@ import { useHealth } from '../../hooks/useHealth'
 import { useAlerts } from '../../hooks/useAlerts'
 import { useThemeStore } from '../../store/themeStore'
 import { StatusDot } from '../../components/StatusDot'
+import { ModeSwitch } from '../../components/ModeSwitch'
 import heimdallLogo from '../../assets/heimdall-icon.png'
 
 const PALETTES = [['amber', 'AMBER'], ['slate', 'SLATE']]
@@ -43,7 +44,7 @@ export function MobileShell() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[480px] flex-col bg-bg text-[11px] text-text-secondary">
+    <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col overflow-x-hidden bg-bg text-[11px] text-text-secondary">
       <div className="flex items-center justify-between px-4 pt-4">
         <div className="flex items-center gap-2">
           <img src={heimdallLogo} alt="" className="h-8 w-8 flex-shrink-0" />
@@ -61,7 +62,7 @@ export function MobileShell() {
         </button>
       </div>
 
-      <div className="flex gap-2 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
         <div
           className={`flex items-center gap-1.5 border px-2 py-1 text-[9px] ${
             schedulerOk
@@ -78,6 +79,7 @@ export function MobileShell() {
             {unreadCount} ALERTS
           </div>
         )}
+        <ModeSwitch compact />
         <div className="ml-auto flex items-center gap-1">
           {PALETTES.map(([value, text]) => (
             <button
@@ -113,7 +115,7 @@ export function MobileShell() {
         ))}
       </nav>
 
-      <main className="flex-1 px-4 py-3 pb-20">
+      <main className="min-w-0 flex-1 px-4 py-3 pb-20">
         <Outlet />
       </main>
 

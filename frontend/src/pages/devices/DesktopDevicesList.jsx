@@ -7,8 +7,7 @@ import { TrafficDisplay } from '../../components/TrafficDisplay'
 import { Badge } from '../../components/Badge'
 import { SignalBars } from '../../components/SignalBars'
 import { NeverConnectedIcon } from '../../components/NeverConnectedIcon'
-import { BlockButton } from '../../components/BlockButton'
-import { UnblockButton } from '../../components/UnblockButton'
+import { DeviceStatusSelect, deviceStatus } from '../../components/DeviceStatusSelect'
 import { isDeviceOnline } from '../../lib/deviceFilters'
 import { deviceDisplayName } from '../../lib/deviceDisplay'
 import { groupByAp, isGuestApGroup } from '../../lib/apGroups'
@@ -132,28 +131,10 @@ const columnHelperDefs = [
     },
   },
   {
-    id: 'trust',
-    header: 'TRUST',
-    accessorFn: (d) => (d.is_trusted ? 1 : 0),
-    cell: ({ row }) =>
-      row.original.is_trusted ? (
-        <Badge variant="success">TRUSTED</Badge>
-      ) : (
-        <Badge variant="warning">SUSPECT</Badge>
-      ),
-  },
-  {
-    id: 'actions',
-    header: 'ACTION',
-    cell: ({ row }) => (
-      <div onClick={(e) => e.stopPropagation()}>
-        {row.original.is_blocked ? (
-          <UnblockButton mac={row.original.mac_address} />
-        ) : (
-          <BlockButton mac={row.original.mac_address} />
-        )}
-      </div>
-    ),
+    id: 'status',
+    header: 'STATUS',
+    accessorFn: (d) => deviceStatus(d),
+    cell: ({ row }) => <DeviceStatusSelect device={row.original} />,
   },
 ]
 

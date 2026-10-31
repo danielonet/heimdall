@@ -758,7 +758,7 @@ class SettingsRepository:
                 'telegram_chat_id': (
                     row.telegram_chat_id if row and row.telegram_chat_id else settings.TELEGRAM_CHAT_ID
                 ),
-                'auto_block_on_threat': row.auto_block_on_threat if row else True,
+                'auto_block_on_threat': row.auto_block_on_threat if row else False,
                 'auto_block_expiry_hours': row.auto_block_expiry_hours if row else 24,
                 'last_digest_sent_at': row.last_digest_sent_at if row else None,
                 'alert_stale_hours': row.alert_stale_hours if row else 24,

@@ -28,6 +28,7 @@ export function ReportAlertGroups({ groups, total, severityCounts }) {
             </Badge>
           ))}
       </div>
+      <div className="overflow-x-auto">
       <table className="w-full text-left text-[10px]">
         <thead>
           <tr className="text-[9px] tracking-wider text-text-muted">
@@ -58,6 +59,7 @@ export function ReportAlertGroups({ groups, total, severityCounts }) {
           ))}
         </tbody>
       </table>
+      </div>
       <div className="border-t border-border/50 p-2 text-right">
         <Link to="/alerts" className="text-[9px] tracking-wider text-accent-blue hover:underline">
           VIEW ALL IN ALERTS →

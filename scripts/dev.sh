@@ -13,12 +13,7 @@
 #   ./scripts/dev.sh --no-backend    # frontend only; attach VS Code debugger to backend
 #   ./scripts/dev.sh --no-frontend   # backend only
 #   FRONTEND_HOST=0.0.0.0 ./scripts/dev.sh   # expose the Vite dev server (:5173) to the LAN
-#   ./scripts/dev.sh --no-auto-block # every detector/rule still raises its
-#                                     alert normally — none of them call
-#                                     block_device() or flip is_blocked.
-#                                     For running the Kali attack-test plan
-#                                     safely: confirm every finding fires
-#                                     correctly before re-arming auto-block.
+#   (a fresh database starts in NOC mode: nothing is blocked until you switch to SOC in the dashboard)
 #
 # Prerequisites:
 #   - scripts/install.sh has been run once
@@ -41,24 +36,14 @@ fi
 # ── Parse flags ──────────────────────────────────────────────────────────────
 NO_BACKEND=false
 NO_FRONTEND=false
-NO_AUTO_BLOCK=false
 for arg in "$@"; do
     case "$arg" in
         --no-backend)   NO_BACKEND=true   ;;
         --no-frontend)  NO_FRONTEND=true  ;;
-        --no-auto-block) NO_AUTO_BLOCK=true ;;
         --help|-h)
-            echo "Usage: $0 [--no-backend] [--no-frontend] [--no-auto-block]"
+            echo "Usage: $0 [--no-backend] [--no-frontend]"
             echo "  --no-backend     Skip the Python backend (attach VS Code debugger instead)"
             echo "  --no-frontend    Skip the React frontend"
-            echo "  --no-auto-block  Disable every auto-block code path (detectors, rules,"
-            echo "                   identity-link propagation, enforcement reconciliation) —"
-            echo "                   they still raise their alert exactly as normal, just never"
-            echo "                   call block_device() or flip is_blocked. Use while running"
-            echo "                   an attack-simulation test plan (e.g. from a Kali box) so"
-            echo "                   findings can be confirmed without devices actually getting"
-            echo "                   cut off mid-test. Only re-run without this flag once every"
-            echo "                   finding the test plan expects has been verified."
             echo ""
             echo "Does not start or stop Docker infra — bring up Postgres/Redis yourself first,"
             echo "e.g.: docker compose up -d postgres redis clamav"
@@ -119,22 +104,8 @@ export TELEGRAM_BOT_TOKEN_FILE
 export MIWIFI_PASSWORD_FILE
 export ROUTER_SECRETS_DIR
 
-# --no-auto-block always wins over whatever .env sets, regardless of
-# argument/file order — exported after sourcing .env above, not before.
-if $NO_AUTO_BLOCK; then
-    export DISABLE_AUTO_BLOCK=true
-fi
-
 log_success "Config loaded"
 
-if [ "${DISABLE_AUTO_BLOCK:-}" = "true" ]; then
-    echo ""
-    echo "  ${YELLOW}${BOLD}⚠ AUTO-BLOCK DISABLED${NC}${YELLOW} — every detector/rule still raises its alert"
-    echo "  normally, but none of them will call block_device() or mark a device blocked."
-    echo "  Safe to run the attack-test plan now. Re-arm by starting without --no-auto-block"
-    echo "  once every expected finding has been confirmed.${NC}"
-    echo ""
-fi
 
 # ── Verify infra is already reachable ─────────────────────────────────────────
 log_section "Checking Infra"
@@ -252,12 +223,7 @@ if $NO_BACKEND; then
     echo "      \"TELEGRAM_BOT_TOKEN_FILE\": \"${TELEGRAM_BOT_TOKEN_FILE}\","
     echo "      \"MIWIFI_PASSWORD_FILE\": \"${MIWIFI_PASSWORD_FILE}\","
     echo "      \"ROUTER_SECRETS_DIR\": \"${ROUTER_SECRETS_DIR}\","
-    if [ "${DISABLE_AUTO_BLOCK:-}" = "true" ]; then
-        echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\","
-        echo "      \"DISABLE_AUTO_BLOCK\": \"true\""
-    else
-        echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\""
-    fi
+    echo "      \"ADMIN_PASSWORD_FILE\": \"${ADMIN_PASSWORD_FILE}\""
     echo '    }'
     echo '  }'
     echo ""
@@ -312,9 +278,6 @@ else
 fi
 [ -n "$FRONTEND_PID" ] && \
 echo "  ${CYAN}Frontend ${NC} http://localhost:${FRONTEND_PORT}    (pid ${FRONTEND_PID})"
-if [ "${DISABLE_AUTO_BLOCK:-}" = "true" ]; then
-    echo "  ${YELLOW}${BOLD}Auto-block DISABLED${NC}${YELLOW} — alerts only, no device will actually be blocked${NC}"
-fi
 echo ""
 echo "  Logs : ${LOG_DIR}/"
 echo ""

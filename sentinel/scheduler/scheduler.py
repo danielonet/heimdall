@@ -742,9 +742,7 @@ class SentinelScheduler:
         *other* direction was already careful to avoid. There is no way to
         tell "the block silently decayed" apart from "an admin reversed it
         on purpose" from in here, so don't try — the router's live state
-        always wins, and Settings.DISABLE_AUTO_BLOCK is irrelevant to this
-        method now that it never calls block_device()/unblock_device() at
-        all.
+        always wins. This method never calls block_device()/unblock_device().
         """
         async with get_session() as session:
             device = await session.get(Device, mac)
@@ -1305,14 +1303,7 @@ class SentinelScheduler:
         silently claims success, same convention as _raise_threat_alert's
         'AUTO-BLOCK FAILED' wording, since a linked device that's actually
         still unprotected must not read as if nothing needs attention.
-        Also honors Settings.DISABLE_AUTO_BLOCK — same kill-switch
-        _raise_threat_alert checks, since this is just as much an
-        auto-block action as any other and must be just as inert while
-        it's set.
         """
-        if settings.DISABLE_AUTO_BLOCK:
-            return f' — {old_mac} was blocked; AUTO-BLOCK DISABLED (dev override) — not propagated to {new_mac}'
-
         try:
             adapter = await self._adapter_for_mac(new_mac)
             blocked_now = await adapter.block_device(new_mac)
@@ -2065,8 +2056,8 @@ class SentinelScheduler:
         raw_data: dict | None = None, dedup_key: str | None = None,
     ) -> None:
         """Create/touch+broadcast an Alert for a detected attack. If
-        Settings.DISABLE_AUTO_BLOCK isn't set and auto_block_on_threat is
-        armed, blocks the device via the router adapter first so the alert
+        auto_block_on_threat is armed (SOC mode; a new install starts in
+        NOC mode), blocks the device via the router adapter first so the alert
         description can note it — the single
         choke point every attack-signal source (ArpWatcher, DhcpWatcher,
         PassiveFingerprinter, WifiMonitorWatcher, NetworkScanner, Zeek DNS/beaconing/file-
@@ -2126,15 +2117,8 @@ class SentinelScheduler:
         """
         blocked_now = False
         block_failed = False
-        # Hard kill-switch, checked before anything else — see Settings.
-        # DISABLE_AUTO_BLOCK's docstring for why this is a separate,
-        # env-only override rather than just relying on the DB-backed
-        # auto_block_on_threat setting this same method also checks below.
-        auto_block_disabled = settings.DISABLE_AUTO_BLOCK
         is_self = False
-        if auto_block_disabled:
-            pass  # every block attempt skipped outright — see description branch below
-        elif bool(mac) and await self._is_own_host(mac):
+        if bool(mac) and await self._is_own_host(mac):
             is_self = True
             logger.warning(
                 'Suppressing auto-block for %s (%s) — this MAC resolves to the Heimdall '
@@ -2151,9 +2135,7 @@ class SentinelScheduler:
                 block_failed = True
                 logger.exception('Auto-block failed for %s (%s)', mac, alert_type)
 
-        if auto_block_disabled:
-            description = f'{description} — AUTO-BLOCK DISABLED (dev override) — alert only, device not blocked'
-        elif is_self:
+        if is_self:
             description = f'{description} — auto-block suppressed: this device is the Heimdall host itself'
         elif blocked_now:
             description = f'{description} — device auto-blocked'
