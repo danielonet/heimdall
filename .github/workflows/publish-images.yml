@@ -79,7 +79,7 @@ jobs:
         run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.image }}" >> "$GITHUB_ENV"
 
       # Lets the amd64 runner build the arm64 half of each image (Raspberry Pi, Ampere, Apple-silicon Linux VMs).
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
