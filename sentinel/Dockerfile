@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # System packages required by Scapy (libpcap), Nmap, and network tools
 RUN apt-get update && apt-get install -y \
