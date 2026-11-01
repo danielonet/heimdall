@@ -53,7 +53,7 @@ python-dotenv==1.2.4
 scikit-learn==1.9.1
 PyOD==3.6.1  # 1.1.2 predates scikit-learn's __sklearn_tags__ API (sklearn>=1.6)
              # and crashes on LOF.predict() under scikit-learn==1.9.1 above
-numpy==2.4.6
+numpy==2.5.4
 pandas==3.0.3
 
 # ─────────────────────────────────────────────────────────────────────────────
