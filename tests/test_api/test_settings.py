@@ -552,6 +552,24 @@ class TestRouterCredentials:
     def test_telegram_test_endpoint_requires_login(self, client):
         assert client.post('/api/settings/telegram/test').status_code == 401
 
+    def test_ntfy_test_endpoint_reports_missing_setup(self, client, auth_headers):
+        client.patch('/api/settings', json={'ntfy_url': ''}, headers=auth_headers)
+        resp = client.post('/api/settings/ntfy/test', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['ok'] is False
+        assert 'not configured' in resp.get_json()['error']
+
+    def test_email_test_endpoint_reports_missing_setup(self, client, auth_headers):
+        client.patch('/api/settings', json={'smtp_host': '', 'smtp_from': ''}, headers=auth_headers)
+        resp = client.post('/api/settings/email/test', headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()['ok'] is False
+        assert 'not configured' in resp.get_json()['error']
+
+    @pytest.mark.parametrize('path', ['/api/settings/ntfy/test', '/api/settings/email/test'])
+    def test_ntfy_and_email_test_endpoints_require_login(self, client, path):
+        assert client.post(path).status_code == 401
+
     def test_password_writes_to_the_configured_file_and_applies_live(self, client, auth_headers, tmp_path):
         import sentinel.config as config_module
         pw_file = tmp_path / 'router_password.txt'

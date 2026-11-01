@@ -230,6 +230,14 @@ class ZeekParser:
         return suspicious
 ```
 
+As built (`ZeekConnBeaconDetector` in `sentinel/security/zeek_parser.py`) the check
+groups by destination port as well, and ignores any destination inside the local
+network: private (RFC 1918 and IPv6 ULA), loopback, link-local, CGNAT, multicast and
+broadcast addresses (`is_local_destination`). Windows and Samba hosts announce
+themselves to the subnet broadcast address on a 12-minute timer, which looked exactly
+like a beacon and raised CRITICAL false positives. Known limit: a compromised device
+beaconing to another machine on the LAN is not detected.
+
 ## ClamAV integration
 
 ClamAV runs as a separate container (port 3310). Files captured from HTTP

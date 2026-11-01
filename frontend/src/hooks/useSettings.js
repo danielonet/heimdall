@@ -32,6 +32,20 @@ export function useTestTelegram() {
   })
 }
 
+/** Sends a test push through the saved ntfy topic URL; resolves {ok, error}. */
+export function useTestNtfy() {
+  return useMutation({
+    mutationFn: () => apiJson('/settings/ntfy/test', { method: 'POST' }),
+  })
+}
+
+/** Sends a test email through the saved SMTP settings; resolves {ok, error, to}. */
+export function useTestEmail() {
+  return useMutation({
+    mutationFn: () => apiJson('/settings/email/test', { method: 'POST' }),
+  })
+}
+
 export function usePurgeDatabase() {
   const qc = useQueryClient()
   return useMutation({

@@ -47,6 +47,8 @@ def create_app(config=None) -> Flask:
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/routers/<id>/test` | Try the saved login and report `{ok, model, firmware, devices}` or `{ok: false, error}`. The primary router is asked through the live scheduler adapter (a Sagemcom allows one session) — JWT required |
+| POST | `/api/settings/ntfy/test` | Send a test push through the saved ntfy topic URL; `{ok: true}` or `{ok: false, error}` (the error never contains the topic URL, which is the only secret on ntfy.sh) — JWT required |
+| POST | `/api/settings/email/test` | Send a test email through the saved SMTP settings to the To address (From when blank); `{ok, error, to}` (the error never contains the password) — JWT required |
 | POST | `/api/settings/telegram/test` | Send a test message through the saved Telegram settings; `{ok: true}` or `{ok: false, error}` (the error never contains the bot token) — JWT required |
 | GET | `/api/wifi/suggestions` | Evil-twin setup helper: the router's SSIDs plus the nearby access points broadcasting them, each flagged `matches_router` when its manufacturer prefix equals the router's MAC. Saves nothing |
 

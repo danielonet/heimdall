@@ -15,3 +15,5 @@ If you give the monitor a list of **protected network names** and your own acces
 You do not have to type these in. On **Equipment → WiFi monitor**, press **Detect from my router**: Heimdall reads your WiFi names from the router and lists the access points the adapter can hear using those names, with their address, channel and signal. Ones made by the same manufacturer as your router are ticked; any others are marked "different maker — check it is yours", because an attacker's copy would show up in the same list. Press **Use these** to add them to the lists, then **Save**. If a name is "not heard yet", wait a minute and try again: the adapter sweeps the channels in turn. This needs a router Heimdall can read, and the monitor adapter set and saved.
 
 Be aware of the limits. It listens only on 2.4 GHz channels 1, 6 and 11 and not on 5 GHz, so it can miss an access point on another channel or band. It is off until you set it up, and it needs the extra adapter.
+
+For the whole setup, including the second router as an access point, see [Guide: router, access point and evil twin](/manual/network-setup/).

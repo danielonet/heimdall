@@ -1,8 +1,11 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from sentinel.security.zeek_parser import (
     ZeekConnBeaconDetector,
+    is_local_destination,
     ZeekConnVolumeCorrelator,
     ZeekDnsIngester,
     ZeekDnsLogReader,
@@ -110,6 +113,39 @@ class TestZeekConnBeaconDetector:
         assert results[0]['dst_port'] == 443
         assert results[0]['count'] == 12
         assert results[0]['interval_mean_s'] == 60.0
+
+    @pytest.mark.parametrize('dst', [
+        '10.100.102.255',        # the LAN's own broadcast (NetBIOS, the reported false positive)
+        '255.255.255.255',       # limited broadcast
+        '239.255.255.250',       # SSDP multicast
+        '224.0.0.251',           # mDNS multicast
+        '192.168.1.20',          # another LAN host
+        '169.254.10.10',         # link-local
+        'ff02::fb',              # IPv6 mDNS
+        'fe80::1',               # IPv6 link-local
+    ])
+    def test_regular_timer_to_a_local_destination_is_not_flagged(self, tmp_path, dst):
+        log_path = tmp_path / 'conn.log'
+        rows = [_conn_row('10.100.102.27', dst, ts=float(i * 720)) for i in range(20)]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        detector = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0)
+        assert detector.detect() == []
+
+    def test_a_local_beacon_does_not_hide_a_real_one_in_the_same_log(self, tmp_path):
+        log_path = tmp_path / 'conn.log'
+        rows = [_conn_row('10.100.102.27', '10.100.102.255', ts=float(i * 720)) for i in range(20)]
+        rows += [_conn_row('10.100.102.50', '203.0.113.10', ts=float(i * 60)) for i in range(12)]
+        log_path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+        results = ZeekConnBeaconDetector(str(tmp_path), min_count=10, jitter_tolerance_s=2.0).detect()
+        assert [(r['src'], r['dst']) for r in results] == [('10.100.102.50', '203.0.113.10')]
+
+    def test_is_local_destination(self):
+        assert is_local_destination('10.0.0.255') and is_local_destination('172.20.1.1')
+        assert not is_local_destination('8.8.8.8') and not is_local_destination('203.0.113.10')
+        assert not is_local_destination('2001:4860:4860::8888')
+        assert not is_local_destination('not-an-ip')
 
     def test_irregular_intervals_not_flagged(self, tmp_path):
         log_path = tmp_path / 'conn.log'

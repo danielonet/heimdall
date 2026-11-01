@@ -3,6 +3,7 @@ router credentials, SMTP notification settings, system status, destructive
 DB purge/reset."""
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import re
@@ -487,6 +488,36 @@ async def test_telegram():
         'Heimdall test', 'This is a test message. Telegram notifications are working.',
     )
     return jsonify(ok=error is None, error=error)
+
+
+@bp.route('/ntfy/test', methods=['POST'])
+@jwt_required()
+async def test_ntfy():
+    """Send a test push through the saved ntfy topic URL. Returns {ok: true} or {ok: false, error}."""
+    notifier = NotificationService(NotificationConfig(ntfy_url=await SettingsRepository().get_ntfy_url()))
+    error = await notifier.send_ntfy('Heimdall test', 'This is a test message. ntfy notifications are working.')
+    return jsonify(ok=error is None, error=error)
+
+
+@bp.route('/email/test', methods=['POST'])
+@jwt_required()
+async def test_email():
+    """Send a test email through the saved SMTP settings, to the To address (or From when To is
+    blank). Returns {ok: true, to} or {ok: false, error}."""
+    smtp = await SettingsRepository().get_smtp_settings()
+    notifier = NotificationService(NotificationConfig(
+        smtp_host=smtp['smtp_host'] or '',
+        smtp_port=smtp['smtp_port'] or 587,
+        smtp_from=smtp['smtp_from'] or '',
+        smtp_to=smtp['smtp_to'] or '',
+        smtp_username=smtp['smtp_username'] or '',
+        smtp_password=settings.SMTP_PASSWORD,
+        smtp_use_tls=smtp['smtp_use_tls'] if smtp['smtp_use_tls'] is not None else True,
+    ))
+    error = await asyncio.to_thread(
+        notifier.send_email, 'Test message', 'This is a test message. Email notifications are working.',
+    )
+    return jsonify(ok=error is None, error=error, to=(smtp['smtp_to'] or smtp['smtp_from'] or ''))
 
 
 @bp.route('/purge', methods=['POST'])

@@ -29,4 +29,4 @@ The adapter used to listen for nearby WiFi, plus your **protected network names*
 
 ## Switches
 
-Monitoring managed switches for per-device wired traffic is **planned**. The section is there but there is nothing to configure yet.
+Monitoring managed switches for per-device wired traffic is **planned**. The section is there but there is nothing to configure yet. A reserved placeholder for its setup is in [Guide: router, access point and evil twin](/manual/network-setup/#part-5-managed-switch-placeholder).

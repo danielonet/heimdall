@@ -101,7 +101,7 @@ Runs continuously via packet sniffing (Scapy) and the router's own polled state 
 | Feature | What it does |
 |---|---|
 | **DNS Visibility** | Logs every cleartext DNS query on the wire and raises a critical alert when one resolves a domain on the URLhaus malicious-domain feed |
-| **C2 Beaconing Detection** | Flags a device making suspiciously regular-interval connections to the same remote host — a classic command-and-control beacon signature invisible to any single-connection check |
+| **C2 Beaconing Detection** | Flags a device making suspiciously regular-interval connections to the same host outside your network (LAN, broadcast and multicast destinations are ignored) — a classic command-and-control beacon signature invisible to any single-connection check |
 | **File-Extraction → ClamAV** | Extracts files from observed cleartext downloads and scans them with ClamAV, alerting on any signature match |
 
 ### Network IDS (Suricata)
@@ -137,7 +137,7 @@ Blocking and quarantining a device are manual actions. Automatic blocking (`auto
 
 ### Notifications & reporting
 
-- Push (ntfy.sh), Telegram channel and email (SMTP) notifications, configurable from the Settings page (the Telegram bot token is kept in a secret file)
+- Push (ntfy.sh), Telegram channel and email (SMTP) notifications, configurable from the Settings page, each with a send-test button (the Telegram bot token is kept in a secret file)
 - Daily security digest — a summary of alert counts by severity/type since the last digest, including a calm "all clear" message on a quiet day
 - CSV alert export for audit trails / incident record-keeping
 - Prometheus-style `/api/metrics` endpoint (device counts, alert rates, poll latency) for pointing an existing Grafana/Prometheus home-lab setup at Heimdall
@@ -150,6 +150,7 @@ Being upfront about what Heimdall does **not** do, rather than leaving it to be 
 - **On an ordinary switch, Heimdall does not see other devices' private traffic** — the sniff interface hears broadcast, multicast and its own machine's traffic. Suricata and Zeek see more only if the switch or router mirrors traffic to Heimdall's port.
 - **Active port-scan detection** (someone scanning *you*) has no dedicated signature — Heimdall's own nightly scan runs *outward* against devices it already knows, it doesn't detect incoming scans.
 - **DNS-over-HTTPS/TLS** traffic bypasses DNS visibility (only cleartext UDP/53 is inspected), and **TLS-encrypted downloads** bypass the ClamAV file-extraction pipeline (no TLS interception is configured).
+- **Beaconing inside your own network is not detected** — the C2 beacon check only considers destinations outside your network; regular traffic to a broadcast or multicast address or another LAN device (Windows/Samba announcements, device discovery) is ignored, so a compromised device beaconing to another machine on the LAN is missed.
 - **Suricata's ruleset is unmanaged by Heimdall** — this integration ingests whatever alerts the container produces, it doesn't fetch, verify, or tune the rule set itself (see the Network IDS section above).
 
 See [`docs/testing/heimdall_verification.md`](docs/testing/heimdall_verification.md) for a full Kali-Linux-based penetration test plan covering every capability above (and every documented gap).

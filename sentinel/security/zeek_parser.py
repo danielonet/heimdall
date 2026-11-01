@@ -21,17 +21,40 @@ per connection, sharing a fuid, using id.orig_h/id.resp_h/is_orig instead)
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Destinations that never leave the local network. A device talking on a regular timer to one of these is
+# ordinary LAN chatter (NetBIOS and SSDP announcements, mDNS, NTP broadcasts, a printer or NAS being polled),
+# not a command-and-control server, so the beacon check skips them. Broadcast addresses such as
+# 192.168.1.255 fall inside the private ranges.
+_LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12',
+    '192.168.0.0/16', '224.0.0.0/4', '255.255.255.255/32',
+    '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8',
+))
+
+
+@lru_cache(maxsize=4096)
+def is_local_destination(ip: str) -> bool:
+    """True for a broadcast, multicast, loopback, link-local or private (LAN) address. An address that
+    does not parse is treated as not local, so a malformed log line can never hide a finding."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _LOCAL_NETWORKS if net.version == addr.version)
 
 
 class ZeekDnsLogReader:
@@ -104,6 +127,11 @@ class ZeekConnBeaconDetector:
     """Flags connections with suspiciously regular intervals (C2 beaconing)
     by re-reading Zeek's conn.log fresh each run. Per docs/architecture/
     06-security-services.md's design — reused near-verbatim here.
+
+    Only destinations outside the local network are considered (see
+    is_local_destination): a clockwork timer to the LAN broadcast address or
+    a multicast group is how Windows and Samba hosts announce themselves, and
+    was raised as CRITICAL C2 beaconing until this filter existed.
     """
 
     def __init__(
@@ -135,6 +163,10 @@ class ZeekConnBeaconDetector:
             return []
 
         if df.empty or not {'id.orig_h', 'id.resp_h', 'id.resp_p'}.issubset(df.columns):
+            return []
+
+        df = df[~df['id.resp_h'].map(is_local_destination)]
+        if df.empty:
             return []
 
         suspicious = []

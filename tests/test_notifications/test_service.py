@@ -1,3 +1,4 @@
+import smtplib
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,9 @@ def _alert(
 
 
 class _FakeResponse:
+    status_code = 200
+    is_success = True
+
     def raise_for_status(self):
         pass
 
@@ -500,3 +504,71 @@ class TestTelegramNotification:
     async def test_send_telegram_says_when_unconfigured(self):
         reason = await NotificationService(NotificationConfig()).send_telegram('t', 'm')
         assert 'not configured' in reason
+
+
+class TestSendTestMessages:
+    """The reason strings behind the Settings page's SEND TEST buttons: a plain
+    answer for each failure, and never the ntfy topic URL or the SMTP password."""
+
+    async def test_ntfy_success_returns_none(self, monkeypatch):
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', _FakeAsyncClient)
+        notifier = NotificationService(NotificationConfig(ntfy_url='https://ntfy.sh/secret-topic'))
+        assert await notifier.send_ntfy('Heimdall test', 'hello') is None
+        assert _FakeAsyncClient.calls[0]['headers']['Title'] == 'Heimdall test'
+
+    async def test_ntfy_not_configured(self):
+        assert 'not configured' in await NotificationService(NotificationConfig()).send_ntfy('t', 'm')
+
+    async def test_ntfy_refusal_reports_the_status_without_the_url(self, monkeypatch):
+        class _Refused(_FakeAsyncClient):
+            async def post(self, url, content=None, headers=None):
+                return SimpleNamespace(status_code=403, is_success=False)
+
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', _Refused)
+        notifier = NotificationService(NotificationConfig(ntfy_url='https://ntfy.sh/secret-topic'))
+        error = await notifier.send_ntfy('t', 'm')
+        assert 'HTTP 403' in error and 'secret-topic' not in error
+
+    async def test_ntfy_unreachable_reports_the_error_type_without_the_url(self, monkeypatch):
+        class _Down(_FakeAsyncClient):
+            async def post(self, url, content=None, headers=None):
+                raise service_module.httpx.ConnectError(f'cannot connect to {url}')
+
+        monkeypatch.setattr(service_module.httpx, 'AsyncClient', _Down)
+        notifier = NotificationService(NotificationConfig(ntfy_url='https://ntfy.sh/secret-topic'))
+        error = await notifier.send_ntfy('t', 'm')
+        assert 'ConnectError' in error and 'secret-topic' not in error
+
+    def test_email_success_returns_none_and_sends_one_message(self, monkeypatch):
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _FakeSMTP)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.gmail.com', smtp_from='me@gmail.com', smtp_username='me@gmail.com', smtp_password='pw',
+        ))
+        assert notifier.send_email('Test message', 'hello') is None
+        assert len(_FakeSMTP.sent_messages) == 1
+        assert _FakeSMTP.sent_messages[0]['To'] == 'me@gmail.com'  # blank To falls back to From
+
+    def test_email_not_configured(self):
+        assert 'not configured' in NotificationService(NotificationConfig()).send_email('s', 'b')
+
+    def test_email_bad_login_explains_app_passwords_and_hides_the_password(self, monkeypatch):
+        class _BadLogin(_FakeSMTP):
+            def login(self, username, password):
+                raise smtplib.SMTPAuthenticationError(535, b'5.7.8 Username and Password not accepted')
+
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _BadLogin)
+        notifier = NotificationService(NotificationConfig(
+            smtp_host='smtp.gmail.com', smtp_from='me@gmail.com', smtp_username='me', smtp_password='hunter2pass',
+        ))
+        error = notifier.send_email('s', 'b')
+        assert '535' in error and 'app password' in error and 'hunter2pass' not in error
+
+    def test_email_unreachable_server_names_host_and_port(self, monkeypatch):
+        class _Unreachable(_FakeSMTP):
+            def __init__(self, host, port, timeout=None):
+                raise TimeoutError('timed out')
+
+        monkeypatch.setattr(service_module.smtplib, 'SMTP', _Unreachable)
+        notifier = NotificationService(NotificationConfig(smtp_host='smtp.gmail.com', smtp_port=465, smtp_from='a@b.c'))
+        error = notifier.send_email('s', 'b')
+        assert 'smtp.gmail.com:465' in error and 'TimeoutError' in error

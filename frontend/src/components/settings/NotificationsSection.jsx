@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react'
-import { useSettings, useTestTelegram, useUpdateSettings } from '../../hooks/useSettings'
+import { useSettings, useTestEmail, useTestNtfy, useTestTelegram, useUpdateSettings } from '../../hooks/useSettings'
 
 const EMPTY_SMTP_FORM = {
   smtp_host: '', smtp_port: '587', smtp_from: '', smtp_to: '', smtp_username: '', smtp_use_tls: true,
+}
+
+/** The ✓ / ✗ line shown under a channel after its SEND TEST button was pressed. */
+function TestResult({ test, okText }) {
+  return (
+    <div className="mt-1.5 text-[10px]">
+      {test.data?.ok && <span className="text-accent-green">{okText}</span>}
+      {test.data && !test.data.ok && <span className="text-accent-red">✗ {test.data.error}</span>}
+      {test.isError && <span className="text-accent-red">✗ {test.error.message}</span>}
+    </div>
+  )
 }
 
 /** Merged NtfyUrlSection + SmtpSection — the two outbound notification
@@ -20,6 +31,8 @@ export function NotificationsSection() {
   const { data, isLoading } = useSettings()
   const mutation = useUpdateSettings()
   const telegramTest = useTestTelegram()
+  const ntfyTest = useTestNtfy()
+  const emailTest = useTestEmail()
 
   const [ntfyUrl, setNtfyUrl] = useState('')
   const [smtpForm, setSmtpForm] = useState(EMPTY_SMTP_FORM)
@@ -78,6 +91,7 @@ export function NotificationsSection() {
       smtp_use_tls: smtpForm.smtp_use_tls,
     }
     if (smtpPassword) body.smtp_password = smtpPassword
+    emailTest.reset()
     mutation.mutate(body, { onSuccess: () => setSmtpPassword('') })
   }
 
@@ -113,12 +127,24 @@ export function NotificationsSection() {
               <button
                 type="button"
                 disabled={!ntfyDirty || mutation.isPending}
-                onClick={() => mutation.mutate({ ntfy_url: ntfyUrl })}
+                onClick={() => {
+                  ntfyTest.reset()
+                  mutation.mutate({ ntfy_url: ntfyUrl })
+                }}
                 className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
               >
                 {mutation.isPending ? 'SAVING…' : 'SAVE'}
               </button>
+              <button
+                type="button"
+                disabled={ntfyDirty || ntfyTest.isPending || !data?.ntfy_url}
+                onClick={() => ntfyTest.mutate()}
+                className="border border-border px-3 py-1.5 text-[10px] tracking-wider text-text-secondary hover:border-border-active disabled:opacity-40"
+              >
+                {ntfyTest.isPending ? 'SENDING…' : 'SEND TEST'}
+              </button>
             </div>
+            <TestResult test={ntfyTest} okText="✓ Sent. Check your ntfy app." />
           </div>
 
           <div className="border-t border-border/50 pt-3">
@@ -289,10 +315,22 @@ export function NotificationsSection() {
                 >
                   {mutation.isPending ? 'SAVING…' : 'SAVE'}
                 </button>
+                <button
+                  type="button"
+                  disabled={smtpDirty || emailTest.isPending || !data?.smtp_host || !data?.smtp_from}
+                  onClick={() => emailTest.mutate()}
+                  className="border border-border px-3 py-1.5 text-[10px] tracking-wider text-text-secondary hover:border-border-active disabled:opacity-40"
+                >
+                  {emailTest.isPending ? 'SENDING…' : 'SEND TEST EMAIL'}
+                </button>
                 {!isSmtpPortValid && (
                   <div className="text-[9px] text-accent-red">Port must be between 1 and 65535.</div>
                 )}
               </div>
+              <TestResult
+                test={emailTest}
+                okText={`✓ Sent to ${emailTest.data?.to}. Check the inbox, and the spam folder.`}
+              />
             </div>
           </div>
         </div>

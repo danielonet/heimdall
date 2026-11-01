@@ -87,6 +87,16 @@ class NotificationService:
             await asyncio.to_thread(self._send_email, title, message, html_message)
 
     async def _send_ntfy(self, title: str, message: str, severity: str) -> None:
+        error = await self.send_ntfy(title, message, severity)
+        if error:
+            logger.warning('ntfy notification failed: %s', error)
+
+    async def send_ntfy(self, title: str, message: str, severity: str = 'WARNING') -> str | None:
+        """Post to the configured ntfy topic; return None on success, else a short
+        reason. Never raises. The reason never contains the topic URL: on ntfy.sh the
+        topic name is the only thing protecting the feed, so it is not echoed back."""
+        if not self._ntfy_url:
+            return 'ntfy is not configured: set the topic URL.'
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
@@ -94,9 +104,17 @@ class NotificationService:
                     content=message.encode('utf-8'),
                     headers={'Title': title, 'Priority': _NTFY_PRIORITY.get(severity, 'default')},
                 )
-                resp.raise_for_status()
+        except httpx.InvalidURL:
+            return 'The topic URL is not a valid address. Use the form https://ntfy.sh/your-topic.'
+        except httpx.UnsupportedProtocol:
+            return 'The topic URL must start with https:// (or http://).'
+        except httpx.HTTPError as exc:
+            return f'Could not reach the ntfy server ({type(exc).__name__}).'
         except Exception as exc:
-            logger.warning('ntfy notification failed: %s', exc)
+            return f'Unexpected error ({type(exc).__name__}).'
+        if resp.is_success:
+            return None
+        return f'ntfy refused the message (HTTP {resp.status_code}).'
 
     async def send_telegram(self, title: str, message: str) -> str | None:
         """Post to the configured Telegram chat; return None on success, else a
@@ -168,6 +186,16 @@ class NotificationService:
         await self.notify(title=alert.alert_type, message=text, severity='CRITICAL', html_message=html)
 
     def _send_email(self, subject: str, body: str, html_body: str | None = None) -> None:
+        error = self.send_email(subject, body, html_body)
+        if error:
+            logger.warning('Email notification failed: %s', error)
+
+    def send_email(self, subject: str, body: str, html_body: str | None = None) -> str | None:
+        """Blocking: send one email through the configured SMTP server; return None
+        on success, else a short reason. Never raises, and the reason never contains
+        the password. Run it in a thread from async code (asyncio.to_thread)."""
+        if not self._smtp_host or not self._smtp_from:
+            return 'Email is not configured: set the SMTP server and the From address.'
         try:
             msg = EmailMessage()
             msg['Subject'] = f'Heimdall: {subject}'
@@ -202,5 +230,24 @@ class NotificationService:
                 if self._smtp_username:
                     server.login(self._smtp_username, self._smtp_password)
                 server.send_message(msg)
+        except smtplib.SMTPAuthenticationError as exc:
+            return (
+                f'The mail server rejected the username or password (code {exc.smtp_code}). '
+                'Gmail needs an app password, not the account password.'
+            )
+        except smtplib.SMTPRecipientsRefused:
+            return 'The mail server refused the To address.'
+        except smtplib.SMTPSenderRefused as exc:
+            return f'The mail server refused the From address (code {exc.smtp_code}).'
+        except smtplib.SMTPNotSupportedError as exc:
+            return f'The mail server does not support this setting: {exc}. Try turning STARTTLS off, or on.'
+        except smtplib.SMTPException as exc:
+            return f'The mail server answered with an error ({type(exc).__name__}: {exc}).'
+        except (TimeoutError, OSError) as exc:
+            return (
+                f'Could not connect to {self._smtp_host}:{self._smtp_port} ({type(exc).__name__}). '
+                'Check the server name and port, and that this machine can reach it.'
+            )
         except Exception as exc:
-            logger.warning('Email notification failed: %s', exc)
+            return f'Unexpected error ({type(exc).__name__}).'
+        return None
