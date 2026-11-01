@@ -5,7 +5,7 @@
 # Web Framework & API
 # ─────────────────────────────────────────────────────────────────────────────
 Flask==3.0.3
-asgiref==3.11.1  # required for Flask's native `async def` view support
+asgiref==3.13.0  # required for Flask's native `async def` view support
 Flask-SocketIO==5.7.0
 Flask-JWT-Extended==4.5.3
 python-socketio==5.17.0
