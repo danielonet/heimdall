@@ -28,7 +28,7 @@ import { formatBytes } from '../../lib/format'
  * verdict ever triggers one — see the red branch, which escalates via a
  * separate MALICIOUS_TRAFFIC_DESTINATION alert rather than blocking from
  * here directly). */
-export function RemoteIpNote({ rawData }) {
+function RemoteIpVerdict({ rawData }) {
   const ip = rawData?.remote_ip
   if (ip && rawData.remote_ip_internal) {
     return (
@@ -73,4 +73,35 @@ export function RemoteIpNote({ rawData }) {
   }
 
   return null
+}
+
+/** Reverse-DNS / TLS facts about the destination of a C2_BEACONING alert (raw_data.host_identity, from
+ * sentinel/security/legit_host.py:describe_host). Context for the reader, not a verdict: a valid
+ * certificate does not make a destination safe. */
+function HostIdentityNote({ identity }) {
+  if (!identity) return null
+  const { rdns_name: name, forward_confirmed: confirmed, tls_valid: tlsValid } = identity
+  return (
+    <div className="mt-1 border-l-2 border-border py-0.5 pl-2 text-[9px] leading-snug text-text-muted">
+      <span className="mr-1 tracking-wider">DESTINATION IDENTITY:</span>
+      {name ? `${name}${confirmed ? '' : ' (reverse DNS not confirmed by a forward lookup)'}` : 'no reverse-DNS name'}
+      {tlsValid && (
+        <div>
+          Valid TLS certificate for {identity.tls_subject ?? name}, issued by {identity.tls_issuer ?? 'unknown CA'}
+          {identity.tls_expires ? `, expires ${identity.tls_expires}` : ''}. A valid certificate does not
+          make a destination safe.
+        </div>
+      )}
+      {!tlsValid && name && <div>No valid TLS certificate on port 443{identity.tls_error ? ` (${identity.tls_error})` : ''}.</div>}
+    </div>
+  )
+}
+
+export function RemoteIpNote({ rawData }) {
+  return (
+    <>
+      <RemoteIpVerdict rawData={rawData} />
+      <HostIdentityNote identity={rawData?.host_identity} />
+    </>
+  )
 }

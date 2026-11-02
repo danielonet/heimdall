@@ -119,14 +119,14 @@ export const products: Product[] = [
     sees: 'Cleartext DNS queries, connection timing and downloaded files on the sniff interface.',
     catches: [
       { alert: 'DNS_MALICIOUS_QUERY', severity: 'CRITICAL', meaning: 'A device looked up a domain on the URLhaus malware feed.' },
-      { alert: 'C2_BEACONING', severity: 'CRITICAL', meaning: 'A device connects to the same host outside your network at suspiciously regular intervals, a classic command-and-control beacon.' },
+      { alert: 'C2_BEACONING', severity: 'CRITICAL', meaning: 'A device connects to the same host outside your network at suspiciously regular intervals, a classic command-and-control beacon. The alert lists the destination\'s reverse-DNS name and TLS certificate as context; a valid certificate does not clear it.' },
       { alert: 'MALICIOUS_TRAFFIC_DESTINATION', severity: 'CRITICAL', meaning: 'A traffic spike was sent to an address on a threat feed.' },
     ],
     plugs: ['Zeek container', 'dns.log / conn.log', 'Heimdall parser', 'Threat-intel lookup', 'Alert store', 'Correlation'],
     tier: 'full', tierNote: 'Full tier only. Needs about 4 GB of RAM across the full stack.',
     limits: [
       'DNS over HTTPS or TLS bypasses it: only cleartext DNS on port 53 is inspected.',
-      'Beaconing is checked only for destinations outside your network. Regular traffic to a broadcast or multicast address or to another device on your LAN (Windows and Samba announcements, device discovery) is ignored, so a compromised device beaconing to another machine inside your network is not caught.',
+      'Beaconing is checked only for destinations outside your network. Regular traffic to a broadcast or multicast address or to another device on your LAN (Windows and Samba announcements, device discovery) is ignored, so a compromised device beaconing to another machine inside your network is not caught. Regular NTP traffic (port 123) is also ignored, but only when the server has a forward-confirmed reverse-DNS name or is listed in the HOST_NTP_SERVERS setting (that list covers only the Heimdall host itself).',
       'It sees only what reaches the sniff interface. On an ordinary switch that is the Heimdall machine’s own traffic plus broadcast and multicast, so to inspect other devices’ traffic the switch or router must mirror it to Heimdall’s port.',
     ],
     related: ['clamav', 'threat-intel', 'suricata'],

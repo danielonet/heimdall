@@ -28,6 +28,9 @@ services:
       - MIWIFI_IP=
       - MIWIFI_PASSWORD_FILE=/run/secrets/miwifi_password
       - ROUTER_SECRETS_DIR=/run/secrets/routers
+      # Time servers this host syncs with (comma-separated IPs/hostnames); regular NTP to them is not
+      # reported as C2 beaconing. Example: HOST_NTP_SERVERS=ntp.ubuntu.com,62.164.170.250
+      - HOST_NTP_SERVERS=${HOST_NTP_SERVERS:-}
       - INITIAL_ROUTER=${INITIAL_ROUTER:-}   # first boot only; written by the bundle's setup.sh --router=
       # - USE_MOCK_MIWIFI=true   # enable for offline dev (synthetic test data)
       - DATABASE_URL=postgresql+asyncpg://sentinel:${DB_PASS}@localhost/sentinel

@@ -198,6 +198,9 @@ class Settings(BaseSettings):
     # interval statistics over, not a per-line reaction — much longer than
     # the DNS poll interval.
     ZEEK_BEACON_SCAN_INTERVAL_SECONDS: int = 300
+    # Comma-separated IPs/hostnames of the time servers this host syncs its clock with (e.g.
+    # 'ntp.ubuntu.com,62.164.170.250'). Regular NTP traffic from this host to them is not C2 beaconing.
+    HOST_NTP_SERVERS: str = ''
     # How often to correlate recent traffic-spike alerts (ANOMALOUS_VOLUME/
     # HIGH_UPLOAD/WAN_BANDWIDTH_SPIKE) against conn.log for a remote IP and
     # check it against threat intel. Zeek-only — see

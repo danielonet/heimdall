@@ -101,7 +101,7 @@ Runs continuously via packet sniffing (Scapy) and the router's own polled state 
 | Feature | What it does |
 |---|---|
 | **DNS Visibility** | Logs every cleartext DNS query on the wire and raises a critical alert when one resolves a domain on the URLhaus malicious-domain feed |
-| **C2 Beaconing Detection** | Flags a device making suspiciously regular-interval connections to the same host outside your network (LAN, broadcast and multicast destinations are ignored) — a classic command-and-control beacon signature invisible to any single-connection check |
+| **C2 Beaconing Detection** | Flags a device making suspiciously regular-interval connections to the same host outside your network (LAN, broadcast and multicast destinations are ignored, as is NTP to a time server listed in `HOST_NTP_SERVERS` or one with a forward-confirmed reverse-DNS name) — a classic command-and-control beacon signature invisible to any single-connection check. The alert also reports the destination's reverse-DNS name and TLS certificate, as context only |
 | **File-Extraction → ClamAV** | Extracts files from observed cleartext downloads and scans them with ClamAV, alerting on any signature match |
 
 ### Network IDS (Suricata)

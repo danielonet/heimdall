@@ -57,6 +57,12 @@ from sentinel.security.fingerprint import PassiveFingerprinter
 from sentinel.security.liveness import ArpLivenessProbe, LivenessProbeError
 from sentinel.security.os_classification import os_family
 from sentinel.security.remediation import build_mitigation
+from sentinel.security.legit_host import (
+    describe_host,
+    identity_dict,
+    is_legitimate_host,
+    resolve_servers,
+)
 from sentinel.security.scanner import HIGH_RISK_PORTS, NetworkScanner
 from sentinel.security.suricata_parser import SuricataAlertIngester, SuricataEveLogReader
 from sentinel.security.threat_intel import ThreatIntelService
@@ -70,6 +76,8 @@ from sentinel.security.zeek_parser import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NTP_PORT = 123
 
 # See SentinelScheduler._spike_ip_enrichment_job.
 _SPIKE_ALERT_TYPES = ('ANOMALOUS_VOLUME', 'HIGH_UPLOAD', 'WAN_BANDWIDTH_SPIKE')
@@ -200,7 +208,9 @@ class SentinelScheduler:
         deployment_tier: str = 'full',
         abusech_auth_key: str = '',
         threat_feed_cache_dir: str = '',
+        host_ntp_servers: str = '',
     ) -> None:
+        self._host_ntp_servers = host_ntp_servers
         self._tier = deployment_tier
         self._tier_services = services_for_tier(deployment_tier)
         self._poll_interval_s = poll_interval_s
@@ -1594,6 +1604,12 @@ class SentinelScheduler:
             return
 
         for pair in suspicious:
+            # NTP polls on a fixed power-of-two timer, which looks exactly like a beacon. Skip it when
+            # this host is talking to a time server it is configured to use (HOST_NTP_SERVERS), or
+            # when the server has a forward-confirmed reverse-DNS name.
+            if pair['dst_port'] == _NTP_PORT and await self._is_trusted_ntp(pair['src'], pair['dst']):
+                logger.info('Ignoring NTP-style regular traffic %s -> %s: trusted time server', pair['src'], pair['dst'])
+                continue
             mac = await self._mac_for_ip(pair['src'])
             verdict = await self._threat_intel.lookup_ip(pair['dst'])
             description = (
@@ -1604,10 +1620,15 @@ class SentinelScheduler:
             )
             if verdict['is_malicious']:
                 description += ' — destination IP is flagged malicious by threat intelligence'
+            # Context for whoever reads the alert, not a reason to suppress it: a C2 server can have a
+            # valid certificate too.
+            identity = await describe_host(pair['dst'])
+            description += f' — destination: {identity.summary()}'
             await self._raise_threat_alert(
                 mac, 'C2_BEACONING', 'CRITICAL', description,
                 raw_data={
                     **pair,
+                    'host_identity': identity_dict(identity),
                     'remote_ip': pair['dst'],
                     'remote_ip_connections': pair['count'],
                     'remote_ip_malicious': verdict['is_malicious'],
@@ -1617,6 +1638,16 @@ class SentinelScheduler:
                 dedup_key=f"{pair['dst']}:{pair['dst_port']}",
             )
         self._last_zeek_beacon_scan_at = datetime.now(timezone.utc)
+
+    async def _is_trusted_ntp(self, src: str, dst: str) -> bool:
+        """True if dst is a time server we trust for an NTP flow from src: either one of the servers
+        named in HOST_NTP_SERVERS (only when src is this host itself, so a LAN device cannot hide
+        beaconing behind the host's server), or any host with a forward-confirmed reverse-DNS name."""
+        if src in (getattr(self, '_local_ips', None) or ()) and dst in await resolve_servers(
+            getattr(self, '_host_ntp_servers', ''),
+        ):
+            return True
+        return await is_legitimate_host(dst)
 
     async def _spike_ip_enrichment_job(self, *, only_alert_ids: set[int] | None = None) -> None:
         """Enriches recent traffic-spike alerts (ANOMALOUS_VOLUME/HIGH_UPLOAD/
@@ -2709,6 +2740,7 @@ def init_scheduler(app: Flask) -> None:
         device_archive_sweep_interval_s=app.config['DEVICE_ARCHIVE_SWEEP_INTERVAL_SECONDS'],
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
         deployment_tier=app.config['DEPLOYMENT_TIER'],
+        host_ntp_servers=app.config['HOST_NTP_SERVERS'],
     )
     _scheduler.start()
 

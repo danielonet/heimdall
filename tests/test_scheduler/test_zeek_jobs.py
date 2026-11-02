@@ -20,6 +20,7 @@ from sentinel.db.models import Alert, Device, DnsQuery, ThreatIntelCache
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_engine, get_session, init_db
 from sentinel.scheduler.scheduler import SentinelScheduler
+from sentinel.security.legit_host import HostIdentity
 from sentinel.security.threat_intel import ThreatIntelService
 from sentinel.security.zeek_parser import ZeekDnsIngester
 
@@ -97,6 +98,19 @@ class _FakeBeaconDetector:
 
     def detect(self) -> list[dict]:
         return self._results
+
+
+def _ntp_pair() -> dict:
+    return {
+        'src': _IP, 'dst': '203.0.113.10', 'dst_port': 123, 'count': 78,
+        'interval_mean_s': 2048.45, 'interval_std_s': 1.74,
+    }
+
+
+def _verdict(value: bool):
+    async def fake(ip: str) -> bool:
+        return value
+    return fake
 
 
 class _FakeFileWatcher:
@@ -214,7 +228,79 @@ class TestZeekDnsPollJob:
         assert await _dns_queries() == []
 
 
+@pytest.fixture(autouse=True)
+def _stub_host_identity(monkeypatch):
+    """describe_host does live DNS/TLS; keep the beacon tests offline."""
+    async def fake(ip: str) -> HostIdentity:
+        return HostIdentity(
+            ip=ip, rdns_name='time.example.com', forward_confirmed=True, tls_valid=True,
+            tls_subject='time.example.com', tls_issuer='Example CA', tls_expires='Jan  1 00:00:00 2030 GMT',
+        )
+    monkeypatch.setattr('sentinel.scheduler.scheduler.describe_host', fake)
+
+
 class TestZeekBeaconScanJob:
+    async def test_alert_carries_destination_identity(self, scheduler):
+        await _seed_device(is_blocked=False)
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([{**_ntp_pair(), 'dst_port': 443}])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        alert = await _latest_alert()
+        assert 'reverse DNS time.example.com, valid TLS certificate issued by Example CA' in alert.description
+        assert alert.raw_data['host_identity']['tls_valid'] is True
+        assert alert.raw_data['host_identity']['rdns_name'] == 'time.example.com'
+
+    async def test_ntp_to_verified_host_is_skipped(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        monkeypatch.setattr('sentinel.scheduler.scheduler.is_legitimate_host', _verdict(True))
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([_ntp_pair()])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        assert await _latest_alert() is None
+
+    async def test_ntp_to_unverified_host_still_alerts(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        monkeypatch.setattr('sentinel.scheduler.scheduler.is_legitimate_host', _verdict(False))
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([_ntp_pair()])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        alert = await _latest_alert()
+        assert alert is not None and alert.alert_type == 'C2_BEACONING'
+
+    async def test_ntp_to_configured_server_from_this_host_is_skipped(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        monkeypatch.setattr('sentinel.scheduler.scheduler.is_legitimate_host', _verdict(False))
+        scheduler._local_ips = {_IP}
+        scheduler._host_ntp_servers = '203.0.113.10'
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([_ntp_pair()])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        assert await _latest_alert() is None
+
+    async def test_configured_ntp_server_does_not_cover_other_devices(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        monkeypatch.setattr('sentinel.scheduler.scheduler.is_legitimate_host', _verdict(False))
+        scheduler._local_ips = {'10.9.9.9'}
+        scheduler._host_ntp_servers = '203.0.113.10'
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([_ntp_pair()])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        assert await _latest_alert() is not None
+
+    async def test_verified_host_on_other_port_still_alerts(self, scheduler, monkeypatch):
+        await _seed_device(is_blocked=False)
+        monkeypatch.setattr('sentinel.scheduler.scheduler.is_legitimate_host', _verdict(True))
+        scheduler._zeek_beacon_detector = _FakeBeaconDetector([{**_ntp_pair(), 'dst_port': 443}])
+
+        await scheduler._zeek_beacon_scan_job()
+
+        assert await _latest_alert() is not None
+
     async def test_suspicious_pair_raises_an_alert(self, scheduler):
         await _seed_device(is_blocked=False)
         await SettingsRepository().set_auto_block_on_threat(True)
