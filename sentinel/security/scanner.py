@@ -56,6 +56,11 @@ class ScanResult:
     ports: list[OpenPort] = field(default_factory=list)
 
 
+def _exclude_arg(ports: frozenset[int]) -> str:
+    """nmap argument that leaves ports untouched (empty when there are none)."""
+    return f' --exclude-ports {",".join(str(p) for p in sorted(ports))}' if ports else ''
+
+
 class NetworkScanner:
     """OS/service detection and vulnerability scanning for a single device."""
 
@@ -69,16 +74,16 @@ class NetworkScanner:
         call. Used by the Services panel's hover card, not by scanning."""
         return '.'.join(str(part) for part in self._nm.nmap_version())
 
-    async def scan_device(self, ip: str) -> ScanResult:
+    async def scan_device(self, ip: str, exclude_ports: frozenset[int] = frozenset()) -> ScanResult:
         """OS detection + service version scan. Degrades to service-only if
         OS detection isn't permitted (needs root/CAP_NET_RAW)."""
         try:
-            return await asyncio.to_thread(self._scan_sync, ip, '-O -sV --version-intensity 5')
+            return await asyncio.to_thread(self._scan_sync, ip, '-O -sV --version-intensity 5' + _exclude_arg(exclude_ports))
         except nmap.PortScannerError as exc:
             if 'requires root privileges' not in str(exc):
                 raise
             logger.warning('nmap OS detection needs root — falling back to service-only scan for %s', ip)
-            return await asyncio.to_thread(self._scan_sync, ip, '-sV --version-intensity 5')
+            return await asyncio.to_thread(self._scan_sync, ip, '-sV --version-intensity 5' + _exclude_arg(exclude_ports))
 
     def _scan_sync(self, ip: str, arguments: str) -> ScanResult:
         self._nm.scan(ip, arguments=arguments)
@@ -101,39 +106,39 @@ class NetworkScanner:
         os_name = os_match[0].get('name', 'Unknown') if os_match else 'Unknown'
         return ScanResult(ip=ip, os=os_name, ports=ports)
 
-    async def vuln_scan(self, ip: str) -> dict:
+    async def vuln_scan(self, ip: str, exclude_ports: frozenset[int] = frozenset()) -> dict:
         """NSE vulnerability scripts. Returns an empty dict on failure rather than raising —
         this runs unattended on a nightly schedule and one bad host shouldn't stop the rest."""
         try:
-            return await asyncio.to_thread(self._vuln_scan_sync, ip)
+            return await asyncio.to_thread(self._vuln_scan_sync, ip, exclude_ports)
         except Exception as exc:
             logger.warning('nmap vuln scan failed for %s: %s', ip, exc)
             return {}
 
-    def _vuln_scan_sync(self, ip: str) -> dict:
-        self._nm.scan(ip, arguments='--script vuln')
+    def _vuln_scan_sync(self, ip: str, exclude_ports: frozenset[int] = frozenset()) -> dict:
+        self._nm.scan(ip, arguments='--script vuln' + _exclude_arg(exclude_ports))
         if ip not in self._nm.all_hosts():
             return {}
         return self._nm[ip].get('script', {})
 
-    async def credential_scan(self, ip: str) -> dict:
+    async def credential_scan(self, ip: str, exclude_ports: frozenset[int] = frozenset()) -> dict:
         """NSE default/blank-credential scripts. Kept separate from
         vuln_scan() so a CVE finding and a default-password finding aren't
         conflated under one alert type. Same empty-dict-on-failure contract
         as vuln_scan() — this also runs unattended on a nightly schedule."""
         try:
-            return await asyncio.to_thread(self._credential_scan_sync, ip)
+            return await asyncio.to_thread(self._credential_scan_sync, ip, exclude_ports)
         except Exception as exc:
             logger.warning('nmap credential scan failed for %s: %s', ip, exc)
             return {}
 
-    def _credential_scan_sync(self, ip: str) -> dict:
+    def _credential_scan_sync(self, ip: str, exclude_ports: frozenset[int] = frozenset()) -> dict:
         self._nm.scan(
             ip,
             arguments=(
                 '--script default-accounts,http-default-accounts,'
                 'ftp-anon,mongodb-info,mysql-empty-password'
-            ),
+            ) + _exclude_arg(exclude_ports),
         )
         if ip not in self._nm.all_hosts():
             return {}

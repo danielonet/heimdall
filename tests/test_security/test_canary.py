@@ -1,6 +1,6 @@
 import json
 
-from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
+from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader, honeypot_ports
 
 
 def _event(logtype: int = 1000, **overrides) -> str:
@@ -78,3 +78,43 @@ class TestOpenCanaryLogReader:
 
         reader = OpenCanaryLogReader(str(log_path))
         assert len(reader.read_new_lines()) == 1
+
+
+class TestHoneypotPorts:
+    def test_reads_enabled_services_with_explicit_and_default_ports(self, tmp_path):
+        conf = tmp_path / 'opencanary.conf'
+        conf.write_text(json.dumps({
+            'ftp.enabled': True, 'ftp.port': 21,
+            'ssh.enabled': True, 'ssh.port': 2222,
+            'mysql.enabled': False, 'mysql.port': 3306,
+            'smb.enabled': True,
+            'logger': {'class': 'PyLogger'},
+        }))
+        assert honeypot_ports(str(conf)) == {21, 2222, 139, 445}
+
+    def test_missing_or_broken_config_excludes_nothing(self, tmp_path):
+        assert honeypot_ports(str(tmp_path / 'absent.conf')) == frozenset()
+        broken = tmp_path / 'broken.conf'
+        broken.write_text('{not json')
+        assert honeypot_ports(str(broken)) == frozenset()
+
+    def test_shipped_config_lists_the_decoy_ports(self):
+        ports = honeypot_ports('opencanary/opencanary.conf')
+        assert {21, 8880, 2222, 2323, 445} <= ports
+
+
+class TestHoneypotPortsForScan:
+    def _scheduler(self, **attrs):
+        from sentinel.scheduler.scheduler import SentinelScheduler
+        sched = object.__new__(SentinelScheduler)
+        for key, value in attrs.items():
+            setattr(sched, key, value)
+        return sched
+
+    def test_only_this_hosts_own_ip_gets_honeypot_ports_excluded(self):
+        sched = self._scheduler(_opencanary_conf_path='opencanary/opencanary.conf', _local_ips={'10.0.0.2'})
+        assert 2323 in sched._honeypot_ports_for('10.0.0.2')
+        assert sched._honeypot_ports_for('10.0.0.50') == frozenset()
+
+    def test_unconfigured_scheduler_excludes_nothing(self):
+        assert self._scheduler()._honeypot_ports_for('10.0.0.2') == frozenset()

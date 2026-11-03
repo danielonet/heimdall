@@ -76,6 +76,7 @@ services:
       - threat-feeds:/data/feeds      # last good copy of the URLhaus export (cache)
       - ml-models:/data/models        # persist trained ML models across restarts
       - opencanary-logs:/var/log/opencanary:ro  # read by OpenCanaryIngester
+      - ./opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro  # honeypot ports, excluded from nmap scans of this host
       - zeek-logs:/var/log/zeek:ro              # read by zeek_parser.py (dns.log/conn.log)
       - zeek-extracted:/var/zeek/extracted:ro   # read by zeek_parser.py, scanned via ClamAV
       - suricata-logs:/var/log/suricata:ro      # read by SuricataEveLogReader (eve.json)

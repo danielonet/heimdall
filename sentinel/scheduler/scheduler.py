@@ -50,7 +50,7 @@ from sentinel.notifications.digest_query import build_digest_data
 from sentinel.notifications.service import NotificationConfig, NotificationService
 from sentinel.scheduler.jobs import poll_cycle, poll_secondary_router
 from sentinel.security.arp_watch import ArpWatcher
-from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader
+from sentinel.security.canary import OpenCanaryIngester, OpenCanaryLogReader, honeypot_ports
 from sentinel.security.clamav_scanner import ClamAvScanner
 from sentinel.security.dhcp_watch import DhcpWatcher
 from sentinel.security.fingerprint import PassiveFingerprinter
@@ -209,7 +209,9 @@ class SentinelScheduler:
         abusech_auth_key: str = '',
         threat_feed_cache_dir: str = '',
         host_ntp_servers: str = '',
+        opencanary_conf_path: str = '',
     ) -> None:
+        self._opencanary_conf_path = opencanary_conf_path
         self._host_ntp_servers = host_ntp_servers
         self._tier = deployment_tier
         self._tier_services = services_for_tier(deployment_tier)
@@ -918,6 +920,15 @@ class SentinelScheduler:
 
         self._last_nmap_scan_at = datetime.now(timezone.utc)
 
+    def _honeypot_ports_for(self, ip: str) -> frozenset[int]:
+        """Honeypot ports to keep out of an nmap scan of ip: OpenCanary's, but only on this host's own
+        addresses, since that is the only place the decoys listen. getattr because a test double built
+        via object.__new__(SentinelScheduler) never runs __init__."""
+        conf_path = getattr(self, '_opencanary_conf_path', '')
+        if not conf_path or ip not in (getattr(self, '_local_ips', None) or ()):
+            return frozenset()
+        return honeypot_ports(conf_path)
+
     async def _scan_one_device(self, mac: str, ip: str, previous_profile: dict | None) -> None:
         """The actual per-device scan-and-alert work _nmap_scan_job loops
         over — split out so a test can exercise this against one device
@@ -935,7 +946,10 @@ class SentinelScheduler:
         exercises the identical alerting/profile-writing logic against only
         the one (mac, ip) a test passes in.
         """
-        scan = await self._scanner.scan_device(ip)
+        # OpenCanary listens on this host's own IPs; probing its decoys would raise HONEYPOT_ACCESS from
+        # Heimdall to itself, so leave those ports alone when scanning this host.
+        exclude = self._honeypot_ports_for(ip)
+        scan = await self._scanner.scan_device(ip, exclude)
         previous_open_ports = {
             p['port'] for p in (previous_profile or {}).get('ports', [])
             if p.get('state') == 'open'
@@ -987,7 +1001,7 @@ class SentinelScheduler:
                     raw_data={'ip': ip, 'passive_os': previous_passive_os, 'active_os': scan.os},
                 )
 
-        vuln_findings = await self._scanner.vuln_scan(ip)
+        vuln_findings = await self._scanner.vuln_scan(ip, exclude)
         if vuln_findings:
             await self._raise_threat_alert(
                 mac, 'VULNERABILITY_DETECTED', 'CRITICAL',
@@ -995,7 +1009,7 @@ class SentinelScheduler:
                 raw_data={'ip': ip, 'findings': vuln_findings},
             )
 
-        credential_findings = await self._scanner.credential_scan(ip)
+        credential_findings = await self._scanner.credential_scan(ip, exclude)
         if credential_findings:
             await self._raise_threat_alert(
                 mac, 'CREDENTIAL_EXPOSURE_DETECTED', 'CRITICAL',
@@ -2741,6 +2755,7 @@ def init_scheduler(app: Flask) -> None:
         security_digest_cron=app.config['SECURITY_DIGEST_CRON'],
         deployment_tier=app.config['DEPLOYMENT_TIER'],
         host_ntp_servers=app.config['HOST_NTP_SERVERS'],
+        opencanary_conf_path=app.config['OPENCANARY_CONF_PATH'],
     )
     _scheduler.start()
 

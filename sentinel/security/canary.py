@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 from sentinel.db.models import Alert
@@ -17,6 +18,34 @@ logger = logging.getLogger(__name__)
 # OpenCanary logtypes for actual service-interaction events (vs internal
 # housekeeping like startup/ping messages) — see OpenCanary's logger.py.
 _INTERACTION_LOGTYPES = {1000, 2000, 3000, 4000}
+
+
+# Services whose port opencanary.conf does not spell out. SMB listens on both of these.
+_DEFAULT_PORTS = {'smb': (139, 445)}
+
+
+def honeypot_ports(conf_path: str) -> frozenset[int]:
+    """TCP ports the enabled OpenCanary services listen on, read from opencanary.conf.
+
+    OpenCanary runs on the Heimdall host (host networking), so these are open on the host's own IPs.
+    Returns an empty set if the file is missing or unreadable: scanning every port is the safe fallback.
+    """
+    try:
+        conf = json.loads(Path(conf_path).read_text())
+    except (OSError, ValueError):
+        logger.warning('Could not read OpenCanary config at %s; honeypot ports will not be excluded', conf_path)
+        return frozenset()
+    ports: set[int] = set()
+    for key, value in conf.items():
+        service, _, field = key.partition('.')
+        if field != 'enabled' or value is not True:
+            continue
+        port = conf.get(f'{service}.port')
+        if isinstance(port, int):
+            ports.add(port)
+        else:
+            ports.update(_DEFAULT_PORTS.get(service, ()))
+    return frozenset(ports)
 
 
 class OpenCanaryIngester:

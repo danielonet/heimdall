@@ -108,7 +108,7 @@ class TestVulnScan:
     async def test_returns_empty_dict_on_failure(self, monkeypatch):
         scanner = NetworkScanner()
 
-        def fake_vuln_scan_sync(ip):
+        def fake_vuln_scan_sync(ip, exclude_ports=frozenset()):
             raise RuntimeError('boom')
 
         monkeypatch.setattr(scanner, '_vuln_scan_sync', fake_vuln_scan_sync)
@@ -154,7 +154,7 @@ class TestCredentialScan:
     async def test_returns_empty_dict_on_failure(self, monkeypatch):
         scanner = NetworkScanner()
 
-        def fake_credential_scan_sync(ip):
+        def fake_credential_scan_sync(ip, exclude_ports=frozenset()):
             raise RuntimeError('boom')
 
         monkeypatch.setattr(scanner, '_credential_scan_sync', fake_credential_scan_sync)
@@ -164,7 +164,7 @@ class TestCredentialScan:
         scanner = NetworkScanner()
         calls = []
 
-        def fake_credential_scan_sync(ip):
+        def fake_credential_scan_sync(ip, exclude_ports=frozenset()):
             calls.append(ip)
             return {'default-accounts': 'admin:admin'}
 
@@ -183,3 +183,26 @@ class TestRealScanAgainstLocalhost:
         result = await scanner.scan_device('127.0.0.1')
         assert isinstance(result, ScanResult)
         assert result.ip == '127.0.0.1'
+
+
+class TestExcludePorts:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_scan_passes_exclude_ports_to_nmap(self, monkeypatch):
+        scanner = NetworkScanner()
+        calls: list[str] = []
+
+        def fake_scan_sync(ip, arguments):
+            calls.append(arguments)
+            return ScanResult(ip=ip, os='Unknown', ports=[])
+
+        monkeypatch.setattr(scanner, '_scan_sync', fake_scan_sync)
+        await scanner.scan_device('10.0.0.5', frozenset({2323, 21}))
+        assert calls[0].endswith('--exclude-ports 21,2323')
+
+    async def test_no_exclusion_leaves_arguments_unchanged(self, monkeypatch):
+        scanner = NetworkScanner()
+        calls: list[str] = []
+        monkeypatch.setattr(scanner, '_scan_sync', lambda ip, arguments: calls.append(arguments) or ScanResult(ip=ip, os='Unknown', ports=[]))
+        await scanner.scan_device('10.0.0.5')
+        assert 'exclude' not in calls[0]

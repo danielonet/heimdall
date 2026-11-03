@@ -86,13 +86,13 @@ class _FakeScanner:
         self._vuln_findings = vuln_findings or {}
         self._credential_findings = credential_findings or {}
 
-    async def scan_device(self, ip):
+    async def scan_device(self, ip, exclude_ports=frozenset()):
         return self._scan_result
 
-    async def vuln_scan(self, ip):
+    async def vuln_scan(self, ip, exclude_ports=frozenset()):
         return self._vuln_findings
 
-    async def credential_scan(self, ip):
+    async def credential_scan(self, ip, exclude_ports=frozenset()):
         return self._credential_findings
 
 

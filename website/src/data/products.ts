@@ -170,6 +170,7 @@ export const products: Product[] = [
       'It only catches an attacker who actually touches a decoy.',
       'A decoy is a real listening service on the Heimdall host, so keep ports 3000 and 5000 off the internet and never forward decoy ports.',
       'The decoys use port 21 as is, so an FTP server already on the Heimdall machine would clash with it. Telnet and SSH sit on 2323 and 2222, leaving the real ports 23 and 22 alone.',
+      'Heimdall\'s own nightly port scan skips the decoy ports on the Heimdall machine itself, so it does not trigger its own honeypot. The list comes from the OpenCanary config; nothing else about the scan changes.',
     ],
     related: ['detectors', 'response'],
   },

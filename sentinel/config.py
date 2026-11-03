@@ -190,6 +190,8 @@ class Settings(BaseSettings):
     THREAT_FEED_REFRESH_CRON: str = '0 4 * * *'  # 04:00 daily
     OPENCANARY_LOG_PATH: str = '/var/log/opencanary/opencanary.log'
     CANARY_POLL_INTERVAL_SECONDS: int = 10
+    # Read to learn which ports the honeypot listens on, so Heimdall's own nmap scan can leave them alone.
+    OPENCANARY_CONF_PATH: str = '/etc/opencanaryd/opencanary.conf'
     # See sentinel/security/zeek_parser.py and zeek/local.zeek.
     ZEEK_LOG_DIR: str = '/var/log/zeek'
     ZEEK_EXTRACT_DIR: str = '/var/zeek/extracted'
