@@ -23,7 +23,12 @@ from sqlalchemy import delete, select, text
 
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.discovery import discover_gateway_ip, discover_local_ips
-from sentinel.adapter.factory import create_router_adapter, create_secondary_router_adapter
+from sentinel.adapter.connection import is_connection_error
+from sentinel.adapter.factory import (
+    create_router_adapter,
+    create_secondary_router_adapter,
+    router_password_saved,
+)
 from sentinel.adapter.initial_router import apply_initial_router
 from sentinel.adapter.models import RouterInfo
 from sentinel.api.serializers import alert_to_dict
@@ -171,6 +176,12 @@ BLOCK_ENFORCEMENT_RECONCILE_INTERVAL_S = 300
 class SentinelScheduler:
     """Runs poll_cycle() on an interval, on its own background event loop/thread."""
 
+    # Class-level defaults so a test double built via object.__new__ (no __init__) still works.
+    _connection_failures = 0
+    _reconnect_attempts = 0
+    _next_reconnect_at = 0.0
+    _last_reconnect_at: datetime | None = None
+
     def __init__(
         self,
         poll_interval_s: int,
@@ -317,6 +328,11 @@ class SentinelScheduler:
         # Health tracking, read synchronously by Flask's /api/health route.
         self._last_poll_at: datetime | None = None
         self._last_poll_error: str | None = None
+        # Router reconnect bookkeeping — see _maybe_reconnect_router.
+        self._connection_failures = 0
+        self._reconnect_attempts = 0
+        self._next_reconnect_at = 0.0
+        self._last_reconnect_at: datetime | None = None
         self._last_poll_duration_s: float | None = None
         self._last_nmap_scan_at: datetime | None = None
         self._last_canary_check_at: datetime | None = None
@@ -611,9 +627,59 @@ class SentinelScheduler:
             self._last_poll_at = datetime.now(timezone.utc)
             self._last_poll_error = None
             self._last_poll_duration_s = time.monotonic() - start
+            if self._connection_failures:
+                logger.info('Router connection restored after %d failed polls', self._connection_failures)
+            self._connection_failures = 0
+            self._reconnect_attempts = 0
         except Exception as exc:
             logger.exception('Poll cycle failed')
             self._last_poll_error = str(exc)
+            await self._maybe_reconnect_router(exc)
+
+    async def _maybe_reconnect_router(self, exc: BaseException) -> None:
+        """After a run of failed polls caused by a lost connection, drop the adapter so the next poll
+        builds a fresh one: re-discovers the gateway address, re-reads the saved password and logs in
+        again. Without this a stale session, a changed gateway address or a broken connection could
+        outlive the outage that caused it.
+
+        Deliberately narrow: only network-level failures count (see is_connection_error), so a database
+        error, a rejected password or the router's own login lockout never trigger it — repeating those
+        logins is what keeps a router locked out. It also does nothing unless Heimdall has a password
+        saved for the active router, and it backs off (doubling up to ROUTER_RECONNECT_MAX_SECONDS)
+        so a router that stays down is not hit every poll.
+        """
+        if not is_connection_error(exc):
+            return
+        self._connection_failures += 1
+        if self._connection_failures < settings.ROUTER_RECONNECT_AFTER_FAILURES:
+            return
+        now = time.monotonic()
+        if now < self._next_reconnect_at:
+            return
+
+        router = await SettingsRepository().get_active_router()
+        if not router_password_saved(router):
+            logger.warning('Router %s is unreachable, but no password is saved for it, so Heimdall will not '
+                           'try to reconnect on its own', router)
+            self._next_reconnect_at = now + settings.ROUTER_RECONNECT_MAX_SECONDS
+            return
+
+        delay = min(settings.ROUTER_RECONNECT_BASE_SECONDS * 2 ** self._reconnect_attempts,
+                    settings.ROUTER_RECONNECT_MAX_SECONDS)
+        self._reconnect_attempts += 1
+        self._next_reconnect_at = now + delay
+        self._last_reconnect_at = datetime.now(timezone.utc)
+        logger.warning('Router %s unreachable for %d polls in a row — reconnecting (attempt %d, next one no '
+                       'sooner than %ds)', router, self._connection_failures, self._reconnect_attempts, delay)
+        async with self._adapter_lock:
+            old, self._adapter = self._adapter, None
+            self._rule_engine = None  # holds a reference to the old adapter
+        close = getattr(old, 'aclose', None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                logger.debug('Closing the old router adapter failed', exc_info=True)
 
     async def _secondary_poll_job(self) -> None:
         """Visibility-only poll for the second, non-active router, if one is
@@ -2436,6 +2502,9 @@ class SentinelScheduler:
             'scheduler_running': self._thread is not None and self._thread.is_alive(),
             'last_poll_at': self._last_poll_at.isoformat() if self._last_poll_at else None,
             'last_poll_error': self._last_poll_error,
+            'last_router_reconnect_at': (
+                self._last_reconnect_at.isoformat() if self._last_reconnect_at else None
+            ),
         }
 
     def metrics_snapshot(self) -> dict[str, Any]:

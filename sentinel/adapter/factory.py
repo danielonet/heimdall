@@ -62,6 +62,22 @@ async def available_routers() -> list[str]:
     return routers
 
 
+def router_password_saved(router: str) -> bool:
+    """True if Heimdall holds a password (or API key) for `router`, i.e. it can log in again by itself.
+
+    Reads the same values the adapter builders use. The mock routers and passive mode have nothing to
+    log in to, so they report False.
+    """
+    if router == 'sagemcom':
+        return not settings.USE_MOCK_ROUTER and bool(settings.ROUTER_PASSWORD)
+    if router == 'miwifi':
+        return not settings.USE_MOCK_MIWIFI and bool(settings.MIWIFI_PASSWORD)
+    if router in PROFILE_ROUTERS:
+        from sentinel.config import _read_secret_file, router_secret_path
+        return bool(_read_secret_file(router_secret_path(router)))
+    return False
+
+
 async def create_router_adapter(router: str | None = None) -> RouterAdapter:
     """Build the adapter for `router` ('sagemcom' | 'miwifi'), or for
     whichever router is currently AppSettings.active_router if `router`

@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     ROUTER_PASSWORD: str = ''      # populated from ROUTER_PASSWORD_FILE if blank
     ROUTER_PASSWORD_FILE: str = ''  # also the write target for PATCH /api/settings
     POLL_INTERVAL_SECONDS: int = 15
+    # When the router stays unreachable, the scheduler rebuilds its adapter (fresh gateway address, fresh
+    # password, new session) after this many failed polls in a row, then waits ROUTER_RECONNECT_BASE_SECONDS,
+    # doubling up to ROUTER_RECONNECT_MAX_SECONDS, before the next rebuild. Only when a password is saved.
+    ROUTER_RECONNECT_AFTER_FAILURES: int = 4
+    ROUTER_RECONNECT_BASE_SECONDS: int = 60
+    ROUTER_RECONNECT_MAX_SECONDS: int = 900
     USE_MOCK_ROUTER: bool = True  # dev flag: use WireMock simulator instead of real router
     SCHEDULER_ENABLED: bool = True  # set False in tests to avoid starting the poll loop
 
