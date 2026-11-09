@@ -14,6 +14,7 @@ This manual explains the dashboard: what each page shows, what its controls do, 
 | Find a device, rename it, or block it | [Devices](/manual/devices/) |
 | Understand and clear an alert | [Alerts](/manual/alerts/) |
 | Add or switch my router | [Equipment](/manual/equipment/) |
+| See each wired device's own traffic through a managed switch | [Equipment: Switches](/manual/equipment/#switches) |
 | Connect a router and access point, and guard against an evil twin | [Guide: router, access point and evil twin](/manual/network-setup/) |
 | Get alerts by email, Telegram or push | [Guide: set up notifications](/manual/notifications-setup/) |
 | Turn on auto-block | [Settings](/manual/settings/) |

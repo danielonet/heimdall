@@ -21,6 +21,16 @@ You have not chosen a router, or the router login is wrong. Open [Equipment](/ma
 
 If the list was fine and then went empty, the connection to the router was probably lost. Heimdall keeps polling every 15 seconds. After four failed polls in a row because the router cannot be reached, it also builds a fresh connection (looks up the router address again, re-reads the saved password and logs in again). It tries again after 1 minute, then 2, 4, 8 and up to 15 minutes while the router stays unreachable. This happens only when a password is saved for that router, and never after a rejected password or when the router has locked Heimdall out, because repeating those logins would keep it locked. For those, fix the password on Equipment and Heimdall continues on its own.
 
+## A switch shows "Not reporting"
+Open [Equipment](/manual/equipment/#switches): the reason is printed under the switch.
+
+- **"the switch rejected the login"**: the user name or password is wrong. Edit the switch and enter the right password. Heimdall will not try again until you do, because repeated wrong logins can lock a switch's admin account.
+- **"no answer" or a timeout**: the switch is off, has a different address, or is not reachable from the Heimdall machine. Check the address (a DHCP reservation keeps it fixed) and try **Test**.
+- **"the switch layout may have changed"**: the switch answered, but a page no longer looks the way Heimdall expects, usually after a firmware update. Heimdall shows this instead of showing zeros. Report it with the firmware version.
+- **"is not a private-LAN address"**: Heimdall only talks to switches on your local network.
+- **A port shows "N devices · port total" and no device**: more than one device is behind that port (an uplink, an access point). That is correct. Only a port with exactly one device is credited to it.
+- **Some devices never get their own figures**: they are behind a shared port, or the switch has not learned them yet because they have not sent anything.
+
 ## ARP Watch, DHCP Watch or Passive Fingerprint show OFF
 They listen on one network card, and it is probably the wrong one. Open [Equipment](/manual/equipment/), choose the card connected to your home network under **Network interface**, and press **Save**. They start immediately. If you chose it correctly and they still stay off, run `sudo heimdall logs` (.deb) or `docker compose logs sentinel-backend` and look for a line beginning "failed to sniff on".
 

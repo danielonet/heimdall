@@ -1,0 +1,19 @@
+{
+  "spec_id": "hc-swtgw218as",
+  "host": "192.168.0.2",
+  "username": "admin",
+  "password": "example-password",
+  "simulator": {
+    "auth_cookie": { "name": "admin", "value": "${md5(username + password)}" },
+    "login": { "method": "POST", "path": "/login.cgi", "ok_body": "pages/login_ok.html" },
+    "logged_out_body": "pages/logged_out.html",
+    "require_referer": true,
+    "public_paths": ["/", "/login.cgi"]
+  },
+  "routes": [
+    { "method": "GET", "path": "/info.cgi", "bodies": ["pages/info.html"] },
+    { "method": "GET", "path": "/port.cgi?page=stats", "bodies": ["pages/port_stats_1.html", "pages/port_stats_2.html"] },
+    { "method": "POST", "path": "/mac.cgi?page=fwd_tbl", "form": { "cmd": "firstpage" }, "bodies": ["pages/mac_page1.html"] },
+    { "method": "POST", "path": "/mac.cgi?page=fwd_tbl", "form": { "cmd": "nextpage" }, "bodies": ["pages/mac_page2.html"] }
+  ]
+}

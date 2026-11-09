@@ -9,7 +9,6 @@ and override block/unblock only when the router really supports them.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, List, Optional
 
 import httpx
@@ -17,62 +16,13 @@ import httpx
 from sentinel.adapter.base import RouterAdapter
 from sentinel.adapter.models import PortStats, TrafficGranularity, TrafficSample, WanStats
 from sentinel.adapter.sagemcom.delta import TrafficDeltaCalculator
+# These helpers moved to sentinel/net_common.py (the switch drivers share them and must not import from the
+# adapter layer). They are re-exported here so existing imports keep working.
+from sentinel.net_common import (  # noqa: F401
+    LOGIN_COOLDOWN_S, AdapterAuthError, LoginThrottle, build_base_url, norm_mac, to_int,
+)
 
 logger = logging.getLogger(__name__)
-
-# After a rejected login, refuse further attempts for this long. Routers lock
-# an account out after a handful of failures; polling every few seconds with a
-# wrong password must never turn into a brute-force lockout of the admin.
-LOGIN_COOLDOWN_S = 300.0
-
-
-class AdapterAuthError(Exception):
-    """The router rejected the configured credentials (or we are cooling down
-    after a rejection)."""
-
-
-class LoginThrottle:
-    """Blocks repeated login attempts after a failure."""
-
-    def __init__(self, cooldown_s: float = LOGIN_COOLDOWN_S) -> None:
-        self._cooldown_s = cooldown_s
-        self._blocked_until = 0.0
-
-    def check(self) -> None:
-        """Raise AdapterAuthError while cooling down after a failed login."""
-        remaining = self._blocked_until - time.monotonic()
-        if remaining > 0:
-            raise AdapterAuthError(f'login suppressed for {remaining:.0f}s after a rejected attempt')
-
-    def failed(self) -> None:
-        self._blocked_until = time.monotonic() + self._cooldown_s
-
-    def succeeded(self) -> None:
-        self._blocked_until = 0.0
-
-
-def norm_mac(mac: Any) -> str:
-    """Canonical lower-case colon form: accepts aa-bb-…, AABB.CCDD.…, aabb…"""
-    digits = ''.join(ch for ch in str(mac or '').lower() if ch in '0123456789abcdef')
-    if len(digits) != 12:
-        return ''
-    return ':'.join(digits[i:i + 2] for i in range(0, 12, 2))
-
-
-def to_int(value: Any) -> int:
-    """int() that returns 0 for None/blank/garbage instead of raising."""
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
-
-
-def build_base_url(host: str, scheme: str) -> str:
-    """`host` may be `ip`, `ip:port`, or already carry a scheme."""
-    host = host.strip().rstrip('/')
-    if host.startswith(('http://', 'https://')):
-        return host
-    return f'{scheme}://{host}'
 
 
 class HttpRouterAdapter(RouterAdapter):

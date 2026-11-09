@@ -148,6 +148,8 @@ Being upfront about what Heimdall does **not** do, rather than leaving it to be 
 
 - **Rogue AP / "evil twin" detection** needs extra hardware: it runs only when you add a second, monitor-mode WiFi adapter and choose it on the Equipment page, listens on 2.4 GHz channels 1, 6 and 11 only, and cannot block anything. It is off by default.
 - **On an ordinary switch, Heimdall does not see other devices' private traffic** — the sniff interface hears broadcast, multicast and its own machine's traffic. Suricata and Zeek see more only if the switch or router mirrors traffic to Heimdall's port.
+- **Managed-switch figures are the port's counters.** A device alone on a switch port is credited with everything the port carries, frame headers and broadcast traffic included, so the numbers read slightly higher than the data the device itself moved. A silent device behind an unmanaged hub is never learned, so its port is credited to the one device that is. A port shared by several devices stays a port total. Only the switches under [Supported switches](#supported-switches) can be read.
+- **Some switches log in with a plain hash over HTTP.** The HC-SWTGW218AS keeps its session in a cookie that is the MD5 of the user name and password, sent unencrypted, so anyone on the LAN who sees one request can reuse it. Use a long password that is not used anywhere else.
 - **Active port-scan detection** (someone scanning *you*) has no dedicated signature — Heimdall's own nightly scan runs *outward* against devices it already knows, it doesn't detect incoming scans.
 - **DNS-over-HTTPS/TLS** traffic bypasses DNS visibility (only cleartext UDP/53 is inspected), and **TLS-encrypted downloads** bypass the ClamAV file-extraction pipeline (no TLS interception is configured).
 - **Beaconing inside your own network is not detected** — the C2 beacon check only considers destinations outside your network; regular traffic to a broadcast or multicast address or another LAN device (Windows/Samba announcements, device discovery) is ignored, so a compromised device beaconing to another machine on the LAN is missed.
@@ -195,6 +197,16 @@ Pick your router family on the **Equipment** tab and add its login there (stored
 **Anything else (passive mode)** works with any router: no login, Heimdall finds devices from its own host's ARP table and a periodic ARP sweep. It gives you the device inventory, new-device alerts and everything that only needs the sniff interface (ARP/DHCP watch, OS fingerprinting, Nmap, Suricata, Zeek, ClamAV, honeypot, threat intel). It cannot give per-device traffic, WAN stats or block/quarantine, and it cannot confirm a DHCP reassignment, so expect an occasional false `ARP_SPOOF`. Pick it on the Equipment tab, then set it as the primary router. Details: [`docs/architecture/14-passive-adapter.md`](docs/architecture/14-passive-adapter.md).
 
 **Planned** routers can be selected and have their login saved, but Heimdall cannot poll them until the adapter ships. The WireMock stubs are hand-written from public API docs, so they prove nothing about a real device.
+### Supported switches
+
+A router counts wired traffic per port. A managed switch counts it on each of its own ports, so a device alone on a switch port gets its own upload and download. Heimdall reads the switch's port counters and MAC address table, credits a port to a device only when exactly one device is learned on it, and leaves a shared port (an uplink, an access point) as a port total. It only reads: it never changes a switch's settings.
+
+| Switch | Implemented | Real hardware | Tests | Simulator |
+|---|---|---|---|---|
+| HC-SWTGW218AS (web UI, form login with an MD5 cookie) | ✅ Implemented | ✅ Tested on the maintainer's switch (login, counters, MAC table, per-device credit and storage, run live; the dashboard page has not been checked on a running install yet) | ✅ Pages captured from the switch (scrubbed), replayed through the real driver | Captured pages (`tests/fixtures/switches/`) |
+
+Adding a switch is a JSON definition plus captured pages, not a new scraper; see [Adding a switch](CONTRIBUTING.md#adding-a-switch). Limits: the login cookie of the HC-SWTGW218AS is a plain MD5 of the user name and password sent over HTTP; the per-device figures are the port's counters, so they read slightly higher than the data the device itself moved; and a silent device behind an unmanaged hub is never learned, so its port is credited to the other device.
+
 **Own one of these routers? You can help — see [Help test your router](CONTRIBUTING.md#help-test-your-router).** Roadmap: [`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md); stubs: [`wiremock/`](wiremock/README.md).
 
 ---

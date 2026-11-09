@@ -114,6 +114,31 @@ CI runs the same checks on every PR — please make sure they pass locally first
 6. Open the "New router / switch support" issue template first if you want to
    talk design before coding.
 
+## Adding a switch
+
+A switch is one more *definition* for a driver that already exists, not a new scraper. Most web-managed
+switches need no Python at all. The design is in
+[`docs/router-and-switch-expansion-plan.md`](docs/router-and-switch-expansion-plan.md), Part 2.
+
+1. **Capture** the pages you need from your own switch, logged in, with your browser's "save page" or `curl`:
+   the port-counters page, the MAC address table (every page of it), and the page that shows the model and
+   firmware. Note how the login works (form fields, cookies) and what the switch sends when you are logged out.
+2. **Scrub** them: `python3 scripts/scrub-switch-pages.py <captured-dir> <out-dir> info.html` replaces every MAC and
+   private IP with a synthetic one. Then read the files: host names, serial numbers and SSIDs are yours to remove.
+3. **Write the definition** in `sentinel/switches/definitions/<id>.json` (copy `hc-swtgw218as.json`). It names the
+   pages, the login, and the table headers to look for. It is data: the loader rejects unknown keys, URLs that are
+   not paths on the switch, and anything outside the small template vocabulary.
+4. **Add the fixtures** in `tests/fixtures/switches/<id>/`: `pages/`, `fixture.json` (the routes and login behaviour)
+   and `expected.json` (what the pages should produce, worked out by hand from the raw numbers, not by running the
+   code under test). Copy the HC folder as a template.
+5. **Add a catalog entry** in `sentinel/switches/catalog.py` and a facts row in `docs/router/switch-facts.json`.
+6. Run `pytest tests/test_switches`. The generic suite picks your folder up and checks login, the snapshot, counter
+   deltas, direction, session expiry, a rejected login, a changed page and more, with no test code to write.
+
+A switch is listed as "Tested" only after someone has run Heimdall against the physical device. If it needs a
+login or data format the existing driver cannot express, write a new `SwitchSource` and register it in
+`sentinel/switches/registry.py`; it reuses the whole core.
+
 ## Pull requests
 
 - One logical change per PR; link the issue it closes.

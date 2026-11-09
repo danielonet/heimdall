@@ -1,4 +1,4 @@
-# Router selection & web-scraped switch monitoring
+# Router selection & managed-switch monitoring
 
 ## Context
 
@@ -19,10 +19,11 @@ This plan has two independent parts:
    Settings from a list of mainstream models/protocols, with a simulator
    (existing, or a WireMock one we build) for every adapter so none ships
    untested.
-2. **Part 2 — Web-scraped switch monitoring.** Up to 5 managed switches that
-   have no SNMP, only a crude web UI. The user adds each stats-page URL (plus
-   credentials if needed) in Settings; a generic scraper extracts per-port /
-   per-device upload and download numbers.
+2. **Part 2 — Managed-switch monitoring.** One shared pipeline (counters,
+   per-device attribution, storage, scheduling, UI) and pluggable *drivers* per
+   switch. The first target is a web-managed switch (HC-SWTGW218AS); the design
+   goal is that the next switch costs a JSON *definition* plus captured pages,
+   not a new scraper. SNMP is a second driver of the same pipeline.
 
 ### Relationship to existing design docs
 
@@ -34,9 +35,11 @@ This plan has two independent parts:
   *Settings-tab selection UX*, a *wider model catalog*, and the *simulator
   strategy*.
 - `docs/architecture/12-switch-discovery-snmp.md` specifies the SNMP switch
-  path (`sentinel/switches/`, `SwitchMonitor`, BRIDGE-MIB/IF-MIB). Part 2 adds
-  a second, SNMP-free *source* feeding the same `SwitchMonitor`. Nothing in
-  doc 12 changes.
+  path (`sentinel/switches/`, `SwitchMonitor`, BRIDGE-MIB/IF-MIB). Part 2 makes
+  the monitor, enricher and tables **driver-neutral**, so SNMP becomes one
+  driver and web-managed switches another. Doc 12 needs corrections before
+  anyone builds it, two of them breaking CLAUDE.md rule 5 and the upload/
+  download direction: see section 2.10.
 
 ### Honesty about sources
 
@@ -44,7 +47,9 @@ The protocol/model tables below come from the existing docs plus general
 knowledge of these ecosystems. Only OpenWrt's ubus documentation and the
 existence of MikroTik CHR container images were re-checked while writing this
 plan. Every row marked **verify** must be confirmed in Phase 0 before anyone
-writes adapter code against it.
+writes adapter code against it. The one switch described in Part 2 was checked
+only as far as its public login page (section 2.2); everything past the login
+is unknown until a capture is made.
 
 ---
 
@@ -221,221 +226,401 @@ Real-container sims and WireMock sims run the *same* suite.
 
 ---
 
-# Part 2 — Generic web-scraped switch monitoring
+# Part 2 — Managed-switch monitoring: one pipeline, many drivers
 
-## 2.1 Goal and the constraint that shapes everything
+The first target is a web-managed switch (HC-SWTGW218AS). The design goal is
+that the **second** switch costs a JSON file and some captured pages, not a new
+scraper: everything that is the same for every switch is written once, and
+everything that differs is data or one small plug-in.
 
-Home-lab switches (TP-Link "Easy Smart", Netgear "Plus", Zyxel GS1200,
-D-Link smart, etc.) typically have no SNMP, only a web UI. The user wants to
-paste a stats-page URL and get per-device upload/download.
+> **Status (2026-11-09): phases 0 to 3 are built** for the HC-SWTGW218AS: the shared core, the generic web
+> driver, its definition and captured-page fixtures, the database tables, the monitor job, the API, the
+> Equipment-tab section and the docs. Phases 4 to 6 are not started. Where this text and the code differ, the
+> code wins; section 2.9 lists what was built and what changed from the first draft of this plan.
+>
+> **Run on real hardware (2026-11-09):** the real driver, monitor, attribution and database layer ran against the owner's HC-SWTGW218AS: two polls around an 8 MB download credited 8.47 MB down and 70 KB up to the laptop on Port 1, credited the Heimdall box on Port 3, and left the 8-device uplink (Port 8) as a port total. The Equipment page and the scheduler job were not run against a live install.
 
-**Hard constraint:** these web UIs almost always expose
+## 2.1 Goal, and what the code already decides
 
-1. **per-port** packet/byte counters, and
-2. a separate **MAC address table** (MAC → port), usually *without* byte counts.
+**Goal:** for every device plugged into a switch Heimdall can read, show that
+device's own upload and download instead of the router's "PORT TOTAL", and keep
+saying "port total" where a per-device figure is not possible.
 
-Per-*MAC* byte counters are rare. So the scraper must support two ways to get
-per-device numbers:
+**Hard constraint (unchanged):** cheap switch UIs expose (1) per-port counters
+and (2) a MAC address table (MAC → port) *without* byte counts. Per-MAC byte
+counters are rare. So there are two ways to get a per-device figure:
 
-| Mode | What the page offers | Result |
+| Mode | What the switch offers | Result |
 |---|---|---|
 | **Direct** | A table with a MAC column *and* byte columns | `PER_DEVICE`, measured |
-| **Joined** | Port counters page + MAC-table page | If a port has exactly **one** MAC learned, that port's counters are that device's traffic → *inferred* per-device. If a port has several MACs (uplink, hub, downstream switch) → stays `PER_PORT` |
+| **Joined** | Port counters + a MAC table | A port with exactly **one** learned MAC: that port's counters are that device's traffic → `PER_DEVICE`. A port with several MACs (uplink, hub, downstream switch) stays `PER_PORT` |
 
-The joined result is **inferred**, not measured. CLAUDE.md rule 5 says wired
-traffic must not be shown as per-device measured when it isn't. So the
-data model gets an explicit marker (proposal: new
-`TrafficGranularity.PER_DEVICE_INFERRED`, rendered with a distinct badge) —
-see open question 2.
+**The rule already exists in the code.** The Sagemcom adapter does the same
+inference one level up: `SagemcomXmoAdapter._single_occupant_port_samples`
+gives a device alone on a router port that port's counters as `PER_DEVICE`, and
+`_wired_single_occupant_macs` in `sentinel/scheduler/jobs.py` sets
+`devices.traffic_granularity` from it (see `docs/router/sagemcom-xmo-api.md`).
+The switch applies the same rule one level down.
 
-**Direction is mirrored.** A switch port's *Rx* is what the device *sent*
-(its upload); the port's *Tx* is what the device *received* (its download).
-Each target gets a `perspective` setting (`port` | `device`) and the default is
-`port` → swap on import. Getting this backwards silently inverts the
-upload-ratio exfiltration detector, so it needs a test and a UI hint.
+> **Decision (reverses the earlier version of this plan):** reuse
+> `TrafficGranularity.PER_DEVICE`; **no `PER_DEVICE_INFERRED` enum.** That enum
+> was proposed before the single-occupant code existed. Two spellings of the same
+> inference would make the UI, the ML gating and the digest treat identical data
+> differently. The alternative is kept in the open questions.
 
-## 2.2 Settings UX
+**Direction is normalised once.** A switch port's *Rx* is what the device
+*sent* (its upload) and its *Tx* is what the device *received* (its download).
+Drivers always return **port-perspective** counters; the attribution step is
+the single place that maps them to the device's point of view (the Sagemcom
+adapter does the same swap for its LAN ports). Getting this backwards silently
+inverts the upload-ratio exfiltration detector, so it has its own test.
 
-A **Switches** panel, max **5 targets**:
+**Known inaccuracy, to be published:** a port is attributed to its one learned
+MAC even if a silent device shares it behind an unmanaged hub (a device that
+never transmits is never learned). Broadcast and multicast traffic flooded out
+of the port is counted as the device's download.
 
-| Field | Notes |
+## 2.2 The first switch: HC-SWTGW218AS
+
+Captured on 2026-11-09 from the owner's switch: one login with the owner's
+credentials and read-only page fetches (plus two page-navigation commands on the MAC table, which only change which
+page the switch displays). Nothing was changed, and the table's "clear" command was never sent. The pages, scrubbed of
+addresses, are the fixtures in `tests/fixtures/switches/hc-swtgw218as/`.
+
+| Fact | Evidence |
 |---|---|
-| Name | Free text |
-| Stats URL | The page with per-port (or per-device) counters |
-| MAC-table URL | Optional; enables Joined mode |
-| Auth | `none` · `basic` · `digest` · `form login` · `cookie/header` |
-| Credentials | Username + password (password → secret file, never DB) |
-| Form-login details | Login URL, field names, success marker — only when `form login` |
-| Mirror perspective | port / device (default port) |
-| Verify TLS | Off allowed (self-signed is the norm) |
-| Poll interval | Default = global poll interval, min 10 s |
-| Mapping | Auto-detected; editable after **Test & preview** |
+| 9 ports, one MAC table, firmware `V200.2.4`; the title and model are `HC-SWTGW218AS` | `info.cgi` |
+| **Login:** `POST /login.cgi` with `username`, `password`, `Response = md5(username + password)` and `language`; the page's JavaScript also sets the cookie `admin=<that md5>`. The login's own answer is a script that redirects to `/`. The cookie is the whole session: requests that carry it are logged in | `login.cgi`, `formSubmit()` |
+| A logged-out request is **HTTP 200** with a script `location.replace("/login.cgi")`, never a 401 | every page when the cookie is missing |
+| **Every page except `/` and `/login.cgi` answers `404` with a blank body unless the request carries a `Referer` header** (any value, even empty). A plain `curl` is refused for this reason; a browser is not | bisected header by header |
+| **Counters:** `port.cgi?page=stats` has columns `Port`, `State`, `Link Status`, `TxGoodPkt`, `RxGoodPkt`, `TxGoodBytes`, `RxGoodBytes`. Each number is shown as two 32-bit words, `<high>-<low>` (for example `0-130522`); the page's script combines them. So the counters are **64-bit, cumulative, in bytes** | `port.cgi?page=stats` |
+| **Direction is the port's:** after a 20 MB download on the laptop plugged into Port 1, Port 1's `TxGoodBytes` rose by 21.0 MB and its `RxGoodBytes` by 76 KB; the uplink port showed the mirror image. So Tx is what the switch sent to the device (its download) and Rx what the device sent (its upload). Counted at layer 2, hence about 5 % above the payload | live measurement |
+| **MAC table:** `mac.cgi?page=fwd_tbl`, columns `MAC Address`, `Type`, `Port`, `VLAN ID`. It is **paginated** (10 per page here; 20 and 30 are offered). Which page is shown is state kept by the switch, changed by POSTing `cmd=firstpage` / `nextpage` (the same form also offers `mactblclr`, which clears the table and must never be sent). The page says `Total 11 Items` and `<label id='totalpage'>2 </label>Pages` | `mac.cgi?page=fwd_tbl` |
+| The switch's own address appears in its table on port `CPU` | page 2 of the MAC table |
+| Link state and speed (`Nego Speed Status`: `1000M`, `10M`, `Auto`) are on `info.cgi`, link up or down also on the stats page | `info.cgi` |
+| The HTML is sloppy (some `<th>` cells are closed with `</td>`), so the parser must be tolerant | `info.cgi` |
+| A poll costs about 1.5 s (login-free, 4 to 6 requests); the switch answers one request at a time | measured |
 
-**Test & preview** is the core UX: it fetches the page, shows every table it
-found, highlights the columns it decided are *port / MAC / rx / tx*, and lets
-the user click to correct them. The corrected mapping is saved on the target,
-so the heuristics only need to be right *most* of the time.
+**Consequences.** The cookie is a static hash of the credentials, so the session
+does not expire, and anyone on the LAN who sees one request can replay the login.
+That is the switch's design, not something Heimdall adds, but each poll is one
+more exposure; it is on the known-limits page. The switch's wrong-password
+response was deliberately **not** captured (a failed login risks locking the
+admin account): a rejected login is detected by asking for a real page afterwards
+and getting the logged-out one.
 
-## 2.3 Fetching and authentication
+**Still unknown** (none of it blocks the driver): whether the switch also speaks
+SNMP (the admin menu has no SNMP page, so the web driver is the only route),
+whether it has a read-only user, whether repeated wrong passwords lock it, and
+whether more than one browser session can be open at once. The driver polls
+modestly and never retries a rejected login.
 
-Plain `httpx.AsyncClient` (CLAUDE.md rule 2), one client per target with its
-own cookie jar.
+**Credentials.** The owner keeps a `user:pass` file at `secrets/switch_password.txt`
+(git-ignored) for capture runs on a dev machine. In production the password goes
+through the Equipment tab into the secrets directory, exactly like a router's,
+never into the database, the environment or a log.
 
-- `basic` / `digest`: `httpx.BasicAuth` / `httpx.DigestAuth`.
-- `form login`: POST configured fields, keep cookies; re-login on a response
-  that matches the "logged out" marker (login-page HTML with HTTP 200 is the
-  usual signal). Some switches hash the password client-side (MD5 in
-  JavaScript) — support an optional `password_transform: md5|sha256|none`.
-- `cookie/header`: user pastes a cookie or header (stored as a secret) for
-  switches whose login can't be replayed; documented as a last resort that
-  expires.
-- **Single-session switches**: many cheap switches allow one logged-in session
-  and *log the browser out* when a second client logs in. Keep polling at a
-  modest interval, log out cleanly if a logout URL is configured, and document
-  the effect on the user's own browser sessions.
-- **Safety**: only RFC1918/link-local hosts; no redirects to other hosts;
-  response size cap (2 MB); short timeouts; never follow `file:`/non-http
-  schemes; credentials never logged. This is an SSRF surface — an admin-only
-  API that fetches arbitrary URLs must be locked to the LAN.
+## 2.3 What varies between switches, and what does not
 
-## 2.4 Extraction — and why not trafilatura alone
+| Concern | Differs per switch? | Where it lives |
+|---|---|---|
+| Login: form + hashed cookie, Basic, Digest, token in URL, SNMP community, vendor REST | Yes, but there are only a handful of shapes | **auth strategy** — small, shared, reused by every definition |
+| Page / endpoint names | Yes | **definition** (data) |
+| Data format: HTML `<table>`, `var ports = [...]` in a script, JSON, XML, plain text | A handful of shapes | **extractor** — small, shared |
+| Column names and order, units, bytes vs packets, 32 vs 64-bit, label perspective | Yes | **definition** (matched by header text, not column number) |
+| Port names (`1`, `Port 1`, `g3`, `Trk1`) and MAC formats (`aa-bb-…`, `AABB.CCDD.…`) | Yes | **definition** + shared normalisers |
+| Delta maths and wrap, the join, occupancy, direction, DB writes, scheduling, back-off, API, UI, secrets, retention, LAN-only guard | **No** | **shared core, written once** |
+| A genuinely different protocol: SNMP, SSH, a vendor REST API | Yes | a **code driver** implementing `SwitchSource` |
 
-`trafilatura` is built to strip boilerplate and return the *main article text*
-of a page. A switch statistics page is the opposite: it is mostly
-navigation, tables and form controls — exactly what trafilatura is designed to
-discard — so it is lossy and unpredictable here. Recommendation:
+## 2.4 Architecture
 
-- **Primary:** parse the real DOM with `selectolax` (fast, small) or `lxml`,
-  and convert `<table>`s into rows. Many old switch UIs use `<frameset>`/`<iframe>`
-  and the stats live in a *sub-document* — fetch frames explicitly, or let the
-  user paste the frame URL.
-- **Fallback only:** `trafilatura` (with tables enabled) or plain text
-  extraction for pages with no usable `<table>`, feeding the regex layer below.
-
-Extraction layers, tried in order; first confident result wins:
-
-1. **Embedded/XHR JSON or XML.** Many switch UIs fetch data from a separate
-   endpoint (or inline `var ports = [...]`). If the user supplies that
-   endpoint, or we find a JSON blob in a `<script>`, parse it directly —
-   most reliable. (The preview shows detected endpoints.)
-2. **Table layer.** Find tables whose header cells match the lexicon; pick the
-   best-scoring table; map columns.
-3. **Key-value layer.** Rows like `Port 3  TxGoodPkt 12  RxGoodPkt 40` or
-   definition lists.
-4. **Free-text regex layer** over text extraction — last resort.
-
-**Lexicon** (case-insensitive, multi-language-ready, editable):
-
-| Concept | Header keywords |
-|---|---|
-| port | `port`, `interface`, `if`, `p1`… |
-| mac | `mac`, `mac address`, `hardware` |
-| rx / in | `rx`, `recv`, `received`, `in`, `ingress`, `inoctets`, `rx bytes` |
-| tx / out | `tx`, `sent`, `transmit`, `out`, `egress`, `outoctets`, `tx bytes` |
-| unit hint | `bytes`, `octets`, `packets`, `pkts`, `kb`, `mb`, `gb`, `mbps` |
-
-**Value handling** (this is where generic scrapers go wrong):
-
-- Parse `1,234,567`, `1.2 GB`, `850 Kbps`, `0x…`, and locale decimals.
-- **Packets vs bytes:** if only packet counters are available the target is
-  flagged *packets-only* — usable for liveness but not for upload/download;
-  tell the user rather than showing fake Mbps.
-- **Cumulative vs rate:** most pages show cumulative counters → reuse the
-  existing delta calculator (`sentinel/adapter/sagemcom/delta.py`, move to a
-  shared module) including reset and 32-bit wrap handling. Pages showing a
-  rate (Mbps) are marked `kind: rate`.
-- **Stale page:** if no counter changes for N polls on a port that is link-up,
-  flag "not updating" (some UIs cache).
-- Normalise MACs (`aa-bb-cc…`, `AABB.CCDD…`, `aabbcc…` → `AA:BB:CC:…`).
-
-**Mapping profile** saved per target:
-
-```json
-{
-  "mode": "joined",
-  "stats":  {"table": {"header_match": "Port.*Rx.*Tx"}, "cols": {"port": 0, "rx": 3, "tx": 5},
-             "unit": "bytes", "kind": "cumulative"},
-  "macs":   {"table": {"header_match": "MAC"}, "cols": {"mac": 1, "port": 2}},
-  "perspective": "port"
-}
+```
+ switch ──[driver]──▶ SwitchSnapshot ──[core]──▶ deltas ──▶ attribution ──▶ TrafficSample / SwitchPortStat ──▶ DB, UI
+            ▲                                   └────────── pure functions, no I/O, unit-testable ──────────┘
+            └─ the ONLY layer that talks to a switch
 ```
 
-Profiles are matched by header regex, not just column index, so a firmware
-update that inserts a column doesn't silently shift the data.
-
-## 2.5 Architecture
-
-New package, beside doc 12's SNMP sources (CLAUDE.md rule 1 spirit: the
-scraper is a *source*; detectors never see HTML):
+Same shape as the router side: `RouterAdapter` + `catalog.py`. CLAUDE.md rule 1
+is extended in spirit: **nothing outside `sentinel/switches/` talks to a
+switch**, and detectors never see HTML.
 
 ```
 sentinel/switches/
-  models.py              # shared with doc 12: SwitchPortSample, MacTableEntry
-  source.py              # SwitchSource protocol: async poll() -> SwitchPoll
-  snmp/…                 # doc 12
-  scrape/
-    fetcher.py           # httpx client per target, TLS/redirect/size guards
-    auth.py              # none/basic/digest/form/cookie strategies
+  models.py          # SwitchSnapshot, PortCounters, MacEntry, SwitchIdentity (dataclasses)
+  source.py          # SwitchSource protocol + SwitchAuthError / SwitchUnreachable / SwitchParseError
+  catalog.py         # SwitchSpec + CATALOG — mirrors sentinel/adapter/catalog.py
+  registry.py        # @register_driver('web-definition'); build_source(spec, host, user, password)
+  ownership.py       # who owns a device's numbers: the router poll or a switch (freshness window)
+  store.py           # one poll -> one transaction (port rows, device samples, devices.switch_*)
+  core/
+    counters.py      # CounterTracker: deltas with reset and 32/64-bit wrap
+    attribution.py   # occupancy -> per-device sample or port total, the one direction swap
+    monitor.py       # SwitchMonitor: poll each target, back-off, status
+  web/               # the generic driver for web-managed switches
+    definition.py    # schema (pydantic dataclasses), loader, validation
+    template.py      # ${username}, ${md5(username + password)} — whitelist evaluator, no eval
+    fetch.py         # the LAN-only guard
+    snapshot.py      # pages -> SwitchSnapshot (pure)
+    source.py        # WebDefinitionSource(SwitchSource): form login, logged-out detection, pagination
     extract/
-      tables.py          # DOM → rows, header scoring
-      lexicon.py         # keyword sets
-      embedded.py        # JSON/XML endpoints and <script> blobs
-      text_fallback.py   # trafilatura / regex
-      values.py          # number & unit parsing, MAC normalisation
-    profile.py           # mapping profile dataclass + autodetect + validate
-    scrape_source.py     # ScrapeSwitchSource(SwitchSource)
+      html_table.py  # tolerant table parser, header-text lookup
+      values.py      # numbers (plain, hi-lo), speeds, port ids
+  definitions/
+    hc-swtgw218as.json   # one file per switch family or model
+  # planned, not built: web/auth.py (more login styles), extract/js_var.py, json_path.py, text_regex.py,
+  # snmp/ (doc 12's reader as a second SwitchSource), tools/capture.py
+tests/fixtures/switches/<id>/   # fixture.json, pages/, expected.json
+tests/test_switches/            # the generic fixture suite + unit tests; tests/test_api/test_switches.py
 ```
 
-`SwitchMonitor` (doc 12 §6) consumes any `SwitchSource`; `enricher.py` joins
-port counters with the MAC table and emits `TrafficSample`s with the correct
-granularity. Data classes are dataclasses with type hints and docstrings, per
-CLAUDE.md. Scheduler: a `switch_scrape_job` per enabled target with
-exponential back-off on failure and a per-target `last_ok` / `last_error`
-shown in the UI.
+### The contract every driver implements
 
-**Data model**: `switch_targets` table (slot 1–5 with a CHECK constraint /
-unique index, name, urls, auth mode, username, non-secret auth config JSON,
-mapping profile JSON, perspective, enabled, `last_ok_at`, `last_error`);
-passwords in `switch_{slot}_password` secret files. Alembic migration.
+```python
+@dataclass
+class PortCounters:
+    port: str                    # the switch's own label: '1', 'g3', 'Trk1'
+    rx_bytes: int | None         # received BY the switch on this port  (= the device's upload)
+    tx_bytes: int | None         # sent BY the switch out of this port  (= the device's download)
+    rx_packets: int | None = None
+    tx_packets: int | None = None
+    link_up: bool | None = None
+    speed_mbps: int | None = None
+    counter_bits: int = 64       # 32 turns on wrap handling
 
-**API**: `GET/POST/PATCH/DELETE /api/switches`, `POST /api/switches/preview`
-(fetch + extract, return tables and the proposed mapping; does **not** save),
-`POST /api/switches/{id}/test`.
+@dataclass
+class MacEntry:
+    mac: str                     # canonical lower-case colon form
+    port: str
+    vlan: int | None = None
+    dynamic: bool = True         # learned, not static
 
-## 2.6 Candidate switches (to collect fixtures for)
+@dataclass
+class SwitchSnapshot:
+    identity: SwitchIdentity     # model, firmware, own MAC (to exclude it from occupancy)
+    ports: list[PortCounters]
+    macs: list[MacEntry]
+    taken_at: datetime
 
-Not verified; each needs real captured pages in Phase 0 and the exact
-stats/MAC-table page names are intentionally not guessed here:
+class SwitchSource(Protocol):
+    async def poll(self) -> SwitchSnapshot: ...
+    async def aclose(self) -> None: ...
+```
 
-TP-Link TL-SG105E / SG108E (Easy Smart), Netgear GS105E / GS108E / GS308E
-(Plus), Zyxel GS1200-5/8, D-Link DGS-1100 smart series, TRENDnet web-smart,
-Linksys LGS-series, Mercusys MS108G.
+A driver returns facts and nothing else. It never computes deltas, never
+guesses a direction, never touches the database and never names a device. A
+page that no longer matches raises `SwitchParseError` ("the switch's layout
+changed"), **never zeros**. A rejected login raises `SwitchAuthError`.
 
-Community contributions: accept a scrubbed HTML capture + mapping profile per
-model under `tests/fixtures/switches/<vendor>-<model>/` and list the model as
-*supported* only once its fixture test passes.
+### The catalog entry (what the Equipment tab renders)
 
-## 2.7 Testing
+```python
+SwitchSpec(
+    id='hc-swtgw218as', label='HC SW-TGW218AS (web UI)', family='HC web-managed',
+    protocol='HTTP form login (MD5 cookie), HTML pages', driver='web-definition', definition='hc-swtgw218as',
+    implemented=True,     # its fixture suite passes (tests/fixtures/switches/hc-swtgw218as/)
+    tested=True,          # run against the physical switch (2026-11-09)
+    default_username='admin', notes='…',
+)
+```
 
-- **Fixture tests**: saved HTML/JSON per model → expected `SwitchPoll`
-  (offline, fast, deterministic). This is the main safety net.
-- **WireMock**: login flows (form + cookie), session expiry/re-login,
-  login-page-with-HTTP-200, redirects, oversized responses, frames.
-- **Unit tests**: unit/number parsing, MAC normalisation, wrap/reset,
-  port-vs-device perspective swap, single-MAC-per-port inference, multi-MAC
-  port staying `PER_PORT`, packets-only flagging.
-- **Property/fuzz**: random column order and extra columns must not change the
-  mapped result when headers are intact.
+The form is rendered from `GET /api/switches/catalog` exactly like the router
+catalog, so a new switch needs **no frontend code**. The word *definition* is
+used on purpose: `router_profiles` / `PROFILE_ROUTERS` already mean something
+else.
 
-## 2.8 Phases — Part 2
+### A web definition (the real `hc-swtgw218as.json`, abridged)
+
+```jsonc
+{
+  "version": 1,
+  "id": "hc-swtgw218as",
+  "match": { "title": "HC-SWTGW218AS" },
+  "request_headers": { "Referer": "${base_url}/" },          // this switch answers 404 to a request with no Referer
+  "auth": {
+    "type": "form",
+    "login_url": "/login.cgi",
+    "fields":  { "username": "${username}", "password": "${password}",
+                 "Response": "${md5(username + password)}", "language": "EN" },
+    "cookies": { "admin": "${md5(username + password)}" },    // the cookie is the whole session
+    "verify_url": "/info.cgi",                                // a rejected login still answers 200: ask for a real page
+    "logged_out_marker": "location\\.replace\\(\"/login\\.cgi\"\\)"
+  },
+  "pages": {
+    "info":  { "url": "/info.cgi" },
+    "stats": { "url": "/port.cgi?page=stats" },
+    "macs":  { "url": "/mac.cgi?page=fwd_tbl",
+               "paginate": { "url": "/mac.cgi?page=fwd_tbl", "first": { "cmd": "firstpage" }, "next": { "cmd": "nextpage" },
+                             "total_pages": "id='totalpage'>\\s*(\\d+)", "max_pages": 20, "restore": true } }
+  },
+  "ports": {
+    "table": { "page": "stats", "header_match": ["^Port$", "TxGoodBytes", "RxGoodBytes"],
+               "columns": { "port": "^Port$", "link": "^Link Status$", "tx_bytes": "^TxGoodBytes$", "rx_bytes": "^RxGoodBytes$" } },
+    "port_id": "^Port\\s*(\\S+)$", "number_format": "hi_lo", "counter_bits": 64, "perspective": "port", "link_up_text": "Link Up",
+    "speeds": { "table": { "page": "info", "header_match": ["^Port$", "Nego Speed"], "columns": { "port": "^Port$", "speed": "Nego Speed" } } }
+  },
+  "macs": { "table": { "page": "macs", "header_match": ["MAC Address", "^Port$", "VLAN"],
+                       "columns": { "mac": "MAC Address", "type": "^Type$", "port": "^Port$", "vlan": "VLAN" } } }
+}
+```
+
+Rules that keep this from growing into a programming language: a definition
+has **no loops and no conditions**. Columns are found by **header text**, so a
+firmware update that inserts a column does not silently shift the data. If a
+firmware needs logic the vocabulary cannot express, write a code driver; do not
+grow the definition language.
+
+## 2.5 Adding another switch
+
+| Case | Example | What you write | Python? |
+|---|---|---|---|
+| **A. Same firmware family, new model** | another HC-style box with different page names | copy the definition, change URLs and header texts, add fixtures | none |
+| **B. New web firmware** | a TP-Link Easy Smart, Netgear Plus, Zyxel GS1200 | a new definition; plus a new auth strategy or extractor *only if* none fits (30–80 lines each, unit-tested) | a little |
+| **C. A different protocol** | SNMP, a vendor REST API | a class implementing `SwitchSource` plus `@register_driver`; it reuses the whole core | one class |
+
+Checklist for every switch:
+
+1. **Capture** the pages from your own switch, logged in (browser "save page" or `curl`; the HC switch needs a `Referer` header). A capture *tool* that logs in and saves everything is not built: the pages are few.
+2. **Scrub** with `python3 scripts/scrub-switch-pages.py` (MACs and private IPs become synthetic), then read the files for host names, serial numbers and SSIDs. `tests/test_switches/test_fixture_privacy.py` fails on any real-looking MAC or non-example address in `tests/fixtures/switches/`.
+3. **Write the definition**, copying `hc-swtgw218as.json`.
+4. **Write `expected.json`**: the snapshot the pages should produce.
+5. **Add the catalog entry** and its facts row (the website's switch table is generated from them and the build fails if a facts row is missing, like routers). Set `implemented=True` only when the fixture suite passes.
+6. **Run the generic suite.** It discovers every folder under `tests/fixtures/switches/`, so there is no test code to write.
+
+"Tested" is a separate label, given only after a run on real hardware. Until then
+the website says "checked against captured pages".
+
+## 2.6 The shared core
+
+**Counters** (`core/counters.py`) — a new `CounterTracker`, not a change to
+`TrafficDeltaCalculator`, so router behaviour is untouched. First sample = no
+delta. A decrease is a **wrap** if the driver says `counter_bits=32` *and* the
+wrapped delta is plausible for the link speed and interval; otherwise it is a
+**reset** (the delta is the new value). The plausibility check stops a reboot or
+a "clear counters" click being misread as a wrap. A 32-bit counter at 1 Gb/s
+wraps in about 34 s, so a 32-bit switch needs an interval of 15–30 s; longer
+intervals get a visible "counters may wrap between polls" warning instead of
+silently wrong numbers. Idle ports are evicted from the tracker.
+
+**Attribution** (`core/attribution.py`) — pure functions:
+
+- Occupancy of a port = the set of distinct **dynamic** MACs learned on it, excluding the switch's own MAC, counting a MAC once across VLANs.
+- Exactly one MAC → a `PER_DEVICE` `TrafficSample`: device upload = port `rx`, device download = port `tx`.
+- More than one → credited to nobody. As built, the port's totals live only in `switch_port_stats` (with the number of devices on it); **no `traffic_samples` row is written**, because the router's own port sample already represents a shared port to the rest of Heimdall and `traffic_samples.mac_address` is a 17-character column that does not fit a switch-port key.
+- A MAC that is not in `devices` is **not created** in v1 (the router stays the inventory); it is counted in the switch status ("3 unknown MACs"). Phase 6 can raise NEW_DEVICE for it through the existing placeholder path.
+
+**Who owns a device's number.** Two risks, both of the kind this codebase has
+already been bitten by (see the `is_primary` comment in `_upsert_devices`):
+
+1. *Flip-flop.* The router poll rewrites `devices.traffic_granularity` every
+   cycle from its own view (`per_port` for anything behind a shared router port).
+   Without a rule the value toggles between the router's and the switch's view
+   every cycle. **Rule:** new columns `devices.switch_target_id`, `switch_port`,
+   `switch_seen_at`; while `switch_seen_at` is fresh (2 × the switch interval),
+   `_upsert_devices` keeps `per_device`.
+2. *Double counting.* If a device is alone on a router port **and** the switch
+   attributes it, both would insert a `PER_DEVICE` row for the same traffic.
+   **Rule:** while `switch_seen_at` is fresh, the router poll skips its
+   `PER_DEVICE` row for that MAC; the switch is closer to the device and wins.
+
+Both get regression tests.
+
+**Persistence.** Samples go through the existing `_insert_traffic_samples`. A
+new hypertable `switch_port_stats` holds per-port totals and deltas (doc 12 §9
+has the columns, made driver-neutral). **Add it to the nightly retention job
+from day one**: that job today drops chunks of `traffic_samples` and `port_stats`
+only, so a new hypertable not named there grows forever.
+
+**Scheduling.** One `SwitchMonitor`, owned by the scheduler, one APScheduler
+job; each target is polled concurrently with its own timeout; one failing switch
+never delays or fails the router poll. Per-target back-off 1 → 15 minutes
+(the same shape as the router reconnect), with `last_ok_at`, `last_error` and
+`consecutive_failures` stored and shown. A `SwitchAuthError` is never retried
+automatically (a lockout lesson from the Sagemcom): the UI says "login rejected,
+fix the password".
+
+**Data model.** `switch_targets(id, spec_id, name, host, port, username,
+tls_verify, poll_interval_s, enabled, options JSON, last_ok_at, last_error,
+created_at, updated_at)`. The id is server-generated, so the password file name
+(`switch_secret_path(id)`, next to `router_secret_path`, same secrets
+directory) can never contain user text. The limit of 5 targets is a setting
+checked by the API, not a database constraint. Two identical switches are two
+targets of one catalog entry.
+
+**API and UI.** `GET /api/switches/catalog`, `GET/POST/PATCH/DELETE
+/api/switches`, `POST /api/switches/{id}/test` (log in, read once, report the
+model and the port and MAC counts, never the password), optional `POST
+/api/switches/detect` using each entry's `match`. The Equipment tab's SWITCHES
+placeholder is replaced by a list plus the catalog-rendered form; the device
+detail page shows "via <switch>, port N".
+
+**Shared helpers.** `norm_mac`, `to_int`, `LoginThrottle`, `AdapterAuthError`
+and `build_base_url` live in `sentinel/adapter/http_adapter.py` today. Move them
+to a neutral module and re-export them from `http_adapter`, so existing adapters
+and tests do not change and `sentinel/switches/` never imports from
+`sentinel/adapter/`.
+
+## 2.7 Safety
+
+The old "paste any URL" design made an admin-only API fetch arbitrary URLs: an
+SSRF surface. Definitions shrink it, because the user picks a model and a host,
+and the URLs come from a reviewed file.
+
+- **Definitions are data, not code.** Strict schema, unknown keys rejected, URLs must be relative paths on the target host. Templates run in a whitelist evaluator (variables `username`, `password`, `host`; functions `md5`, `sha1`, `sha256`, `base64`, `upper`, `lower`; `+`) and never through `eval`. This is what makes a community-contributed definition safe to merge, and safe to import later.
+- Only RFC 1918 / link-local hosts. No redirects to another host. 2 MB response cap. Short timeouts. Only `http`/`https`.
+- Credentials, cookies and login bodies are never logged. Errors name the switch, not the secret.
+- A rejected login starts a 5-minute cool-down (`LoginThrottle`) so a wrong password cannot turn into a lockout of the switch's admin account.
+- If a switch allows one session and logs the owner's browser out, poll modestly, log out cleanly when the definition has a `logout_url`, and say so in the manual.
+
+## 2.8 Testing
+
+- **Generic fixture suite.** Parametrised over every folder in `tests/fixtures/switches/`. Each holds `exchange.json` (recorded request → response pairs served by `httpx.MockTransport`), `pages/` (scrubbed bodies) and `expected.json`. It asserts that the definition validates, the login replays, the snapshot equals `expected.json`, and a second poll with advanced counters gives the expected deltas.
+- **Scenarios every definition must also pass**, generated from its own exchange: session expiry (a logged-out page with HTTP 200 → exactly one re-login), wrong password (`SwitchAuthError`, no retry loop, cool-down), a changed or truncated page (`SwitchParseError`, never zeros), an oversized body, an off-host redirect.
+- **Core unit tests.** Counters: first sample, reset, 32-bit wrap, implausible wrap read as reset. Attribution: one, several and no MACs, the switch's own MAC, the same MAC in two VLANs, the direction swap. Ownership: no flip-flop against the router's `per_port`, no double row. Template evaluator: whitelist and injection attempts. Parsing: `1,234,567`, the `<high>-<low>` 64-bit form, speeds (`1000M`, `1G`, `Auto`), MAC formats. Units such as `1.2 GB` and hexadecimal are not implemented: no switch captured so far needs them.
+- **Driver contract test**, run on every `SwitchSource` (definition-driven or code): canonical MACs, non-negative integers, unique port ids.
+- **Property test.** Reordering columns with intact headers gives the same snapshot.
+- **Real hardware.** The Phase 0 capture is also the first live run; "Tested" is set only after a documented one.
+
+## 2.9 Phases
 
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
-| 0 | Capture real pages from the user's switch(es); finalise lexicon; decide library (`selectolax` vs `lxml`) | ≥1 real fixture per owned switch |
-| 1 | `switch_targets` + migration, fetcher, `none`/`basic`/`digest` auth, table extractor, **Direct** mode, preview endpoint, one-target Settings panel | Owned switch shows correct deltas |
-| 2 | **Joined** mode, enricher integration, `PER_DEVICE_INFERRED` badge in Devices UI, perspective handling | Single-MAC port traffic appears under the device, marked inferred |
-| 3 | `form login` + `cookie/header`, embedded-JSON layer, up to 5 targets, status/back-off UI | Re-login after expiry proven in WireMock |
-| 4 | Key-value/regex fallback, community fixture workflow, docs | Documented "add your switch" guide |
+| 0 | Capture the HC switch's pages (one read-only login, scrubbed); answer every item in 2.2, including whether it speaks SNMP | Fixtures and `expected.json` committed; the "not yet known" list is empty |
+| 1 | Core + web driver + HC definition, **offline**: models, counters, attribution, template, auth, fetch, extractors, loader, generic suite | HC fixtures pass; no database and no UI yet |
+| 2 | Persistence and monitor: `switch_targets` and `switch_port_stats` migration, secrets path, `SwitchMonitor` job, device columns, ownership rules, retention | With a fake source, single-MAC ports give `PER_DEVICE` rows, shared ports stay `PER_PORT`, no flip-flop, no double row |
+| 3 | API, Equipment tab, device-detail line, **and the docs/website changes in the same change** (CLAUDE.md): manual Part 5 and `network-setup.md`, the SWITCHES placeholder text, the switch table (generated, with a facts file), README "Supported switches", the known-limits page, `wired-monitoring-caveat.md`, `docs/INDEX.md` | The owner's switch shows live per-device numbers; the manual chapter keeps its "Draft" note until checked on a running dashboard |
+| 4 | **A second driver, added without touching `core/`**: SNMP BRIDGE-MIB / IF-MIB (doc 12) or a second web definition | Passes the driver contract and fixture suites; the diff touches `web/definitions/` or `snmp/` only |
+| 5 | Optional: unknown MAC seen on a switch port → NEW_DEVICE; detection and ML scoring for switch samples, as the Sagemcom single-occupant samples already get | Decided by the owner |
+| 6 | Optional: a "Test & preview" authoring UI that fetches a live page, shows its tables and drafts a definition | An aid for writing definitions, never a runtime guess |
+
+`implemented=True` is set per switch when its fixture suite passes; "Tested"
+only after a real-hardware run. Nothing is advertised before then.
+
+**What was built (phases 0 to 3), and where it differs from the first draft:**
+
+- Phase 0 found three things the draft did not expect: the **`Referer` requirement**, the **paginated MAC table with state kept on the switch**, and **64-bit counters shown as two 32-bit words**. The definition language gained a `paginate` block (the driver, not the definition, does the walking, and restores the switch's view to page 1 afterwards) and a `hi_lo` number format.
+- `core/`: `CounterTracker` (reset and 32-bit wrap, with a plausibility check), `attribute()` (occupancy, the single direction swap), `SwitchMonitor` (per-switch interval, back-off from 60 s doubling to 15 min, one failure never delays another, configuration changes picked up by fingerprint).
+- `web/`: definition schema (pydantic, unknown keys rejected, paths only, template whitelist), `snapshot.py` (pure page-to-snapshot), `source.py` (form login, logged-out detection, re-login once, pagination), `fetch.py` (an explicit RFC 1918 / link-local / unique-local allow-list, because Python's `is_private` also accepts documentation and reserved ranges). Separate auth strategies are not split out yet: the one form login lives in `source.py` until a second login style needs the split.
+- Persistence: `switch_targets`, `switch_port_stats` (hypertable, pruned by the nightly retention job from day one), `devices.switch_*`; `_upsert_devices` keeps a switch-owned device `per_device` and the router poll skips its own row for it.
+- API and UI: `/api/switches` (catalog, CRUD, test, ports), the Equipment tab's Switches section, a badge and note on the device page.
+- Docs: manual (Equipment, guide Part 5, troubleshooting), README, known limits, equipment page (generated from `docs/router/switch-facts.json`), CONTRIBUTING "Adding a switch", `scripts/scrub-switch-pages.py`.
+- Not built: a capture tool, the SNMP driver (phase 4), unknown-MAC alerts and ML scoring for switch samples (phase 5), the authoring UI (phase 6).
+
+## 2.10 Changes this plan makes to other documents
+
+**`docs/architecture/12-switch-discovery-snmp.md`.** The old statement "nothing
+in doc 12 changes" no longer holds. Fix before anyone implements it:
+
+1. **§7 `DeviceEnricher` copies a port's totals onto every MAC learned on that port.** On an uplink with ten MACs, each of the ten gets the whole port's traffic, labelled `per_device`. That breaks CLAUDE.md rule 5. Replaced by `core/attribution.py`.
+2. **The same code assigns `bytes_sent_delta = port.bytes_out_delta`**, which is what the device *received*. Upload and download are inverted, and so is `HighUploadDetector`'s input.
+3. §3.2 "upgrades every MAC to `per_device`" becomes: only single-occupant ports.
+4. `SwitchMonitor._poll_switch` builds an `SnmpClient` directly. It becomes `SnmpSource(SwitchSource)`; the monitor, registry and tables are shared with the web driver.
+5. Doc 12's `switches` table (discovered) and `switch_targets` (configured) are merged: `switch_targets` is the one table; LLDP and sweep discovery (doc 12 §5) only *propose* a target, which the user confirms.
+
+**`docs/router/wired-monitoring-caveat.md`:** add the switch route once Phase 3 ships.
+
+**`CLAUDE.md`, rule 1:** proposed wording for the maintainer to adopt: "…and never access a switch outside `sentinel/switches/`". Not edited by this plan.
+
+**`docs/INDEX.md`:** the rows for this document, doc 12 and `docs/router/switch-facts.json` are updated.
 
 ---
 
@@ -443,11 +628,17 @@ model under `tests/fixtures/switches/<vendor>-<model>/` and list the model as
 
 | Risk | Mitigation |
 |---|---|
-| Scraped pages break on firmware updates | Header-regex profiles, "not updating"/parse-failure alerts, fixtures per model |
+| Scraped pages break on firmware updates | Header-text column matching, `SwitchParseError` (never zeros) shown as "layout changed", fixtures per firmware |
 | Single-session switches log the user out of their own browser | Modest poll interval, clean logout, documented clearly |
-| Inferred per-device wrongly labelled measured | Distinct granularity value + UI badge + tests |
-| Inverted upload/download | `perspective` default + explicit test |
-| SSRF via the URL field | LAN-only allow-list, no cross-host redirects, size/time caps |
+| A port shared with a silent device behind an unmanaged hub is attributed to the one learned MAC | Published as a known limit; single-MAC rule is the same one the Sagemcom adapter already uses |
+| Inverted upload/download | Drivers return port-perspective counters; one swap in `core/attribution.py`; explicit test |
+| Router and switch disagree on a device's granularity (flip-flop) or both write a row (double count) | `switch_seen_at` ownership rule in `_upsert_devices` and `_insert_traffic_samples`; regression tests |
+| 32-bit counters wrap between polls | `counter_bits` + plausibility check; warning when the interval is too long for the link speed |
+| Switch login is a plain MD5 of the credentials sent over HTTP (HC firmware) | Disclosed on the known-limits page; read-only user if the firmware has one |
+| The definition language grows into a programming language | No loops or conditions; anything more is a code driver |
+| A slow or dead switch delays the router poll | Separate job, per-target timeout and back-off |
+| New hypertable never pruned | Added to the nightly retention job in the same change |
+| SSRF via a user-supplied URL | No URL field: URLs come from a reviewed definition, relative to the chosen host; LAN-only, no cross-host redirects, size/time caps |
 | Simulator fidelity (synthetic stubs hide real quirks) | Prefer real-OS containers; mark synthetic stub sets; contract tests shared |
 | Third-party libs unmaintained | Thin in-tree clients where a library is trivial (`httpx` for ubus/REST) |
 | Scope: ~13 adapters is large | Strict phases; each adapter ships only with its simulator suite |
@@ -457,18 +648,35 @@ model under `tests/fixtures/switches/<vendor>-<model>/` and list the model as
 1. **Switching primary router type at runtime:** keep device history and ML
    models across the switch (MAC-keyed, so mostly fine) or require a purge?
    Default proposed: keep history, tag rows by `source_router`.
-2. **Inferred wired traffic:** OK to add `TrafficGranularity.PER_DEVICE_INFERRED`
-   (touches the enum, serializers, UI badge, and ML feature gating), or should
-   single-MAC ports simply be shown as `PER_PORT` with the device named?
-3. **Library choice:** is `selectolax` (fast, minimal, C-based) acceptable, or
-   do you prefer `lxml`/`beautifulsoup4` (more tolerant of broken HTML but
-   slower)? Switch pages are small, so either is fine; trafilatura is
-   proposed only as a fallback.
-4. **Which switch(es) do you own?** Phase 0 of Part 2 starts from real
-   captures of those — the model decides which auth modes are needed first.
+2. **Inferred wired traffic — proposed answer: reuse `PER_DEVICE`.** The
+   Sagemcom adapter already reports a device alone on a router port as
+   `PER_DEVICE`, so the switch does the same (section 2.1). The alternative is a
+   new `TrafficGranularity.PER_DEVICE_INFERRED` with its own UI badge, applied to
+   *both* the router's and the switch's single-occupant samples; that touches the
+   enum, the serialisers, the digest and the ML gating. Confirm, or ask for the
+   badge.
+3. **HTML parsing library — proposed answer: the standard library first.**
+   `html.parser` is enough for `<table>` and `<script>` extraction and adds no
+   dependency (`requirements.txt` has no HTML parser today). Add `selectolax`
+   or `lxml` only if a real capture needs it.
+4. **Which switch(es) do you own?** One is known: HC-SWTGW218AS. **May Phase 0
+   log in to it once, read-only,** to capture its stats and MAC-table pages?
+   (If its admin UI has an SNMP page, SNMP may be the better first driver.)
+   Another unanswered point: which ports are single-device and which feed
+   another switch or access point?
 5. **Which routers beyond yours matter?** Reorder the Part 1 priorities if you
    know the audience (e.g. FRITZ!Box first for a German user base).
 6. **Docker secrets for dynamic secrets:** the current pattern writes secret
    files at runtime; 5 switch passwords + 2 router slots + API secrets means
    several more writable secret files. Confirm the secrets volume stays
-   writable by the backend, or choose another approved mechanism.
+   writable by the backend, or choose another approved mechanism. (Switch
+   passwords reuse `ROUTER_SECRETS_DIR`, one file per target.)
+7. **Poll interval for switches:** the router poll is 15 s. Proposed default is
+   the same; 32-bit-counter switches need 15–30 s (section 2.6). Single-session
+   switches may prefer 30 s or more.
+8. **Import of user-supplied definitions** (so a user can add a switch without a
+   Heimdall release): safe in principle because a definition is validated data,
+   but it is a new trust surface. Proposed: not in v1; contributors add
+   definitions through pull requests.
+9. **Unknown MACs seen only on a switch** (not in the router's list): raise
+   `NEW_DEVICE`? It is a real security signal, but it is Phase 5 scope.

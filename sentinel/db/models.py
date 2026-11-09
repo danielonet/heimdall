@@ -101,6 +101,14 @@ class Device(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, server_default='false')
     archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     archive_reason: Mapped[str | None] = mapped_column(Text)
+    # Managed-switch attribution — see sentinel/switches/. Set while a configured switch has this MAC alone on one
+    # of its ports, so the port's counters are this device's own traffic. switch_seen_at is refreshed on every
+    # switch poll that confirms it; _upsert_devices keeps traffic_granularity 'per_device' while it is fresh
+    # (sentinel/switches/ownership.py), instead of letting the router's per-port view flip it back each poll.
+    switch_target_id: Mapped[int | None] = mapped_column(Integer)
+    switch_name: Mapped[str | None] = mapped_column(String(60))
+    switch_port: Mapped[str | None] = mapped_column(String(20))
+    switch_seen_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
 class DeviceTypeProfile(Base):
@@ -545,6 +553,48 @@ class RouterProfile(Base):
     username: Mapped[str] = mapped_column(String(100), server_default='')
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class SwitchTarget(Base):
+    """A managed switch the admin configured on the Equipment tab — non-secret fields only. The password lives
+    in a per-switch secret file under Settings.ROUTER_SECRETS_DIR (CLAUDE.md rule 6), never in this table."""
+
+    __tablename__ = 'switch_targets'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    spec_id: Mapped[str] = mapped_column(String(40))
+    name: Mapped[str] = mapped_column(String(60))
+    host: Mapped[str] = mapped_column(String(255))
+    username: Mapped[str] = mapped_column(String(100), server_default='')
+    poll_interval_s: Mapped[int] = mapped_column(Integer, server_default='15')
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default='true')
+    model: Mapped[str | None] = mapped_column(String(100))
+    firmware: Mapped[str | None] = mapped_column(String(50))
+    last_ok_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, server_default='0')
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class SwitchPortStat(Base):
+    """Per-port traffic delta of one switch for one poll (TimescaleDB hypertable). "In" is what the switch
+    received on the port (the attached device's upload), "out" what it sent (the device's download). macs is the
+    number of distinct devices learned on the port; attributed_mac is set only when that number is exactly one."""
+
+    __tablename__ = 'switch_port_stats'
+
+    time: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), primary_key=True)
+    switch_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    port: Mapped[str] = mapped_column(String(20), primary_key=True)
+    link_up: Mapped[bool | None] = mapped_column(Boolean)
+    speed_mbps: Mapped[int | None] = mapped_column(Integer)
+    bytes_in_delta: Mapped[int | None] = mapped_column(BigInteger)
+    bytes_out_delta: Mapped[int | None] = mapped_column(BigInteger)
+    throughput_in_kbps: Mapped[int | None] = mapped_column(BigInteger)
+    throughput_out_kbps: Mapped[int | None] = mapped_column(BigInteger)
+    macs: Mapped[int | None] = mapped_column(Integer)
+    attributed_mac: Mapped[str | None] = mapped_column(String(17))
 
 
 class AdminAccount(Base):

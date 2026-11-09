@@ -1,5 +1,7 @@
 # 11. Managed Switch Discovery & SNMP Integration
 
+> **Read `docs/router-and-switch-expansion-plan.md`, section 2.10, before building from this document.** Switch monitoring now exists for web-managed switches (`sentinel/switches/`: the shared core, a generic web driver, the tables, the monitor). This SNMP design is meant to become a second driver of that same pipeline. Its `DeviceEnricher` (section 7) must **not** be built as written: it copies a port's totals onto every MAC learned on that port (an uplink with ten devices would credit each with the whole port) and it assigns the port's transmit counter to the device's upload, which inverts upload and download. `sentinel/switches/core/attribution.py` replaces it.
+
 **Document**: Heimdall Design Document v1.0  
 **Topic**: LLDP auto-detection · SNMP BRIDGE-MIB · Per-device wired traffic · Port map UI · Settings tab  
 

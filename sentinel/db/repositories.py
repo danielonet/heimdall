@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sentinel.config import settings
 from sentinel.db.models import (
     AdminAccount, Alert, AlertSnooze, AppSettings, Device, DeviceTypeProfile, DnsQuery, PortAllowlistEntry, RouterProfile,
-    TrafficSample, TrustedMac, WifiNetwork, WifiSighting,
+    SwitchPortStat, SwitchTarget, TrafficSample, TrustedMac, WifiNetwork, WifiSighting,
 )
 from sentinel.db.session import get_session
 from sentinel.detection.device_profiles import DEFAULT_PROFILE
@@ -1023,6 +1023,89 @@ class RouterProfileRepository:
             await session.execute(delete(RouterProfile).where(RouterProfile.router_id == router_id))
 
 
+class SwitchTargetRepository:
+    """Read/write access to switch_targets — the managed switches configured on the Equipment tab (non-secret
+    fields only; see SwitchTarget). Poll status (last_ok_at, last_error, consecutive_failures) lives on the row so
+    the Equipment page can show why a switch is not reporting."""
+
+    async def list_all(self) -> list[SwitchTarget]:
+        async with get_session() as session:
+            return list(await session.scalars(select(SwitchTarget).order_by(SwitchTarget.id)))
+
+    async def list_enabled(self) -> list[SwitchTarget]:
+        async with get_session() as session:
+            return list(await session.scalars(
+                select(SwitchTarget).where(SwitchTarget.enabled.is_(True)).order_by(SwitchTarget.id)))
+
+    async def get(self, target_id: int) -> SwitchTarget | None:
+        async with get_session() as session:
+            return await session.get(SwitchTarget, target_id)
+
+    async def count(self) -> int:
+        async with get_session() as session:
+            return len(list(await session.scalars(select(SwitchTarget.id))))
+
+    async def create(
+        self, *, spec_id: str, name: str, host: str, username: str, poll_interval_s: int, enabled: bool = True,
+    ) -> SwitchTarget:
+        """Insert a switch and return it with its generated id (which names its secret file)."""
+        async with get_session() as session:
+            row = SwitchTarget(
+                spec_id=spec_id, name=name, host=host, username=username,
+                poll_interval_s=poll_interval_s, enabled=enabled,
+            )
+            session.add(row)
+            await session.flush()
+            return row
+
+    async def update(self, target_id: int, **fields: object) -> bool:
+        """Set the given non-secret fields. False if the switch does not exist."""
+        allowed = {'name', 'host', 'username', 'poll_interval_s', 'enabled'}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f'cannot update {sorted(unknown)}')
+        async with get_session() as session:
+            row = await session.get(SwitchTarget, target_id)
+            if row is None:
+                return False
+            for key, value in fields.items():
+                setattr(row, key, value)
+            row.updated_at = datetime.now(timezone.utc)
+            return True
+
+    async def delete(self, target_id: int) -> None:
+        """Remove a switch, its port history, and the per-device attribution it had set."""
+        async with get_session() as session:
+            await session.execute(delete(SwitchPortStat).where(SwitchPortStat.switch_id == target_id))
+            await session.execute(
+                update(Device).where(Device.switch_target_id == target_id)
+                .values(switch_target_id=None, switch_name=None, switch_port=None, switch_seen_at=None)
+            )
+            await session.execute(delete(SwitchTarget).where(SwitchTarget.id == target_id))
+
+    async def record_ok(self, target_id: int, *, model: str, firmware: str, now: datetime) -> None:
+        """A poll succeeded: clear the error and remember what the switch says it is."""
+        async with get_session() as session:
+            row = await session.get(SwitchTarget, target_id)
+            if row is None:
+                return
+            row.last_ok_at = now
+            row.last_error = None
+            row.consecutive_failures = 0
+            row.model = model or row.model
+            row.firmware = firmware or row.firmware
+
+    async def record_failure(self, target_id: int, error: str) -> int:
+        """A poll failed: remember why. Returns the consecutive failure count."""
+        async with get_session() as session:
+            row = await session.get(SwitchTarget, target_id)
+            if row is None:
+                return 0
+            row.last_error = error[:500]
+            row.consecutive_failures = (row.consecutive_failures or 0) + 1
+            return row.consecutive_failures
+
+
 class WifiSightingRepository:
     """Read/write access to wifi_sightings — see sentinel/db/models.py:
     WifiSighting and sentinel/security/wifi_monitor.py. Deliberately
@@ -1115,3 +1198,34 @@ class AdminAccountRepository:
                 .on_conflict_do_nothing()
             )
             return result.rowcount == 1
+
+
+class SwitchPortRepository:
+    """Read access to switch_port_stats for the Equipment tab's port table."""
+
+    async def latest_ports(self, target_id: int, within_s: int = 300) -> list[dict]:
+        """The most recent reading of each port of one switch (within the last `within_s` seconds), each with the
+        name of the device credited with it, if any. Ordered by port."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=within_s)
+        async with get_session() as session:
+            rows = list(await session.scalars(
+                select(SwitchPortStat)
+                .where(SwitchPortStat.switch_id == target_id, SwitchPortStat.time > cutoff)
+                .distinct(SwitchPortStat.port)
+                .order_by(SwitchPortStat.port, SwitchPortStat.time.desc())
+            ))
+            macs = {r.attributed_mac for r in rows if r.attributed_mac}
+            devices = {}
+            if macs:
+                devices = {d.mac_address: d for d in await session.scalars(select(Device).where(Device.mac_address.in_(macs)))}
+        ports = []
+        for row in rows:
+            device = devices.get(row.attributed_mac or '')
+            ports.append(dict(
+                port=row.port, link_up=row.link_up, speed_mbps=row.speed_mbps,
+                throughput_in_kbps=row.throughput_in_kbps, throughput_out_kbps=row.throughput_out_kbps,
+                macs=row.macs, attributed_mac=row.attributed_mac,
+                device_name=(device.nickname or device.hostname or '') if device else '',
+                time=row.time.isoformat(),
+            ))
+        return sorted(ports, key=lambda p: (len(p['port']), p['port']))

@@ -1,0 +1,9 @@
+{
+  "_comment": "Facts the switch catalog (sentinel/switches/catalog.py) does not carry, for the website's switch table. 'hardware' is true only when someone ran Heimdall against that physical switch (README 'Supported switches'). website/scripts/gen-switches.py fails on a catalog entry missing here.",
+  "hc-swtgw218as": {
+    "hardware": true,
+    "ports": 9,
+    "traffic": "Per device on a port with exactly one device; a port total on a shared port",
+    "limits": "The login cookie is a plain MD5 of the user name and password, sent over HTTP. A device that never transmits is never learned, so a port shared with one is credited to the other device."
+  }
+}

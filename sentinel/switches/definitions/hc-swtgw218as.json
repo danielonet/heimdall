@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "id": "hc-swtgw218as",
+  "match": { "title": "HC-SWTGW218AS" },
+  "request_headers": { "Referer": "${base_url}/" },
+  "auth": {
+    "type": "form",
+    "login_url": "/login.cgi",
+    "fields": {
+      "username": "${username}",
+      "password": "${password}",
+      "Response": "${md5(username + password)}",
+      "language": "EN"
+    },
+    "cookies": { "admin": "${md5(username + password)}" },
+    "verify_url": "/info.cgi",
+    "logged_out_marker": "location\\.replace\\(\"/login\\.cgi\"\\)"
+  },
+  "pages": {
+    "info": { "url": "/info.cgi" },
+    "stats": { "url": "/port.cgi?page=stats" },
+    "macs": {
+      "url": "/mac.cgi?page=fwd_tbl",
+      "paginate": {
+        "url": "/mac.cgi?page=fwd_tbl",
+        "first": { "cmd": "firstpage" },
+        "next": { "cmd": "nextpage" },
+        "total_pages": "id='totalpage'>\\s*(\\d+)",
+        "max_pages": 20,
+        "restore": true
+      }
+    }
+  },
+  "identity": {
+    "page": "info",
+    "labels": { "model": "Device Model:", "firmware": "Firmware Version:", "mac": "MAC Address:" }
+  },
+  "ports": {
+    "table": {
+      "page": "stats",
+      "header_match": ["^Port$", "TxGoodBytes", "RxGoodBytes"],
+      "columns": {
+        "port": "^Port$",
+        "link": "^Link Status$",
+        "tx_bytes": "^TxGoodBytes$",
+        "rx_bytes": "^RxGoodBytes$",
+        "tx_packets": "^TxGoodPkt$",
+        "rx_packets": "^RxGoodPkt$"
+      }
+    },
+    "port_id": "^Port\\s*(\\S+)$",
+    "number_format": "hi_lo",
+    "counter_bits": 64,
+    "perspective": "port",
+    "link_up_text": "Link Up",
+    "speeds": {
+      "table": {
+        "page": "info",
+        "header_match": ["^Port$", "Nego Speed"],
+        "columns": { "port": "^Port$", "speed": "Nego Speed" }
+      }
+    }
+  },
+  "macs": {
+    "table": {
+      "page": "macs",
+      "header_match": ["MAC Address", "^Port$", "VLAN"],
+      "columns": { "mac": "MAC Address", "type": "^Type$", "port": "^Port$", "vlan": "VLAN" }
+    },
+    "port_id": "^(\\S+)$",
+    "dynamic_text": "dynamic"
+  }
+}

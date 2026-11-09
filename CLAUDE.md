@@ -36,6 +36,7 @@ heimdall/
 │   └── frontend/              ← UI design + mockups
 ├── sentinel/                  ← Python backend
 │   ├── adapter/               ← router abstraction layer
+│   ├── switches/              ← managed-switch drivers + shared core (counters, attribution, monitor)
 │   ├── api/                   ← Flask app + routes
 │   ├── detection/             ← threat detector chain
 │   ├── ml/                    ← anomaly detection engine
@@ -88,6 +89,8 @@ drop dead rows and stub new ones) fails the website build and CI when it is out 
    All router communication goes through `sentinel/adapter/sagemcom/xmo_adapter.py`
    which implements `sentinel/adapter/base.py:RouterAdapter`. No other module
    imports from `xmo_client.py` or calls the XMO API directly.
+   Likewise, nothing outside `sentinel/switches/` talks to a managed switch, and
+   detectors never see a switch's pages.
 
 2. **All backend I/O is async.**
    Use `async def` and `await` throughout. The XMO client uses `httpx.AsyncClient`.
@@ -126,6 +129,7 @@ longer exists, is a bug.
 |---|---|
 | A dashboard page, control, label, setting or workflow | The matching chapter in `website/src/content/docs/manual/` (and the glossary/FAQ/troubleshooting if affected) |
 | A detector, alert type, sensor, container, tier or response action | `website/src/data/products.ts` (alert names come from the registry in `docs/architecture/04-detection-pipeline.md`), the diagram in `website/src/components/Flow.astro`, the home-page cards, and the README "Defenses & Capabilities" |
+| A managed switch or what one can do | `sentinel/switches/catalog.py` and `docs/router/switch-facts.json` (the build fails if an entry is missing), plus the README "Supported switches" table. Adding a model is a definition file plus captured pages (`CONTRIBUTING.md`, "Adding a switch"). Mark "Tested" only after a real-hardware run |
 | A router adapter or what one can do (block, quarantine, traffic) | `sentinel/adapter/catalog.py` and `docs/router/equipment-facts.json` (the build fails if an entry is missing), plus the README "Supported routers" table. Mark "Tested" only after a real-hardware run |
 | Install, tiers, requirements, upgrade, uninstall, the `.deb` | `website/src/pages/install.astro`, `website/src/data/commands.ts`, the README quick install, and the install scripts' own tests |
 | A known limit, or a limit that is now fixed | `website/src/pages/security/limits.astro`, the affected product page's limits, and the README "Known, documented limits" |
@@ -155,6 +159,7 @@ Rules for website content:
 | Sagemcom XMO API xpaths | `docs/router/sagemcom-xmo-api.md` |
 | Network topology | `docs/router/network-topology.md` |
 | Wired monitoring caveat | `docs/router/wired-monitoring-caveat.md` |
+| Managed switches (design, as built) | `docs/router-and-switch-expansion-plan.md` (Part 2) |
 | UI design language | `docs/frontend/ui-design-brief.md` |
 | React component map | `docs/frontend/component-map.md` |
 | HTML mockups | `docs/frontend/mockups/` |

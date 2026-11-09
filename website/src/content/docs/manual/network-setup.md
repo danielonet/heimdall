@@ -102,19 +102,25 @@ These cost nothing and work on any router:
 - Keep router firmware up to date and the admin page off the internet.
 - On devices you carry, turn off **auto-join** for networks you do not need, and use a VPN on WiFi you do not control.
 
-## Part 5. Managed switch (placeholder)
+## Part 5. Managed switch
 
-:::caution[Planned, not available yet]
-Monitoring a managed switch is **planned**. There is nothing to configure today. The **Switches** section on [Equipment](/manual/equipment/) is there but empty, and this section is reserved for its setup guide.
+:::note[Draft]
+This part has not yet been checked against a running dashboard.
 :::
 
-Why it matters: a router only reports wired traffic per **port**, not per device, so Heimdall shows wired devices with port-level counters and says so. A managed switch can report counters per port and which device sits on each port, which would let Heimdall attribute wired traffic more precisely. Until a switch is supported, wired traffic stays labelled per port.
+Why it matters: a router only reports wired traffic per **port**, not per device, so devices behind a switch share one router port and Heimdall shows them with port-level counters and says so. A managed switch counts traffic on each of its own ports and knows which device sits on each, so a device that is alone on a switch port can get its own figures.
 
-This section will cover, once the feature exists and has been checked on real equipment:
+**Which switches.** Only the models in [the switch table](/equipment/#switches), and only those with a web page for port statistics and a MAC address table. Today that is the HC-SWTGW218AS. If yours is not listed, test fixtures from your switch's pages are one of the most useful contributions; see [Contribute](/contribute/).
 
-- which switches are supported and how they were tested;
-- turning on the switch's SNMP or web interface and creating a read-only user;
-- connecting the switch's uplink and the Heimdall machine;
-- what the Switches panel shows and its limits.
+1. **Put the switch on your network** and give it a fixed address (a DHCP reservation on your router, or a static address on the switch), so Heimdall can always find it.
+2. **Plug the switch's uplink into your router.** The port that leads to your router will carry many devices, so it stays a port total; that is expected.
+3. **Plug the Heimdall machine and the devices you care about into other ports.** A device alone on a port is the case that gets its own figures. A device behind an access point or a second switch shares that port and does not.
+4. **If the switch has a user setting,** use an account that can only read, and a long password that is not used anywhere else. Some switches log in with a plain hash sent over HTTP, so anyone on your network who sees one request can reuse the login (see [Known limits](/security/limits/)).
+5. **Add it on [Equipment](/manual/equipment/#switches):** **+ ADD A SWITCH**, then **Save & test**. The result tells you how many ports are up and how many have exactly one device.
+6. **Wait for the second poll** (about 15 seconds). Open **Ports** to see each port, and a device's detail page to see its own traffic.
 
-If you own a managed switch and would like to help, test fixtures from the switch's web pages are one of the most useful contributions; see [Contribute](/contribute/).
+What it shows and its limits:
+
+- Only a port with exactly one device is credited to that device. A port shared by several is a total.
+- The figures are the port's counters, slightly higher than the data the device itself moved.
+- Heimdall reads the switch; it does not change it, and it cannot block a device at the switch.

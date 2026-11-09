@@ -10,6 +10,7 @@ from sentinel.db.models import (
     WifiSighting,
 )
 from sentinel.notifications.digest_query import DigestData
+from sentinel.switches import ownership as switch_ownership
 
 
 def device_to_dict(device: Device) -> dict[str, Any]:
@@ -47,6 +48,9 @@ def device_to_dict(device: Device) -> dict[str, Any]:
         'is_archived': device.is_archived,
         'archived_at': device.archived_at.isoformat() if device.archived_at else None,
         'archive_reason': device.archive_reason,
+        # Managed-switch attribution (sentinel/switches/): only while a switch recently confirmed it.
+        'switch_name': device.switch_name if switch_ownership.is_fresh(device.switch_seen_at) else None,
+        'switch_port': device.switch_port if switch_ownership.is_fresh(device.switch_seen_at) else None,
     }
 
 

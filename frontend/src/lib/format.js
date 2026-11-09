@@ -9,3 +9,10 @@ export function formatBytes(bytes) {
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`
 }
+
+// A rate stored as kilobits per second (bits / 1024), e.g. a switch port's throughput_*_kbps.
+export function formatBitRate(kbps) {
+  if (kbps == null) return '—'
+  if (kbps >= 1024) return `${(kbps / 1024).toFixed(1)} Mb/s`
+  return `${Math.round(kbps)} kb/s`
+}

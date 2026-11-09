@@ -108,7 +108,17 @@ DeviceDetailPage
 ├── OpenPortsPanel          — from last Nmap scan
 ├── AlertHistoryTable       — alerts for this device
 ├── DnsQueryTable           — Pi-hole queries for this device
-└── WiredPortNote           — shown for PER_PORT devices with caveat
+├── WiredPortNote           — shown for PER_PORT devices with caveat
+└── SwitchPortNote          — shown when a managed switch credits the device with a whole port
+```
+
+## Equipment page: switches
+
+```
+EquipmentPage
+└── SwitchesSection         — configured switches with status; add / test / edit / remove
+    ├── SwitchFormModal     — add or edit; its fields come from GET /api/switches/catalog
+    └── SwitchPortsTable    — latest reading of each port (link, speed, device, down/up)
 ```
 
 ## Alerts page components

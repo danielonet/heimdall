@@ -6,6 +6,7 @@ import { NetworkInterfaceSection } from '../components/settings/NetworkInterface
 import { WifiMonitorSection } from '../components/settings/WifiMonitorSection'
 import { PrimaryRouterSelect } from '../components/equipment/PrimaryRouterSelect'
 import { RouterSelector } from '../components/equipment/RouterSelector'
+import { SwitchesSection } from '../components/equipment/SwitchesSection'
 
 function formatUptime(seconds) {
   if (!seconds) return '—'
@@ -25,7 +26,7 @@ function Field({ label, children }) {
 }
 
 // Everything about the network equipment Heimdall talks to: the router(s)
-// today, managed switches next (docs/router-and-switch-expansion-plan.md).
+// and the managed switches (docs/router-and-switch-expansion-plan.md).
 // Moved here from the Settings page, which keeps the Heimdall-wide options;
 // the WiFi monitor (evil-twin detection) followed, since it is set up from the router's own WiFi names.
 export function EquipmentPage() {
@@ -87,13 +88,7 @@ export function EquipmentPage() {
         <WifiMonitorSection />
       </div>
 
-      <div className="border border-border bg-surface p-3">
-        <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">SWITCHES</div>
-        <p className="text-[10px] leading-relaxed text-text-secondary">
-          Managed-switch monitoring is planned: add up to 5 switches by the URL of their web stats page for
-          per-device wired traffic. Nothing to configure yet.
-        </p>
-      </div>
+      <SwitchesSection />
     </div>
   )
 }

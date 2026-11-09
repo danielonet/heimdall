@@ -1,0 +1,240 @@
+{
+  "snapshot": {
+    "identity": {
+      "model": "HC-SWTGW218AS",
+      "firmware": "V200.2.4",
+      "mac": "02:00:00:00:00:01"
+    },
+    "ports": [
+      {
+        "port": "1",
+        "rx_bytes": 30301717,
+        "tx_bytes": 53282896,
+        "rx_packets": 64476,
+        "tx_packets": 147865,
+        "link_up": true,
+        "speed_mbps": 1000,
+        "counter_bits": 64
+      },
+      {
+        "port": "2",
+        "rx_bytes": 0,
+        "tx_bytes": 5328551,
+        "rx_packets": 0,
+        "tx_packets": 75293,
+        "link_up": true,
+        "speed_mbps": 10,
+        "counter_bits": 64
+      },
+      {
+        "port": "3",
+        "rx_bytes": 23121211,
+        "tx_bytes": 393822802,
+        "rx_packets": 197458,
+        "tx_packets": 348749,
+        "link_up": true,
+        "speed_mbps": 100,
+        "counter_bits": 64
+      },
+      {
+        "port": "4",
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "rx_packets": 0,
+        "tx_packets": 0,
+        "link_up": false,
+        "speed_mbps": null,
+        "counter_bits": 64
+      },
+      {
+        "port": "5",
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "rx_packets": 0,
+        "tx_packets": 0,
+        "link_up": false,
+        "speed_mbps": null,
+        "counter_bits": 64
+      },
+      {
+        "port": "6",
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "rx_packets": 0,
+        "tx_packets": 0,
+        "link_up": false,
+        "speed_mbps": null,
+        "counter_bits": 64
+      },
+      {
+        "port": "7",
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "rx_packets": 0,
+        "tx_packets": 0,
+        "link_up": false,
+        "speed_mbps": null,
+        "counter_bits": 64
+      },
+      {
+        "port": "8",
+        "rx_bytes": 433334309,
+        "tx_bytes": 51968886,
+        "rx_packets": 408786,
+        "tx_packets": 248811,
+        "link_up": true,
+        "speed_mbps": 1000,
+        "counter_bits": 64
+      },
+      {
+        "port": "9",
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "rx_packets": 0,
+        "tx_packets": 0,
+        "link_up": false,
+        "speed_mbps": null,
+        "counter_bits": 64
+      }
+    ],
+    "macs": [
+      {
+        "mac": "02:00:00:00:00:02",
+        "port": "3",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:03",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:04",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:05",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:06",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:07",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:08",
+        "port": "1",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:09",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:0a",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:0b",
+        "port": "8",
+        "vlan": 1,
+        "dynamic": true
+      },
+      {
+        "mac": "02:00:00:00:00:01",
+        "port": "CPU",
+        "vlan": 1,
+        "dynamic": true
+      }
+    ]
+  },
+  "poll2": {
+    "elapsed_s": 10,
+    "ports": {
+      "1": {
+        "in": 19827,
+        "out": 5268677,
+        "macs": 1,
+        "attributed": "02:00:00:00:00:08"
+      },
+      "2": {
+        "in": 0,
+        "out": 128,
+        "macs": 0,
+        "attributed": null
+      },
+      "3": {
+        "in": 0,
+        "out": 128,
+        "macs": 1,
+        "attributed": "02:00:00:00:00:02"
+      },
+      "4": {
+        "in": 0,
+        "out": 0,
+        "macs": 0,
+        "attributed": null
+      },
+      "5": {
+        "in": 0,
+        "out": 0,
+        "macs": 0,
+        "attributed": null
+      },
+      "6": {
+        "in": 0,
+        "out": 0,
+        "macs": 0,
+        "attributed": null
+      },
+      "7": {
+        "in": 0,
+        "out": 0,
+        "macs": 0,
+        "attributed": null
+      },
+      "8": {
+        "in": 5258895,
+        "out": 19018,
+        "macs": 8,
+        "attributed": null
+      },
+      "9": {
+        "in": 0,
+        "out": 0,
+        "macs": 0,
+        "attributed": null
+      }
+    },
+    "samples": [
+      {
+        "mac": "02:00:00:00:00:08",
+        "sent": 19827,
+        "recv": 5268677
+      },
+      {
+        "mac": "02:00:00:00:00:02",
+        "sent": 0,
+        "recv": 128
+      }
+    ]
+  }
+}

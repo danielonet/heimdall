@@ -55,7 +55,17 @@ Wired `TrafficSample` objects carry:
 - **Blocking still works** — `block_device(mac)` uses the Firewall API which
   is MAC-based, not port-based
 
-## Future improvement
+## Managed switch (built)
+
+A managed switch counts traffic on each of its own ports, so a device that is alone on a switch port gets its own
+figures even though the router sees only the one port the switch plugs into. Heimdall reads the switch's port
+counters and MAC address table (`sentinel/switches/`), credits a port to a device only when exactly one device is
+learned on it, and marks the device `per_device` while the switch confirms it (`devices.switch_seen_at`, see
+`sentinel/switches/ownership.py`). A port shared by several devices, such as the uplink to the router, stays a port
+total and is credited to nobody. Which switches can be read is in `sentinel/switches/catalog.py`; how to add one is in
+`CONTRIBUTING.md` ("Adding a switch"); the design is in `docs/router-and-switch-expansion-plan.md`, Part 2.
+
+## Future improvement (for switches Heimdall cannot read)
 
 If per-device wired traffic is needed, place the monitoring machine **inline
 between the router and the downstream switch** (transparent bridge with two NICs).

@@ -178,6 +178,7 @@ class SentinelScheduler:
 
     # Class-level defaults so a test double built via object.__new__ (no __init__) still works.
     _connection_failures = 0
+    _switch_monitor = None  # SwitchMonitor, created on the first switch poll (see _switch_poll_job)
     _reconnect_attempts = 0
     _next_reconnect_at = 0.0
     _last_reconnect_at: datetime | None = None
@@ -491,6 +492,16 @@ class SentinelScheduler:
             id='secondary_router_poll',
             next_run_time=datetime.now(),
         )
+        # Managed switches (sentinel/switches/): one job; each switch is polled when its own interval is up, and a
+        # switch that fails or is slow never delays this job's other switches or the router polls above.
+        self._scheduler.add_job(
+            self._switch_poll_job,
+            'interval',
+            seconds=max(self._poll_interval_s, settings.SWITCH_MIN_POLL_SECONDS),
+            id='switch_poll',
+            next_run_time=datetime.now(),
+            max_instances=1,
+        )
         self._scheduler.add_job(
             self._retrain_job,
             CronTrigger.from_crontab(self._ml_retrain_cron),
@@ -697,6 +708,17 @@ class SentinelScheduler:
             await poll_secondary_router(adapter, self._redis_client)
         except Exception:
             logger.exception('Secondary router poll cycle failed')
+
+    async def _switch_poll_job(self) -> None:
+        """Poll every configured managed switch whose interval is up (see SwitchMonitor). A no-op when none is
+        configured, which is the common case."""
+        try:
+            if self._switch_monitor is None:
+                from sentinel.switches.core.monitor import SwitchMonitor
+                self._switch_monitor = SwitchMonitor()
+            await self._switch_monitor.poll_due()
+        except Exception:
+            logger.exception('Switch poll cycle failed')
 
     async def _reconcile_arp_table(self, adapter: RouterAdapter) -> None:
         """Re-seed ArpWatcher's IP->MAC table from the router's live DHCP
@@ -1095,7 +1117,7 @@ class SentinelScheduler:
         an admin's change in the Settings tab takes effect on the very next
         nightly run, not just future data.
 
-        traffic_samples/port_stats are TimescaleDB hypertables: drop_chunks()
+        traffic_samples/port_stats/switch_port_stats are TimescaleDB hypertables: drop_chunks()
         removes whole chunks below the cutoff, far cheaper than a row-by-row
         DELETE at this table's poll-driven volume. It's chunk-granular, not
         row-exact — a chunk straddling the cutoff is kept whole, so actual
@@ -1127,6 +1149,9 @@ class SentinelScheduler:
                 )
                 await session.execute(
                     text("SELECT drop_chunks('port_stats', older_than => CAST(:cutoff AS timestamptz))"), {'cutoff': cutoff}
+                )
+                await session.execute(
+                    text("SELECT drop_chunks('switch_port_stats', older_than => CAST(:cutoff AS timestamptz))"), {'cutoff': cutoff}
                 )
                 await session.execute(delete(WanStatusHistory).where(WanStatusHistory.changed_at < cutoff))
                 await session.execute(delete(Alert).where(Alert.created_at < cutoff))

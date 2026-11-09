@@ -40,6 +40,8 @@ from sentinel.ml.anomaly_engine import AnomalyEngine
 from sentinel.ml.trainer import ModelTrainer
 from sentinel.notifications.service import NotificationService
 from sentinel.security.mac_vendor import lookup_vendor
+from sentinel.switches import ownership as switch_ownership
+from sentinel.switches.store import switch_owned_macs
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,9 @@ async def poll_cycle(
 
     async with get_session() as session:
         newly_seen_macs = await _upsert_devices(session, devices)
-        await _insert_traffic_samples(session, traffic_samples, scores_by_mac)
+        await _insert_traffic_samples(
+            session, traffic_samples, scores_by_mac, skip_macs=await switch_owned_macs(session),
+        )
         await _insert_port_stats(session, port_stats)
         await _insert_wan_stats(session, wan_stats)
         wan_changed = await _record_wan_status(session, router_info)
@@ -171,7 +175,7 @@ async def poll_secondary_router(adapter: RouterAdapter, redis_client: Redis) -> 
         newly_seen_macs = await _upsert_devices(session, devices, is_primary=False)
         # No anomaly scores for a router that isn't run through AnomalyEngine
         # in this pass — see this function's docstring.
-        await _insert_traffic_samples(session, traffic_samples, {})
+        await _insert_traffic_samples(session, traffic_samples, {}, skip_macs=await switch_owned_macs(session))
         await _insert_port_stats(session, port_stats)
 
     _broadcast_updates(devices, newly_seen_macs, port_stats)
@@ -533,7 +537,11 @@ async def _upsert_devices(
             if is_primary:
                 target.interface_name = snapshot.interface_name
                 target.port_alias = snapshot.port_alias or None
-                target.traffic_granularity = traffic_granularity
+                # A device a managed switch recently credited with a port of its own stays per_device,
+                # whatever this router thinks of the port it is behind (sentinel/switches/ownership.py).
+                target.traffic_granularity = (
+                    'per_device' if switch_ownership.is_fresh(target.switch_seen_at, now) else traffic_granularity
+                )
                 target.device_type = snapshot.device_type or None
                 target.ap_alias = snapshot.ap_alias or None
                 target.signal_rate_mbps = snapshot.signal_rate_mbps
@@ -592,13 +600,21 @@ async def _insert_traffic_samples(
     session: AsyncSession,
     samples: list[TrafficSampleSnapshot],
     scores_by_mac: dict[str, float],
+    skip_macs: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     """Insert one traffic_samples row per sample.
 
     anomaly_score is 0.0 during ML bootstrap (no model yet) and NULL for
     PER_PORT samples, which the ML engine never scores — see _score_traffic_samples.
+
+    skip_macs: devices a managed switch currently credits with a port of their own
+    (sentinel/switches/store.py: switch_owned_macs). The switch's per-device row is the one
+    that is stored; this poll's PER_DEVICE row for the same MAC would be the same bytes
+    counted twice, so it is skipped. PER_PORT rows are never skipped.
     """
     for sample in samples:
+        if sample.granularity == TrafficGranularity.PER_DEVICE and sample.mac_address in skip_macs:
+            continue
         session.add(TrafficSample(
             time=sample.timestamp,
             mac_address=sample.mac_address,

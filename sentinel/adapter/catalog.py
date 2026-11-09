@@ -21,6 +21,7 @@ class SimulatorKind(str, Enum):
 
     WIREMOCK = 'wiremock'   # HTTP stubs under wiremock/<id>/
     DOCKER = 'docker'       # the real router OS in a container, tests/simulators/<id>/
+    FIXTURES = 'fixtures'   # replay of captured pages, tests/fixtures/switches/<id>/ (switch drivers)
     NONE = 'none'
 
 

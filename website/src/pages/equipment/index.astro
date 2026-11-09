@@ -1,6 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
 import routers from '../../data/routers.json';
+import switches from '../../data/switches.json';
 
 type R = (typeof routers)[number];
 const adapter = (r: R) => r.implemented ? ['ok', 'Implemented'] : ['off', 'Planned'];
@@ -20,5 +21,15 @@ const pretty = (s: string) => words[s] ?? s.charAt(0).toUpperCase() + s.slice(1)
       ); })}
     </tbody></table></div>
     <p class="faint small" style="margin-top:8px">Generated from the router catalog and <code>docs/router/equipment-facts.json</code> in the source, so it cannot drift from the software. “Unverified” and “Unconfirmed” mean the code exists but has not been confirmed to work on a real device.</p>
+  </div>
+  <div class="wrap hero" style="padding-bottom:8px"><div class="eyebrow">Equipment</div><h2 id="switches">Supported managed switches</h2>
+    <p class="lede">A router counts wired traffic per port. A managed switch counts it on each of its own ports, so a device that is alone on a switch port gets its own figures. A port shared by several devices stays a port total. “Tested” means someone ran Heimdall against that physical switch; “Captured pages only” means automated tests pass against pages saved from the switch, but no real device has been tried.</p></div>
+  <div class="wrap">
+    <div class="tablewrap"><table id="eq-switches"><thead><tr><th>Switch</th><th>How Heimdall reads it</th><th>Ports</th><th>Support</th><th>Real hardware</th><th>Per-device traffic</th></tr></thead><tbody>
+      {switches.map((s) => (
+        <tr><td class="k">{s.label}</td><td>{s.protocol}</td><td>{s.ports}</td><td><span class={`chip ${s.implemented ? 'ok' : 'off'}`}>{s.implemented ? 'Implemented' : 'Planned'}</span></td><td><span class={`chip ${s.hardware ? 'ok' : 'info'}`}>{s.hardware ? 'Tested' : 'Captured pages only'}</span></td><td>{s.traffic}</td></tr>
+      ))}
+    </tbody></table></div>
+    <p class="faint small" style="margin-top:8px">Generated from the switch catalog and <code>docs/router/switch-facts.json</code> in the source. Adding a switch is a definition file plus saved pages; see <a href="/contribute/">Contribute</a>.</p>
   </div>
 </Base>

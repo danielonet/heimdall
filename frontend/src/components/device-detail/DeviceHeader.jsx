@@ -166,6 +166,11 @@ export function DeviceHeader({ device }) {
             <Badge variant="info">
               {device.interface_name === 'Ethernet' ? `ETH${device.port_alias ? ` · ${device.port_alias}` : ''}` : 'WiFi'}
             </Badge>
+            {device.switch_port && (
+              <Badge variant="info" title="A managed switch counts this device's traffic on its own port">
+                {device.switch_name} · PORT {device.switch_port}
+              </Badge>
+            )}
             {device.ap_alias && (
               <Badge
                 variant={device.ap_alias.startsWith('GUEST') ? 'warning' : 'info'}

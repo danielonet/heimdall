@@ -6,6 +6,7 @@ import { AnomalyScoreChart } from '../components/device-detail/AnomalyScoreChart
 import { OpenPortsPanel } from '../components/device-detail/OpenPortsPanel'
 import { AlertHistoryTable } from '../components/device-detail/AlertHistoryTable'
 import { WiredPortNote } from '../components/device-detail/WiredPortNote'
+import { SwitchPortNote } from '../components/device-detail/SwitchPortNote'
 
 export function DeviceDetailPage() {
   const { mac } = useParams()
@@ -31,6 +32,7 @@ export function DeviceDetailPage() {
       <DeviceHeader device={device} />
 
       {isWired && <WiredPortNote portAlias={device.port_alias} />}
+      {device.switch_port && <SwitchPortNote switchName={device.switch_name} switchPort={device.switch_port} />}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="border border-border bg-surface p-4">
