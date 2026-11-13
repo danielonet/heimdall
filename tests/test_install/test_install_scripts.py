@@ -168,6 +168,12 @@ class TestSetup:
         after = {p.name: p.read_text() for p in [*(tmp_path / 'secrets').glob('*.txt'), tmp_path / '.env']}
         assert after == before
 
+    def test_the_env_documents_how_to_keep_old_images_but_leaves_it_off(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
+        assert '# KEEP_OLD_IMAGES=1' in (tmp_path / '.env').read_text()
+        assert 'KEEP_OLD_IMAGES' not in env_file(tmp_path)
+
     def test_two_installs_get_different_secrets(self, dist, tmp_path, fake_bin):
         a, b = tmp_path / 'a', tmp_path / 'b'
         for d in (a, b):
@@ -341,6 +347,58 @@ class TestBootstrap:
         calls = fake_bin[1].read_text().splitlines()
         assert 'compose pull' in calls and 'compose up -d' in calls
         assert calls.index('compose pull') < calls.index('compose up -d')
+
+    def _start(self, dist, tmp_path, fake_bin):
+        # No dashboard is listening in the test, so don't wait for one.
+        return run(['bash', str(dist / 'install.sh'), f'--dir={tmp_path / "h"}', '--yes', '--tier=minimal'], tmp_path, fake_bin,
+                   env={'HEIMDALL_BUNDLE_URL_BASE': f'file://{dist}', 'HEIMDALL_WAIT_SECONDS': '0'}, timeout=120)
+
+    def test_older_images_are_removed_only_after_the_new_ones_are_up(self, dist, tmp_path, fake_bin):
+        r = self._start(dist, tmp_path, fake_bin)
+        assert r.returncode == 0, r.stderr
+        calls = fake_bin[1].read_text().splitlines()
+        # setup.sh's disk check also lists images, but with --profile; the prune lists them plainly.
+        assert 'compose config --images' in calls
+        assert calls.index('compose pull') < calls.index('compose up -d') < calls.index('compose config --images')
+
+    def test_no_start_removes_nothing_and_says_how_to_do_it_later(self, dist, tmp_path, fake_bin):
+        r = self._install(dist, tmp_path, fake_bin, '--tier=minimal', '--no-start')
+        assert 'compose config --images' not in fake_bin[1].read_text().splitlines()
+        assert './setup.sh --prune-old-images' in r.stdout
+
+    def test_a_failing_prune_is_a_warning_and_never_fails_the_install(self, dist, tmp_path, fake_bin):
+        # Once `compose up -d` has run, `docker compose version` fails, so the prune (which is setup.sh) stops with an error.
+        started = tmp_path / 'started'
+        (fake_bin[0] / 'docker').write_text(
+            f'#!/bin/sh\necho "$@" >> {fake_bin[1]}\n'
+            'case "$*" in\n'
+            f'  "compose up -d") touch {started} ;;\n'
+            f'  "compose version") [ -e {started} ] && exit 1 ;;\n'
+            '  "info --format"*) echo /var/lib/docker ;;\n'
+            '  "image inspect"*) exit 1 ;;\n'
+            '  *"config --images"*) echo ghcr.io/danielonet/heimdall/sentinel-backend:9.9.9 ;;\n'
+            'esac\nexit 0\n')
+        r = self._start(dist, tmp_path, fake_bin)
+        assert r.returncode == 0, r.stderr
+        assert 'Could not remove the images of older versions' in r.stderr
+        assert './setup.sh --prune-old-images' in r.stderr
+
+    def test_the_prune_uses_sudo_when_docker_itself_needs_it(self, dist, tmp_path, fake_bin):
+        bin_dir, log = fake_bin
+        (bin_dir / 'docker').write_text(
+            f'#!/bin/sh\necho "${{FAKE_SUDO:+sudo }}$*" >> {log}\n'
+            'case "$*" in\n'
+            '  info) [ -n "$FAKE_SUDO" ] || exit 1 ;;\n'
+            '  "info --format"*) echo /var/lib/docker ;;\n'
+            '  "image inspect"*) exit 1 ;;\n'
+            '  *"config --images"*) echo ghcr.io/danielonet/heimdall/sentinel-backend:9.9.9 ;;\n'
+            'esac\nexit 0\n')
+        (bin_dir / 'sudo').write_text('#!/bin/sh\nFAKE_SUDO=1 exec "$@"\n')
+        (bin_dir / 'sudo').chmod(0o755)
+        r = self._start(dist, tmp_path, fake_bin)
+        assert r.returncode == 0, r.stderr
+        calls = log.read_text().splitlines()
+        assert calls.index('sudo compose up -d') < calls.index('sudo compose config --images')
 
     def test_refuses_a_tampered_bundle(self, dist, tmp_path, fake_bin):
         bad = tmp_path / 'bad'

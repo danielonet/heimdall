@@ -13,6 +13,9 @@ WorkingDirectory=/opt/heimdall
 # A failed pull (no network at boot) must not stop already-downloaded images from starting.
 ExecStartPre=-/usr/bin/docker compose pull --quiet
 ExecStart=/usr/bin/docker compose up -d
+# Then drop the images of older versions (an upgrade leaves them behind). A oneshot unit may have several
+# ExecStart lines; the leading '-' means a failure here never fails the service.
+ExecStart=-/opt/heimdall/setup.sh --prune-old-images
 ExecStop=/usr/bin/docker compose stop
 TimeoutStartSec=900
 TimeoutStopSec=300

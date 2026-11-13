@@ -50,8 +50,8 @@ The stock rule set is tuned for enterprise traffic. Add suppressions for the rul
 `sudo heimdall logs` (.deb), or `docker compose logs -f --tail 100` in the install folder.
 
 ## Upgrading
-Script install: run the install command again. .deb: install the newer package. Your data and secrets are kept.
+Script install: run the install command again. .deb: install the newer package. Your data and secrets are kept, and the images of the older versions are removed afterwards (see [Upgrade](/manual/upgrade/#older-images-are-removed)).
 
 ## The installer stops with "Not enough disk space"
-Before it writes or downloads anything, the installer adds up the images of the tier you chose (the ones not already on the machine) plus a 1 GB reserve for the system and the database, and compares that with the free space on the disk that holds Docker's data. If it does not fit it prints the free space, the space needed and the shortfall, and exits without changing anything. Free some space (for example `docker system prune`, which removes unused images and stopped containers) or use a bigger disk, then run it again. A smaller tier may fit: the message says so when it does. The sizes are approximate; if you are sure there is room, `--skip-disk-check` skips the check.
+Before it writes or downloads anything, the installer adds up the images of the tier you chose (the ones not already on the machine) plus a 1 GB reserve for the system and the database, and compares that with the free space on the disk that holds Docker's data. If it does not fit it prints the free space, the space needed and the shortfall, and exits without changing anything. Free some space (for example `docker system prune`, which removes unused images and stopped containers) or use a bigger disk, then run it again. If you have upgraded Heimdall before, `./setup.sh --prune-old-images` in the install folder removes the images of its older versions. A smaller tier may fit: the message says so when it does. The sizes are approximate; if you are sure there is room, `--skip-disk-check` skips the check.
 

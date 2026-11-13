@@ -84,6 +84,14 @@ class TestPackage:
         assert 'ConditionPathExists=/opt/heimdall/.env' in (unpacked / 'lib/systemd/system/heimdall.service').read_text()
 
 
+    def test_service_removes_older_images_after_starting_and_cannot_fail_because_of_it(self, unpacked):
+        unit = (unpacked / 'lib/systemd/system/heimdall.service').read_text().splitlines()
+        up = unit.index('ExecStart=/usr/bin/docker compose up -d')
+        prune = unit.index('ExecStart=-/opt/heimdall/setup.sh --prune-old-images')    # the '-' means a failure is ignored
+        assert up < prune
+        assert (unpacked / 'opt/heimdall/setup.sh').stat().st_mode & stat.S_IXUSR
+
+
 class TestMaintainerScripts:
     @pytest.fixture
     def home(self, unpacked, tmp_path):
@@ -167,6 +175,28 @@ class TestCommand:
         assert (cmd.home / 'secrets' / 'admin_password.txt').read_text() == ''
         pw = cmd('password')
         assert pw.returncode != 0 and 'reset-login' in pw.stderr
+
+    def _upgrade(self, cmd, tmp_path, pull_fails=False):
+        fake = tmp_path / 'bin'
+        fake.mkdir()
+        log = tmp_path / 'docker.log'
+        (fake / 'docker').write_text(f'#!/bin/sh\necho "$@" >> {log}\n' + ('[ "$*" = "compose pull" ] && exit 1\n' if pull_fails else '') + 'exit 0\n')
+        (fake / 'docker').chmod(0o755)
+        (cmd.home / 'secrets').mkdir()
+        (cmd.home / '.env').write_text('IMAGE_TAG=9.9.9\n')
+        env = {**os.environ, 'PATH': f'{fake}:{os.environ["PATH"]}', 'HEIMDALL_HOME': str(cmd.home)}
+        r = subprocess.run([cmd.exe, 'upgrade'], capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
+        return r, log.read_text().splitlines()
+
+    def test_upgrade_removes_older_images_after_the_new_ones_are_up(self, cmd, tmp_path):
+        r, calls = self._upgrade(cmd, tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert calls.index('compose pull') < calls.index('compose up -d') < calls.index('compose config --images')
+
+    def test_upgrade_with_a_failed_pull_removes_nothing(self, cmd, tmp_path):
+        r, calls = self._upgrade(cmd, tmp_path, pull_fails=True)
+        assert r.returncode != 0
+        assert 'compose up -d' not in calls and 'compose config --images' not in calls
 
     def test_reset_login_empties_the_old_password_file_and_removes_the_account(self, cmd, tmp_path):
         fake = tmp_path / 'bin'

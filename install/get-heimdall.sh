@@ -10,6 +10,10 @@
 #   4. runs the bundle's setup.sh (generates secrets, detects your LAN interface and subnet).
 #      No dashboard password is asked for or stored: you create the admin account in the browser.
 #   5. runs 'docker compose pull && docker compose up -d' (skip with --no-start)
+#   6. once the new version is up, removes the Heimdall images of older versions (an upgrade would otherwise leave
+#      up to about 1.4 GB behind each time): './setup.sh --prune-old-images'. It touches only Heimdall's own backend and
+#      frontend images, never the database or any other image, and keeps one a container still uses. To keep older
+#      versions, put KEEP_OLD_IMAGES=1 in .env.
 # It does not touch your router or network configuration. It needs no sudo unless Docker itself does.
 #
 # Options: --tier=minimal|intermediate|full  --dir=PATH  --version=vX.Y.Z (default: latest)
@@ -103,10 +107,15 @@ main() {
     fi
 
     if ! $start; then
-        info "Not starting (--no-start). When ready: cd ${dir} && docker compose pull && docker compose up -d"
+        info "Not starting (--no-start). When ready: cd ${dir} && docker compose pull && docker compose up -d && ./setup.sh --prune-old-images"
         return 0
     fi
     (cd "$dir" && "${docker[@]}" compose pull && "${docker[@]}" compose up -d)
+    # The new version is running, so the images of older ones are dead weight. Failing to remove them only costs disk
+    # space, so it never fails the install. The prune runs with the same privileges as the docker commands above.
+    local prune=(./setup.sh --prune-old-images)
+    [ "${docker[0]}" = sudo ] && prune=(sudo ./setup.sh --prune-old-images)
+    (cd "$dir" && "${prune[@]}") || warn "Could not remove the images of older versions. To try again: cd ${dir} && ./setup.sh --prune-old-images"
     wait_for_dashboard
 }
 

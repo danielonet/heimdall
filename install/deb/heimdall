@@ -4,7 +4,7 @@
 #   heimdall setup [setup.sh options]   generates secrets and .env (first time only)
 #   heimdall start                      start now and at every boot
 #   heimdall stop                       stop, and do not start at boot
-#   heimdall upgrade                    pull the images for the installed version and restart
+#   heimdall upgrade                    pull the images for the installed version, restart, remove older versions' images
 #   heimdall status | logs [service] | password | version
 #   heimdall reset-login                remove the dashboard admin account so a new one can be created (data is kept)
 #   heimdall reset                      DELETE all data, secrets and .env (asks first)
@@ -26,6 +26,13 @@ has_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null; }
 
 compose() { (cd "$DIR" && docker compose "$@"); }
 
+# Removes the images of older versions once the new one is running (setup.sh explains exactly what it touches).
+# It only saves disk space, so a failure is a message and never fails the command.
+prune_old_images() {
+    (cd "$DIR" && ./setup.sh --prune-old-images) \
+        || echo "heimdall: could not remove the images of older versions; try again with: cd $DIR && ./setup.sh --prune-old-images" >&2
+}
+
 need_root() { [ "$(id -u)" -eq 0 ] || [ -n "${HEIMDALL_HOME:-}" ] || die "run this with sudo: sudo heimdall ${1:-}"; }
 
 need_setup() { [ -f "$DIR/.env" ] || die "not set up yet — run: sudo heimdall setup"; }
@@ -42,7 +49,7 @@ case "$cmd" in
         ;;
     start)
         need_root start; need_setup
-        if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d; fi
+        if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d && prune_old_images; fi
         echo "Dashboard: http://<this-machine>:3000"
         if [ -s "$DIR/secrets/admin_password.txt" ]; then echo "Sign in with the existing login (sudo heimdall password shows the password)."
         else echo "First visit: create your admin account in the browser (forgotten it later? sudo heimdall reset-login)."; fi
@@ -56,7 +63,7 @@ case "$cmd" in
         # `apt upgrade` already moved IMAGE_TAG (postinst); this fetches the images and restarts.
         # A file added since the installed version is created empty here; otherwise Docker would make a directory.
         [ -e "$DIR/secrets/telegram_bot_token.txt" ] || install -m 600 /dev/null "$DIR/secrets/telegram_bot_token.txt"
-        compose pull && compose up -d
+        compose pull && compose up -d && prune_old_images
         ;;
     status)
         need_root status; need_setup

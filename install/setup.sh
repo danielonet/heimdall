@@ -7,6 +7,7 @@
 # overwrites an existing secret or .env, so it is safe to re-run.
 #
 # Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24] [--skip-disk-check]
+#         ./setup.sh --prune-old-images
 #
 # The dashboard login is not made here: the first time you open the dashboard it asks you to
 # create the admin account, and keeps only a salted hash of the password in its database. No
@@ -15,6 +16,13 @@
 #
 # Afterwards:  docker compose pull && docker compose up -d
 # (.env sets COMPOSE_PROFILES, so the same command works for every tier.)
+#
+# --prune-old-images removes the Heimdall images of older versions. Every release has its own image tag, so each
+# upgrade would otherwise leave the previous backend and frontend images behind (up to about 1.4 GB per version). The
+# one-line installer, 'heimdall upgrade' and the systemd service run it for you once the new version is up. Only
+# Heimdall's own two images are touched (never the database, Redis, Suricata or anything else), only tags other
+# than the one in use, and never with --force: an image a container still uses stays. To keep older versions,
+# put KEEP_OLD_IMAGES=1 in .env.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -25,7 +33,88 @@ ok()   { echo "${G}✔${N} $*"; }
 warn() { echo "${Y}⚠${N} $*" >&2; }
 die()  { echo "${R}✖${N} $*" >&2; exit 1; }
 
-TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK=""
+# ── Images of older versions ────────────────────────────────────────────────
+# Every release has its own image tag (IMAGE_TAG in .env), so an upgrade used to leave the previous version's
+# backend and frontend images on the disk. prune_old_images removes them once the new version is pulled and
+# running. It is deliberately narrow:
+#   - only the two images Heimdall publishes (sentinel-backend and frontend, under HEIMDALL_REGISTRY), and only
+#     their tags other than the one in use, plus their untagged leftovers (what remains when a moving tag such as
+#     :latest is pulled again). The database, Redis, Suricata and every other image are never touched.
+#   - never --force: Docker itself refuses to remove an image a container still uses, and that image stays.
+#   - nothing at all unless the version in use is really on this machine, so a failed pull keeps the old images.
+#   - it never fails an upgrade: a problem is a warning, and the images are simply left for next time.
+keep_old_images() {
+    case "${HEIMDALL_KEEP_OLD_IMAGES:-}" in 1|true|yes) return 0 ;; esac
+    grep -Eqx 'KEEP_OLD_IMAGES=(1|true|yes)' .env 2>/dev/null
+}
+
+in_list() { local needle="$1" item; shift; for item in "$@"; do [ "$item" = "$needle" ] && return 0; done; return 1; }
+
+# remove_image TARGET WHAT: ok/warn line either way; succeeds only if the image was removed.
+remove_image() {
+    local out
+    if out=$(docker image rm "$1" 2>&1); then
+        ok "Removed $2"
+    else
+        warn "Kept $2: ${out%%$'\n'*}"
+        return 1
+    fi
+}
+
+prune_old_images() {
+    if keep_old_images; then
+        info "Keeping the images of older versions (KEEP_OLD_IMAGES=1)."
+        return 0
+    fi
+    local listing ref repo tag id line digests removed=0 kept=0 i
+    local -a current=() current_ids=() repos=()
+    listing=$(docker compose config --images 2>/dev/null) \
+        || { warn "Could not read the image list from docker-compose.yml: no old images removed."; return 0; }
+    while IFS= read -r ref; do
+        case "$ref" in */sentinel-backend:*|*/frontend:*) current+=("$ref") ;; esac
+    done <<< "$listing"
+    if [ "${#current[@]}" -eq 0 ]; then
+        warn "Heimdall's own images are not in docker-compose.yml: no old images removed."
+        return 0
+    fi
+    for ref in "${current[@]}"; do
+        id=$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null) \
+            || { warn "$ref is not on this machine yet: keeping the older images."; return 0; }
+        current_ids+=("$id")
+        repos+=("${ref%:*}")
+    done
+    for ((i = 0; i < ${#repos[@]}; i++)); do
+        repo="${repos[i]}"
+        # Other tags of this repository, and copies with no tag (pulled by digest). A tag that points at the image in
+        # use under another name is not "old", so it stays.
+        while read -r tag id; do
+            [ -n "${id:-}" ] || continue
+            in_list "$id" "${current_ids[@]}" && continue
+            if [ "$tag" = "<none>" ]; then
+                if remove_image "$id" "an untagged $repo image"; then removed=$((removed + 1)); else kept=$((kept + 1)); fi
+            elif remove_image "$repo:$tag" "$repo:$tag"; then removed=$((removed + 1)); else kept=$((kept + 1)); fi
+        done < <(docker image ls --no-trunc --format '{{.Tag}} {{.ID}}' "$repo" 2>/dev/null)
+        # Untagged leftovers: pulling a moving tag again moves it to the new image and leaves the old one with no name.
+        # Its RepoDigests still say where it came from, which is how it is told apart from anyone else's image.
+        while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            digests=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$id" 2>/dev/null) || continue
+            while IFS= read -r line; do
+                [[ "$line" == "$repo@"* ]] || continue
+                if remove_image "$id" "an untagged $repo image"; then removed=$((removed + 1)); else kept=$((kept + 1)); fi
+                break
+            done <<< "$digests"
+        done < <(docker image ls --filter dangling=true --no-trunc --format '{{.ID}}' 2>/dev/null)
+    done
+    if [ "$removed" -gt 0 ]; then
+        ok "Removed $removed older Heimdall image(s) to save disk space."
+    elif [ "$kept" -eq 0 ] && [ -t 1 ]; then
+        info "No older Heimdall images to remove."
+    fi
+    return 0
+}
+
+TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK="" PRUNE_ONLY=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
@@ -33,15 +122,21 @@ for arg in "$@"; do
         --iface=*)  IFACE="${arg#--iface=}" ;;
         --subnet=*) SUBNET="${arg#--subnet=}" ;;
         --skip-disk-check) SKIP_DISK_CHECK=1 ;;
-        -h|--help)  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --prune-old-images) PRUNE_ONLY=1 ;;
+        -h|--help)  awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "Unknown argument: $arg" ;;
     esac
 done
+[ -z "$PRUNE_ONLY" ] || [ "$#" -eq 1 ] || die "--prune-old-images does not combine with other options."
 
 [ "$(uname -s)" = "Linux" ] || die "Heimdall must run on Linux: it sniffs the LAN with host networking."
 [ -f docker-compose.yml ] || die "docker-compose.yml not found next to setup.sh — run this from the extracted bundle."
 command -v docker >/dev/null || die "Docker is not installed. See https://docs.docker.com/engine/install/"
 docker compose version >/dev/null 2>&1 || die "The 'docker compose' plugin is missing. See https://docs.docker.com/compose/install/linux/"
+if [ -n "$PRUNE_ONLY" ]; then
+    prune_old_images
+    exit 0
+fi
 command -v openssl >/dev/null || die "openssl is required to generate secrets."
 
 if [ -z "$TIER" ]; then
@@ -196,6 +291,10 @@ COMPOSE_PROFILES=${profiles}
 
 # Image version to run. Change it, then: docker compose pull && docker compose up -d
 IMAGE_TAG=${VERSION_TAG}
+
+# After an upgrade the images of older versions are removed to save disk space (up to about 1.4 GB per version).
+# Remove the leading # to keep them instead.
+# KEEP_OLD_IMAGES=1
 
 # Router chosen at setup. 'passive' = no router login, devices found from the ARP table.
 # Applied once, on first start; change it afterwards on the Equipment tab.
