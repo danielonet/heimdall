@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Optional
+
+from sentinel.security.log_tail import read_new_lines as read_log_lines
 
 logger = logging.getLogger(__name__)
 
@@ -43,27 +44,10 @@ class SuricataEveLogReader:
     def read_new_lines(self) -> list[str]:
         """Return complete lines written since the last call. Empty list if
         the file doesn't exist yet (e.g. suricata hasn't logged anything)."""
-        try:
-            size = os.path.getsize(self._log_path)
-        except OSError:
-            return []
-
-        if size < self._offset:
-            logger.warning(
-                'eve.json is smaller than the last tracked offset (%d < %d) — '
-                'treating it as a fresh file and re-reading from the start.',
-                size, self._offset,
-            )
-            self._offset = 0
-
-        try:
-            with open(self._log_path) as f:
-                f.seek(self._offset)
-                lines = f.readlines()
-                self._offset = f.tell()
-        except OSError:
-            return []
-        return [line for line in lines if line.strip()]
+        # Bounded (see sentinel/security/log_tail.py): eve.json also carries dns/flow/stats events and never rotates,
+        # so reading it whole from byte 0 after a restart would load all of it into memory.
+        lines, self._offset = read_log_lines(self._log_path, self._offset)
+        return lines
 
 
 class SuricataAlertIngester:

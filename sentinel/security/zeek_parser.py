@@ -25,13 +25,16 @@ import ipaddress
 import json
 import logging
 import os
+from array import array
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import pandas as pd
+
+from sentinel.security.log_tail import read_new_lines as read_log_lines
 
 logger = logging.getLogger(__name__)
 
@@ -75,27 +78,10 @@ class ZeekDnsLogReader:
     def read_new_lines(self) -> list[str]:
         """Return complete lines written since the last call. Empty list if
         the file doesn't exist yet (e.g. zeek hasn't logged a query yet)."""
-        try:
-            size = os.path.getsize(self._log_path)
-        except OSError:
-            return []
-
-        if size < self._offset:
-            logger.warning(
-                'dns.log is smaller than the last tracked offset (%d < %d) — '
-                'treating it as a fresh file and re-reading from the start.',
-                size, self._offset,
-            )
-            self._offset = 0
-
-        try:
-            with open(self._log_path) as f:
-                f.seek(self._offset)
-                lines = f.readlines()
-                self._offset = f.tell()
-        except OSError:
-            return []
-        return [line for line in lines if line.strip()]
+        # Bounded (see sentinel/security/log_tail.py): dns.log never rotates, so reading it whole from byte 0 after
+        # every restart would load all of it into memory.
+        lines, self._offset = read_log_lines(self._log_path, self._offset)
+        return lines
 
 
 class ZeekDnsIngester:
@@ -135,11 +121,38 @@ class ZeekConnBeaconDetector:
     """
 
     def __init__(
-        self, log_dir: str, min_count: int = 10, jitter_tolerance_s: float = 2.0,
+        self, log_dir: str, min_count: int = 10, jitter_tolerance_s: float = 2.0, window_bytes: int = 64_000_000,
     ) -> None:
         self._log_path = Path(log_dir) / 'conn.log'
         self._min_count = min_count
         self._jitter_tolerance_s = jitter_tolerance_s
+        # conn.log never rotates, so "the whole file" grows without bound. Only the last window_bytes are analysed
+        # (about 150,000 connections, days of a busy home network): enough history for any realistic beacon
+        # period, and a fixed cost per scan instead of one that grows for as long as Heimdall runs.
+        self._window_bytes = window_bytes
+
+    def _external_connections(self) -> Iterator[tuple[str, str, int, float]]:
+        """Stream (src, dst, dst_port, ts) for every connection in the window whose destination is outside the
+        local network, one line at a time. Rows without those fields, and lines cut off at the window's edge, are
+        skipped. Nothing but these four values is kept: loading the whole file into a DataFrame needed gigabytes."""
+        try:
+            size = self._log_path.stat().st_size
+            offset = max(0, size - self._window_bytes)
+            with open(self._log_path, 'rb') as f:
+                f.seek(offset)
+                if offset > 0:
+                    f.readline()                    # the window starts mid-line: drop the partial first line
+                for raw in f:
+                    try:
+                        row = json.loads(raw)
+                        src, dst, dport, ts = row['id.orig_h'], row['id.resp_h'], row['id.resp_p'], row['ts']
+                        if is_local_destination(dst):
+                            continue
+                        yield src, dst, int(dport), float(ts)
+                    except (ValueError, KeyError, TypeError):
+                        continue
+        except OSError:
+            return
 
     def detect(self) -> list[dict]:
         """Returns a list of {src, dst, dst_port, count, interval_mean_s,
@@ -157,31 +170,23 @@ class ZeekConnBeaconDetector:
         time. Grouping by port alone separates the two cleanly; grouping
         by (src, dst) only (the original shape) could not.
         """
-        try:
-            df = pd.read_json(self._log_path, lines=True)
-        except (ValueError, FileNotFoundError, OSError):
-            return []
-
-        if df.empty or not {'id.orig_h', 'id.resp_h', 'id.resp_p'}.issubset(df.columns):
-            return []
-
-        df = df[~df['id.resp_h'].map(is_local_destination)]
-        if df.empty:
-            return []
+        timestamps: dict[tuple[str, str, int], array] = {}
+        for src, dst, dport, ts in self._external_connections():
+            timestamps.setdefault((src, dst, dport), array('d')).append(ts)
 
         suspicious = []
-        for (src, dst, dport), group in df.groupby(['id.orig_h', 'id.resp_h', 'id.resp_p']):
-            if len(group) < self._min_count:
+        for (src, dst, dport), values in timestamps.items():
+            if len(values) < self._min_count:
                 continue
-            intervals = group['ts'].sort_values().diff().dropna()
+            intervals = pd.Series(sorted(values)).diff().dropna()
             if len(intervals) < 2:
                 continue  # can't compute a meaningful stddev from one interval
             if intervals.std() < self._jitter_tolerance_s:
                 suspicious.append({
                     'src': src,
                     'dst': dst,
-                    'dst_port': int(dport),
-                    'count': len(group),
+                    'dst_port': dport,
+                    'count': len(values),
                     'interval_mean_s': round(intervals.mean(), 2),
                     'interval_std_s': round(intervals.std(), 2),
                 })
@@ -296,6 +301,15 @@ class ZeekFileExtractionWatcher:
     disk, not just RAM).
     """
 
+    # ClamAV's default stream limit is 25 MB (StreamMaxLength), so a bigger file could not be scanned anyway, and
+    # reading one into memory is what a multi-gigabyte download would otherwise do to this process. zeek/local.zeek
+    # stops extracting at 20 MB; this is the backstop for files extracted before that limit existed.
+    MAX_FILE_BYTES = 25_000_000
+    # One poll reads at most this much in total. What is left stays on disk for the next poll.
+    MAX_POLL_BYTES = 60_000_000
+    # files.log never rotates either: only its last part is searched, since the file was extracted just now.
+    FILES_LOG_TAIL_BYTES = 8_000_000
+
     def __init__(self, extract_dir: str, log_dir: str) -> None:
         self._extract_dir = Path(extract_dir)
         self._log_dir = Path(log_dir)
@@ -315,10 +329,26 @@ class ZeekFileExtractionWatcher:
         fuid_to_ip = self._load_fuid_to_source_ip()
 
         results: list[tuple[str, bytes, Optional[str]]] = []
+        read_bytes = 0
         for entry in entries:
             try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            if size > self.MAX_FILE_BYTES:
+                logger.warning('Extracted file %s is %d bytes, over the %d-byte scan limit: deleted without scanning.',
+                               entry.name, size, self.MAX_FILE_BYTES)
+                try:
+                    os.remove(entry.path)
+                except OSError:
+                    logger.warning('Failed to remove oversized extracted file %s', entry.path)
+                continue
+            if results and read_bytes + size > self.MAX_POLL_BYTES:
+                break                               # the rest waits on disk for the next poll
+            read_bytes += size
+            try:
                 with open(entry.path, 'rb') as f:
-                    data = f.read()
+                    data = f.read(self.MAX_FILE_BYTES)
             except OSError:
                 continue
             finally:
@@ -356,9 +386,13 @@ class ZeekFileExtractionWatcher:
         path = self._log_dir / 'files.log'
         mapping: dict[str, str] = {}
         try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
+            with open(path, 'rb') as f:
+                offset = max(0, os.fstat(f.fileno()).st_size - self.FILES_LOG_TAIL_BYTES)
+                f.seek(offset)
+                if offset > 0:
+                    f.readline()                    # the tail starts mid-line: drop the partial first line
+                for raw in f:
+                    line = raw.decode('utf-8', errors='replace').strip()
                     if not line:
                         continue
                     try:

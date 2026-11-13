@@ -174,6 +174,47 @@ class TestSetup:
         assert '# KEEP_OLD_IMAGES=1' in (tmp_path / '.env').read_text()
         assert 'KEEP_OLD_IMAGES' not in env_file(tmp_path)
 
+    @pytest.mark.parametrize('ram_mb, backend, postgres, clamav', [
+        (3600, '1536m', '1536m', '2048m'),      # a 4 GB board
+        (7600, '2048m', '2048m', '2048m'),      # "8 GB"
+        (15500, '3072m', '4096m', '2560m'),     # "16 GB"
+        (31500, '4096m', '8192m', '3072m'),     # "32 GB"
+    ])
+    def test_memory_caps_are_sized_for_the_machines_ram(self, dist, tmp_path, fake_bin, ram_mb, backend, postgres, clamav):
+        extract(dist, tmp_path)
+        assert run(['./setup.sh', '--tier=minimal', f'--ram-mb={ram_mb}'], tmp_path, fake_bin).returncode == 0
+        env = env_file(tmp_path)
+        assert (env['BACKEND_MEM_LIMIT'], env['POSTGRES_MEM_LIMIT'], env['CLAMAV_MEM_LIMIT']) == (backend, postgres, clamav)
+        assert {k for k in env if k.endswith('_MEM_LIMIT')} == {
+            f'{s}_MEM_LIMIT' for s in ('BACKEND', 'POSTGRES', 'CLAMAV', 'SURICATA', 'ZEEK', 'REDIS', 'OPENCANARY', 'FRONTEND')}
+
+    def test_the_ram_is_read_from_meminfo_when_not_given(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        (tmp_path / 'meminfo').write_text('MemTotal:       16000000 kB\nMemFree: 1 kB\n')
+        run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin, env={'HEIMDALL_MEMINFO': str(tmp_path / 'meminfo')})
+        assert env_file(tmp_path)['BACKEND_MEM_LIMIT'] == '3072m'
+
+    def test_an_unreadable_meminfo_falls_back_to_the_small_caps_with_a_warning(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        r = run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin, env={'HEIMDALL_MEMINFO': str(tmp_path / 'missing')})
+        assert r.returncode == 0 and 'Could not read the machine' in r.stderr
+        assert env_file(tmp_path)['BACKEND_MEM_LIMIT'] == '1536m'
+
+    def test_a_rerun_adds_missing_caps_to_an_older_env_and_never_changes_an_edited_one(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        run(['./setup.sh', '--tier=minimal', '--ram-mb=3600'], tmp_path, fake_bin)
+        text = (tmp_path / '.env').read_text().replace('BACKEND_MEM_LIMIT=1536m', 'BACKEND_MEM_LIMIT=999m')
+        (tmp_path / '.env').write_text('\n'.join(l for l in text.splitlines() if not l.startswith('ZEEK_MEM_LIMIT')) + '\n')
+        run(['./setup.sh', '--tier=minimal', '--ram-mb=31500'], tmp_path, fake_bin)
+        env = env_file(tmp_path)
+        assert env['BACKEND_MEM_LIMIT'] == '999m'               # an edit is kept, whatever the RAM
+        assert env['ZEEK_MEM_LIMIT'] == '4096m'                 # a missing one is added
+
+    def test_a_bad_ram_value_is_refused(self, dist, tmp_path, fake_bin):
+        extract(dist, tmp_path)
+        r = run(['./setup.sh', '--tier=minimal', '--ram-mb=lots'], tmp_path, fake_bin)
+        assert r.returncode != 0 and '--ram-mb' in r.stderr
+
     def test_two_installs_get_different_secrets(self, dist, tmp_path, fake_bin):
         a, b = tmp_path / 'a', tmp_path / 'b'
         for d in (a, b):

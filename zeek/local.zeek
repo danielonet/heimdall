@@ -56,6 +56,12 @@ event zeek_init()
 
 redef FileExtract::prefix = "/var/zeek/extracted/";
 
+# Stop extracting a file after 20 MB. Without a limit, one big download (a disk image, a game, an OS update: all
+# application/octet-stream) is written to disk whole, and the backend then has to read it into memory to scan it.
+# ClamAV's stream limit is 25 MB (sentinel/security/zeek_parser.py's ZeekFileExtractionWatcher.MAX_FILE_BYTES), so
+# nothing past that could be scanned anyway; what a malware dropper needs is in its first bytes.
+redef FileExtract::default_limit = 20971520;
+
 const extract_mime_types: set[string] = {
     "application/x-dosexec",
     "application/x-executable",

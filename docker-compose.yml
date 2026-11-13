@@ -50,6 +50,15 @@ services:
       # bring the stack up. See sentinel/deployment_tiers.py and
       # scripts/install.sh --tier.
       - DEPLOYMENT_TIER=${DEPLOYMENT_TIER:-full}
+      # glibc gives every thread its own malloc arena by default, and a threaded Python process (gunicorn threads,
+      # the scheduler, the packet sniffers) then holds on to freed memory in each of them. Two arenas stop that
+      # slow growth at no measurable cost.
+      - MALLOC_ARENA_MAX=2
+    # Memory caps (every service below has one). Without them, whichever container grows first takes the whole box
+    # down with it: the kernel then kills whatever is biggest, which was the database or the backend. With a cap a
+    # runaway container is killed alone and restarted by `restart: unless-stopped`. They are ceilings, not
+    # reservations, and are generous; change one in .env (for example BACKEND_MEM_LIMIT=2g).
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     secrets:
       - jwt_secret
       - otx_api_key
@@ -84,6 +93,7 @@ services:
   frontend:
     build: ./frontend
     image: ${HEIMDALL_REGISTRY:-ghcr.io/danielonet/heimdall}/frontend:${IMAGE_TAG:-latest}
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
     network_mode: host          # so nginx can proxy /api + /socket.io to
                                  # sentinel-backend at 127.0.0.1:5000 without
                                  # CORS (see frontend/nginx.conf) — nginx
@@ -95,6 +105,7 @@ services:
 
   postgres:
     image: timescale/timescaledb-ha:pg16
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1536m}
     network_mode: host          # sentinel-backend on host net needs localhost DB
     environment:
       POSTGRES_DB: sentinel
@@ -108,6 +119,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
     network_mode: host
     command: redis-server --save 60 1 --loglevel warning
     restart: unless-stopped
@@ -137,6 +149,7 @@ services:
   # full tier only — see sentinel/deployment_tiers.py
   suricata:
     image: ${SURICATA_IMAGE:-jasonish/suricata:latest}
+    mem_limit: ${SURICATA_MEM_LIMIT:-768m}
     profiles: ["full"]
     network_mode: host
     cap_add:
@@ -153,6 +166,7 @@ services:
   # so it's never meaningful in intermediate without zeek alongside it.
   clamav:
     image: ${CLAMAV_IMAGE:-clamav/clamav:stable}
+    mem_limit: ${CLAMAV_MEM_LIMIT:-2g}
     profiles: ["full"]
     ports:
       - "3310:3310"             # TCP socket for pyclamd
@@ -165,6 +179,7 @@ services:
   # signature database. See docs/deployment-tiers-plan.md.
   opencanary:
     image: ${OPENCANARY_IMAGE:-thinkst/opencanary:latest}
+    mem_limit: ${OPENCANARY_MEM_LIMIT:-256m}
     profiles: ["intermediate", "full"]
     network_mode: host          # must appear as a real LAN device
     volumes:
@@ -175,6 +190,7 @@ services:
   # full tier only — see sentinel/deployment_tiers.py
   zeek:
     image: ${ZEEK_IMAGE:-zeek/zeek:latest}
+    mem_limit: ${ZEEK_MEM_LIMIT:-768m}
     profiles: ["full"]
     network_mode: host          # must sniff the same LAN traffic as arp_watch/opencanary/suricata
     cap_add:

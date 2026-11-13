@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from sentinel.db.models import Alert
+from sentinel.security.log_tail import read_new_lines as read_log_lines
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +86,6 @@ class OpenCanaryLogReader:
     def read_new_lines(self) -> list[str]:
         """Return complete lines written since the last call. Empty list if
         the file doesn't exist yet (e.g. opencanary hasn't logged anything)."""
-        try:
-            with open(self._log_path) as f:
-                f.seek(self._offset)
-                lines = f.readlines()
-                self._offset = f.tell()
-        except OSError:
-            return []
-        return [line for line in lines if line.strip()]
+        # Bounded (see sentinel/security/log_tail.py): the log is never rotated, so a restart must not read all of it.
+        lines, self._offset = read_log_lines(self._log_path, self._offset)
+        return lines

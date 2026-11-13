@@ -372,3 +372,14 @@ environment. The installer creates all three up front (a missing bind-mount
 source would make Docker create a directory there). `jwt_secret`, `otx_api_key`,
 `admin_password` and `db_pass` stay read-only Docker secrets. If a password file
 is not writable the API answers 503 with an explanation rather than a 500.
+
+## Memory caps
+
+Every service in `docker-compose.yml` has `mem_limit: ${<NAME>_MEM_LIMIT:-<default>}`; the defaults are the 4 GB row below. `install/setup.sh` detects the RAM (`/proc/meminfo`, `--ram-mb=N` overrides it) and appends the caps for its class to `.env`, skipping any already set. Ceilings, not reservations; sizes are estimates.
+
+| Detected RAM | Counts as | Backend | Postgres | ClamAV | Suricata | Zeek | Redis | OpenCanary | Frontend |
+|---|---|---|---|---|---|---|---|---|---|
+| under 6 GB | 4 GB | 1.5 GB | 1.5 GB | 2 GB | 768 MB | 768 MB | 256 MB | 256 MB | 128 MB |
+| 6 to 12 GB | 8 GB | 2 GB | 2 GB | 2 GB | 1 GB | 1 GB | 256 MB | 256 MB | 128 MB |
+| 12 to 24 GB | 16 GB | 3 GB | 4 GB | 2.5 GB | 1.5 GB | 2 GB | 512 MB | 256 MB | 256 MB |
+| 24 GB and up | 32 GB | 4 GB | 8 GB | 3 GB | 2 GB | 4 GB | 1 GB | 512 MB | 256 MB |

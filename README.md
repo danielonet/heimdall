@@ -244,6 +244,17 @@ sudo heimdall start                     # pulls the images; starts now and at ev
 
 Other commands: `heimdall status | logs [service] | password | upgrade | stop | reset`. Upgrading the package (`sudo apt install ./newer.deb`) moves `IMAGE_TAG` in your `.env` and restarts the stack, and the service then removes the images of older versions; secrets, tier and router choice are kept. Removing or purging the package stops the containers but keeps `.env`, `secrets/` and the database volume, because the database was created with those secrets; `sudo heimdall reset` deletes everything. A signed apt repository (so `apt upgrade` finds new versions by itself) is planned.
 
+#### Memory caps
+
+Every container has a memory cap, so a runaway one is stopped and restarted alone instead of taking the machine down. `setup.sh` reads the machine's RAM and writes the caps into `.env` (`BACKEND_MEM_LIMIT` and so on; re-running it adds missing ones to an older install and never changes one you edited). They are ceilings, not reservations, and the sizes are estimates:
+
+| Detected RAM | Counts as | Backend | Postgres | ClamAV | Suricata | Zeek | Redis | OpenCanary | Frontend |
+|---|---|---|---|---|---|---|---|---|---|
+| under 6 GB | 4 GB | 1.5 GB | 1.5 GB | 2 GB | 768 MB | 768 MB | 256 MB | 256 MB | 128 MB |
+| 6 to 12 GB | 8 GB | 2 GB | 2 GB | 2 GB | 1 GB | 1 GB | 256 MB | 256 MB | 128 MB |
+| 12 to 24 GB | 16 GB | 3 GB | 4 GB | 2.5 GB | 1.5 GB | 2 GB | 512 MB | 256 MB | 256 MB |
+| 24 GB and up | 32 GB | 4 GB | 8 GB | 3 GB | 2 GB | 4 GB | 1 GB | 512 MB | 256 MB |
+
 ### 1. Choose an installation tier and run the installer (from source)
 
 | Tier | Containers beyond core (Postgres/Redis/backend/frontend) | Installer |

@@ -70,18 +70,24 @@ class ModelTrainer:
     async def _feature_vectors_for(self, mac: str):
         cutoff = datetime.now(timezone.utc) - timedelta(days=RETRAIN_WINDOW_DAYS)
         async with get_session() as session:
+            # Only the columns the feature vector needs, as plain rows: a week of 15-second samples is ~40,000 per
+            # device, and a full ORM object for each (with its identity-map bookkeeping) costs many times more memory.
             result = await session.execute(
-                select(TrafficSample)
+                select(
+                    TrafficSample.mac_address, TrafficSample.time, TrafficSample.bytes_sent_delta,
+                    TrafficSample.bytes_recv_delta, TrafficSample.throughput_up_kbps,
+                    TrafficSample.throughput_dn_kbps, TrafficSample.granularity, TrafficSample.poll_interval_s,
+                )
                 .where(TrafficSample.mac_address == mac, TrafficSample.time >= cutoff)
                 .order_by(TrafficSample.time)
             )
-            rows = result.scalars().all()
+            rows = result.all()
 
         return [build_feature_vector(_to_snapshot(row)) for row in rows]
 
 
-def _to_snapshot(row: TrafficSample) -> TrafficSampleSnapshot:
-    """Adapt a persisted traffic_samples row into the dataclass build_feature_vector expects."""
+def _to_snapshot(row) -> TrafficSampleSnapshot:
+    """Adapt a persisted traffic_samples row (an ORM object or a column row) into the dataclass build_feature_vector expects."""
     return TrafficSampleSnapshot(
         mac_address=row.mac_address,
         timestamp=row.time,

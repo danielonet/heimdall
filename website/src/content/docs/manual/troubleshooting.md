@@ -49,6 +49,26 @@ The stock rule set is tuned for enterprise traffic. Add suppressions for the rul
 ## Something is wrong and I need logs
 `sudo heimdall logs` (.deb), or `docker compose logs -f --tail 100` in the install folder.
 
+## The machine freezes, or containers restart again and again, with no swap
+On a small machine (about 4 GB, as on many single-board computers) the **full** tier runs the database, Suricata, Zeek, ClamAV and the backend side by side, and a Linux machine with no swap goes straight from "full" to the kernel killing a process. Signs: `dmesg | grep -i "out of memory"` names `gunicorn` or another container's process, `docker stats --no-stream` shows one container near its limit, and the load average is far above the number of cores.
+
+- Every container has a memory cap, so a runaway one is killed and restarted alone instead of taking the machine down. The installer sizes the caps for the RAM it finds (table below). A machine installed before this existed gets them the next time you run `./setup.sh` (.deb: `sudo heimdall setup`); caps you have edited are kept. `docker stats --no-stream` shows each container's use against its cap. Raise one in `.env` if a healthy container is killed, for example `BACKEND_MEM_LIMIT=2g`, then `docker compose up -d`. The names are `BACKEND_`, `POSTGRES_`, `CLAMAV_`, `SURICATA_`, `ZEEK_`, `REDIS_`, `OPENCANARY_` and `FRONTEND_` followed by `MEM_LIMIT`.
+- Add a swap file so a short spike is slow instead of fatal: `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`, and add `/swapfile none swap sw 0 0` to `/etc/fstab` to keep it after a reboot. On an SD card or eMMC, swap wears the storage, so use it as a safety net, not a daily workspace.
+- If 4 GB is all you have, use the **intermediate** tier (no Suricata, Zeek or ClamAV): set `DEPLOYMENT_TIER=intermediate` and `COMPOSE_PROFILES=intermediate` in `.env`, then `docker compose up -d --remove-orphans`.
+- Older versions of the backend read Zeek's `conn.log` whole on every beacon scan, and `conn.log` is never rotated, so the backend's memory grew with the size of that file. It now reads a bounded window, and the other log readers and the file scan are bounded too. If you see one backend process near 2 GB, upgrade first.
+
+### Memory caps by RAM
+
+These are ceilings, not reservations: they add up to more than the RAM on purpose, because only the container that grows is stopped. The sizes are estimates, not measurements on every kind of machine; tighten or raise them from `docker stats`.
+
+| Detected RAM | Counts as | Backend | Postgres | ClamAV | Suricata | Zeek | Redis | OpenCanary | Frontend |
+|---|---|---|---|---|---|---|---|---|---|
+| under 6 GB | 4 GB | 1.5 GB | 1.5 GB | 2 GB | 768 MB | 768 MB | 256 MB | 256 MB | 128 MB |
+| 6 to 12 GB | 8 GB | 2 GB | 2 GB | 2 GB | 1 GB | 1 GB | 256 MB | 256 MB | 128 MB |
+| 12 to 24 GB | 16 GB | 3 GB | 4 GB | 2.5 GB | 1.5 GB | 2 GB | 512 MB | 256 MB | 256 MB |
+| 24 GB and up | 32 GB | 4 GB | 8 GB | 3 GB | 2 GB | 4 GB | 1 GB | 512 MB | 256 MB |
+
+
 ## Upgrading
 Script install: run the install command again. .deb: install the newer package. Your data and secrets are kept, and the images of the older versions are removed afterwards (see [Upgrade](/manual/upgrade/#older-images-are-removed)).
 

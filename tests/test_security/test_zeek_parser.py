@@ -427,3 +427,55 @@ class TestZeekFileExtractionWatcher:
         results = watcher.collect()
 
         assert results[0][2] is None
+
+
+class TestMemoryBounds:
+    """conn.log, files.log and the extraction directory are never cleaned up by Zeek, so nothing may read them whole."""
+
+    def test_beacon_detector_only_analyses_the_end_of_conn_log(self, tmp_path):
+        old = [_conn_row('10.100.102.50', '203.0.113.10', ts=float(i * 60)) for i in range(12)]     # a beacon, long ago
+        recent = [_conn_row('10.100.102.51', '203.0.113.20', ts=1e9 + i * 60) for i in range(12)]   # a beacon, now
+        filler = [_conn_row('10.100.102.52', f'198.51.100.{i % 200}', ts=2e9 + i * 7.3) for i in range(300)]
+        (tmp_path / 'conn.log').write_text('\n'.join(json.dumps(r) for r in old + filler + recent) + '\n')
+
+        whole = ZeekConnBeaconDetector(str(tmp_path)).detect()
+        windowed = ZeekConnBeaconDetector(str(tmp_path), window_bytes=8_000).detect()
+
+        assert {r['src'] for r in whole} == {'10.100.102.50', '10.100.102.51'}
+        assert {r['src'] for r in windowed} == {'10.100.102.51'}
+
+    def test_beacon_detector_skips_lines_that_are_not_connections(self, tmp_path):
+        rows = [json.dumps(_conn_row('10.100.102.50', '203.0.113.10', ts=float(i * 60))) for i in range(12)]
+        (tmp_path / 'conn.log').write_text('\n'.join(['not json', '{"ts": 1}', '[]', *rows]) + '\n')
+        assert [r['src'] for r in ZeekConnBeaconDetector(str(tmp_path)).detect()] == ['10.100.102.50']
+
+    def _watcher(self, tmp_path):
+        (tmp_path / 'extracted').mkdir()
+        (tmp_path / 'logs').mkdir()
+        return ZeekFileExtractionWatcher(str(tmp_path / 'extracted'), str(tmp_path / 'logs')), tmp_path / 'extracted'
+
+    def test_a_file_over_the_scan_limit_is_deleted_unread(self, tmp_path, monkeypatch):
+        watcher, d = self._watcher(tmp_path)
+        monkeypatch.setattr(ZeekFileExtractionWatcher, 'MAX_FILE_BYTES', 100)
+        (d / 'extract-1-a-Fbig').write_bytes(b'x' * 101)
+        (d / 'extract-2-a-Fsmall').write_bytes(b'y' * 100)
+        names = [name for name, _, _ in watcher.collect()]
+        assert names == ['extract-2-a-Fsmall']
+        assert list(d.iterdir()) == []
+
+    def test_one_poll_reads_a_bounded_amount_and_leaves_the_rest_for_the_next(self, tmp_path, monkeypatch):
+        watcher, d = self._watcher(tmp_path)
+        monkeypatch.setattr(ZeekFileExtractionWatcher, 'MAX_POLL_BYTES', 250)
+        for i in range(5):
+            (d / f'extract-{i}-a-F{i}').write_bytes(b'z' * 100)
+        first = watcher.collect()
+        assert len(first) == 2 and len(list(d.iterdir())) == 3
+        assert len(watcher.collect()) == 2 and len(watcher.collect()) == 1 and list(d.iterdir()) == []
+
+    def test_files_log_is_searched_only_near_its_end(self, tmp_path, monkeypatch):
+        watcher, d = self._watcher(tmp_path)
+        monkeypatch.setattr(ZeekFileExtractionWatcher, 'FILES_LOG_TAIL_BYTES', 400)
+        rows = [{'fuid': f'F{i}', 'id.orig_h': '10.0.0.9', 'id.resp_h': '203.0.113.5', 'is_orig': False} for i in range(50)]
+        (tmp_path / 'logs' / 'files.log').write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        mapping = watcher._load_fuid_to_source_ip()
+        assert 'F49' in mapping and 'F0' not in mapping

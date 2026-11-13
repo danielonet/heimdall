@@ -6,7 +6,7 @@
 # secrets, detects the LAN interface and subnet, and writes .env. It never
 # overwrites an existing secret or .env, so it is safe to re-run.
 #
-# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24] [--skip-disk-check]
+# Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24] [--skip-disk-check] [--ram-mb=N]
 #         ./setup.sh --prune-old-images
 #
 # The dashboard login is not made here: the first time you open the dashboard it asks you to
@@ -16,6 +16,11 @@
 #
 # Afterwards:  docker compose pull && docker compose up -d
 # (.env sets COMPOSE_PROFILES, so the same command works for every tier.)
+#
+# Memory caps: every container gets a cap (docker-compose.yml, *_MEM_LIMIT in .env) so one runaway container cannot
+# take the whole machine down. setup.sh reads the machine's RAM (/proc/meminfo; --ram-mb=N overrides it) and writes caps
+# sized for it: under 6 GB, 6-12 GB (an "8 GB" machine), 12-24 GB (16 GB) or 24 GB and up (32 GB). A cap already in
+# .env is never changed, so edit them freely.
 #
 # --prune-old-images removes the Heimdall images of older versions. Every release has its own image tag, so each
 # upgrade would otherwise leave the previous backend and frontend images behind (up to about 1.4 GB per version). The
@@ -114,7 +119,7 @@ prune_old_images() {
     return 0
 }
 
-TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK="" PRUNE_ONLY=""
+TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK="" PRUNE_ONLY="" RAM_MB=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
@@ -122,11 +127,13 @@ for arg in "$@"; do
         --iface=*)  IFACE="${arg#--iface=}" ;;
         --subnet=*) SUBNET="${arg#--subnet=}" ;;
         --skip-disk-check) SKIP_DISK_CHECK=1 ;;
+        --ram-mb=*) RAM_MB="${arg#--ram-mb=}" ;;
         --prune-old-images) PRUNE_ONLY=1 ;;
         -h|--help)  awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "Unknown argument: $arg" ;;
     esac
 done
+case "$RAM_MB" in ""|*[!0-9]*) [ -z "$RAM_MB" ] || die "--ram-mb needs a number of megabytes." ;; esac
 [ -z "$PRUNE_ONLY" ] || [ "$#" -eq 1 ] || die "--prune-old-images does not combine with other options."
 
 [ "$(uname -s)" = "Linux" ] || die "Heimdall must run on Linux: it sniffs the LAN with host networking."
@@ -313,6 +320,35 @@ ENV
     chmod 600 .env
     ok "Wrote .env"
 fi
+
+# ── Memory caps ─────────────────────────────────────────────────────────────
+# Sizes in MB per class: backend postgres clamav suricata zeek redis opencanary frontend. They are ceilings, not
+# reservations, so together they may exceed the RAM: only the container that grows is stopped.
+if [ -z "$RAM_MB" ]; then
+    RAM_MB=$(awk '/^MemTotal:/ { print int($2 / 1024); exit }' "${HEIMDALL_MEMINFO:-/proc/meminfo}" 2>/dev/null || true)
+fi
+if [ -z "$RAM_MB" ]; then
+    warn "Could not read the machine's RAM: using the caps for a small (4 GB) machine."
+    RAM_MB=0
+fi
+if   [ "$RAM_MB" -ge 24576 ]; then RAM_CLASS="32 GB"; CAPS="4096 8192 3072 2048 4096 1024 512 256"
+elif [ "$RAM_MB" -ge 12288 ]; then RAM_CLASS="16 GB"; CAPS="3072 4096 2560 1536 2048 512 256 256"
+elif [ "$RAM_MB" -ge 6144 ];  then RAM_CLASS="8 GB";  CAPS="2048 2048 2048 1024 1024 256 256 128"
+else                               RAM_CLASS="4 GB";  CAPS="1536 1536 2048 768 768 256 256 128"
+fi
+added=0
+read -r -a cap_values <<< "$CAPS"
+i=0
+for var in BACKEND POSTGRES CLAMAV SURICATA ZEEK REDIS OPENCANARY FRONTEND; do
+    value="${cap_values[i]}"; i=$((i + 1))
+    grep -q "^${var}_MEM_LIMIT=" .env && continue
+    if [ "$added" -eq 0 ]; then
+        printf '\n# Memory cap per container, sized by setup.sh for %s of RAM (%s MB found). Ceilings, not reservations.\n# Change one and run: docker compose up -d\n' "$RAM_CLASS" "$RAM_MB" >> .env
+        added=1
+    fi
+    echo "${var}_MEM_LIMIT=${value}m" >> .env
+done
+if [ "$added" -eq 1 ]; then ok "Memory caps set for a $RAM_CLASS machine ($RAM_MB MB found)"; else ok "Memory caps already in .env — kept"; fi
 
 echo ""
 echo "${B}Ready.${N} Start Heimdall:"
