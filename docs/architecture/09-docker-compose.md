@@ -148,7 +148,7 @@ secrets:
   db_pass:         { file: ./secrets/db_pass.txt }
   admin_password:  { file: ./secrets/admin_password.txt }
   smtp_password:   { file: ./secrets/smtp_password.txt }  # optional — blank file is valid (unauthenticated relay)
-  telegram_bot_token: { file: ./secrets/telegram_bot_token.txt }  # optional — blank until entered on Settings → Notifications
+  telegram_bot_token: { file: ./secrets/telegram_bot_token.txt }  # optional — blank until entered on the Notifications tab
 
 volumes:
   pgdata:

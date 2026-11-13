@@ -19,7 +19,7 @@ export default defineConfig({
       pagination: true,
       sidebar: [
         { label: 'Start', items: ['manual', 'manual/first-login', 'manual/mobile', 'manual/upgrade'] },
-        { label: 'Pages', items: ['manual/dashboard', 'manual/network-map', 'manual/devices', 'manual/alerts', 'manual/threats', 'manual/ports', 'manual/wifi-scan', 'manual/rules', 'manual/reports', 'manual/equipment', 'manual/settings'] },
+        { label: 'Pages', items: ['manual/dashboard', 'manual/network-map', 'manual/devices', 'manual/alerts', 'manual/threats', 'manual/ports', 'manual/wifi-scan', 'manual/rules', 'manual/reports', 'manual/equipment', 'manual/notifications', 'manual/settings'] },
         { label: 'Guides', items: ['manual/network-setup', 'manual/notifications-setup'] },
         { label: 'Help', items: ['manual/troubleshooting', 'manual/faq', 'manual/glossary'] },
       ],

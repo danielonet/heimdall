@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthGuard } from './AuthGuard'
 import { Shell } from './Shell'
@@ -13,6 +13,7 @@ import { WifiScanPage } from './pages/WifiScanPage'
 import { ThreatsPage } from './pages/ThreatsPage'
 import { RulesPage } from './pages/RulesPage'
 import { ReportsPage } from './pages/ReportsPage'
+import { NotificationsPage } from './pages/NotificationsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { EquipmentPage } from './pages/EquipmentPage'
 
@@ -39,9 +40,7 @@ function App() {
               <Route path="/threats" element={<ThreatsPage />} />
               <Route path="/rules" element={<RulesPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              {/* Notifications is now a section of Settings, not its own
-                  page — redirect any old link/bookmark instead of a 404. */}
-              <Route path="/notifications" element={<Navigate to="/settings" replace />} />
+              <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Routes>

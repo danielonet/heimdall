@@ -2769,7 +2769,7 @@ class SentinelScheduler:
 
     def reload_notification_config(self, config: NotificationConfig) -> None:
         """Thread-safe: rebuild the notifier with new SMTP settings — called
-        after the admin saves the Settings tab's Notifications section, so it
+        after the admin saves a channel on the Notifications tab, so it
         takes effect on the next notify() call without restarting the
         process. Also drops the cached RuleEngine (lazily rebuilt in
         _poll_job) since it was constructed with a reference to the old

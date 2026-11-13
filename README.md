@@ -137,7 +137,7 @@ Blocking and quarantining a device are manual actions. Automatic blocking (`auto
 
 ### Notifications & reporting
 
-- Push (ntfy.sh), Telegram channel and email (SMTP) notifications, configurable from the Settings page, each with a send-test button (the Telegram bot token is kept in a secret file)
+- Push (ntfy.sh), Telegram channel and email (SMTP) notifications, configurable from the Notifications page, each with a send-test button (the Telegram bot token is kept in a secret file)
 - Daily security digest — a summary of alert counts by severity/type since the last digest, including a calm "all clear" message on a quiet day
 - CSV alert export for audit trails / incident record-keeping
 - Prometheus-style `/api/metrics` endpoint (device counts, alert rates, poll latency) for pointing an existing Grafana/Prometheus home-lab setup at Heimdall

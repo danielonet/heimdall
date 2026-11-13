@@ -3,7 +3,7 @@ title: "Guide: set up notifications"
 description: "Step-by-step setup of email (with a Gmail example), Telegram and ntfy push notifications."
 ---
 
-Heimdall can tell you about trouble even when the dashboard is closed. This guide takes each channel from nothing to a working test message. The panel itself is described in [Settings](/manual/settings/).
+Heimdall can tell you about trouble even when the dashboard is closed. This guide takes each channel from nothing to a working test message. The page itself is described in [Notifications](/manual/notifications/).
 
 ## What you will receive
 
@@ -28,7 +28,7 @@ Every one of these sends the *text* of an alert (its title, the device and the a
 
 ## Before any channel: the test buttons
 
-Each channel has a test button on **Settings → Notifications**: **Send test** (ntfy), **Send test message** (Telegram) and **Send test email**. The button sends a short message through the settings you have already **saved**, so the sequence is always: fill in, **Save**, then test. A green line means the message left Heimdall and the service accepted it. A red line gives the reason in plain words and never shows your password, token or topic address.
+Each channel has a test button on the **Notifications** page: **Send test** (ntfy), **Send test message** (Telegram) and **Send test email**. The button sends a short message through the settings you have already **saved**, so the sequence is always: fill in, **Save**, then test. A green line means the message left Heimdall and the service accepted it. A red line gives the reason in plain words and never shows your password, token or topic address.
 
 ## Push notifications with ntfy
 
@@ -37,7 +37,7 @@ ntfy is a free notification service. You pick a *topic* name, subscribe to it on
 1. **Install the app.** Search for **ntfy** in the Play Store or App Store, or open `https://ntfy.sh` in a browser for web notifications.
 2. **Choose a topic name that nobody can guess.** On the public ntfy.sh server a topic has no password: anyone who knows its name can read it and post to it. Use something long and random, for example `heimdall-k7x2q9vmr4t8`. Do not use `heimdall` or your surname.
 3. **Subscribe.** In the app press **+**, enter the topic name, and keep the default server.
-4. **Enter it in Heimdall.** On **Settings → Notifications → Push — ntfy.sh**, paste the full address into **Topic URL**, for example `https://ntfy.sh/heimdall-k7x2q9vmr4t8`, then press **Save**.
+4. **Enter it in Heimdall.** On **Notifications → Push — ntfy.sh**, paste the full address into **Topic URL**, for example `https://ntfy.sh/heimdall-k7x2q9vmr4t8`, then press **Save**.
 5. **Press Send test.** The phone should buzz within a few seconds. If it does not, check the topic spelling in the app and in Heimdall: one letter wrong is a different topic.
 
 Notes:
@@ -59,7 +59,7 @@ Heimdall posts through a **bot that you create yourself**. A bot is not a person
    - A **private** channel or group has a numeric id starting with `-100`. Post any message there, then open `https://api.telegram.org/bot<YOUR TOKEN>/getUpdates` in a browser (replace `<YOUR TOKEN>` with your token) and find `"chat":{"id":-100…`.
    - For **just you**, send a message to the bot and look for `"chat":{"id":` followed by a positive number in the same `getUpdates` page.
    - Anyone who sees that web address sees your token, so never share a screenshot of it.
-4. **Enter both in Heimdall.** On **Settings → Notifications → Telegram** paste the **Bot token** and the **Channel or chat**, then press **Save**.
+4. **Enter both in Heimdall.** On **Notifications → Telegram** paste the **Bot token** and the **Channel or chat**, then press **Save**.
 5. **Press Send test message.** A green line means it arrived.
 
 The token is stored in a secret file on the Heimdall machine, not in the database, and is shown as dots afterwards. To replace it, paste a new one and save. To turn Telegram off, clear the channel field and save. On an installation upgraded from an older version, run `sudo heimdall upgrade` (or `./setup.sh` in the install folder) once so the token file exists.
@@ -96,7 +96,7 @@ Google does not accept your normal password from an app. You need an **app passw
 
 1. **Turn on 2-Step Verification** at `myaccount.google.com/security`. Google offers app passwords only when it is on. A work or school (Workspace) account may have them disabled by its administrator; if so, use a personal account or another provider.
 2. **Create the app password.** Open `myaccount.google.com/apppasswords`, name it "Heimdall" and press **Create**. Google shows 16 letters in four groups **once**. Copy them now. If you lose them, delete that app password and make a new one. If the page does not appear, search "App passwords" in your Google Account search box.
-3. **Fill in Heimdall.** On **Settings → Notifications → Email**:
+3. **Fill in Heimdall.** On **Notifications → Email**:
 
    | Field | Value |
    |---|---|

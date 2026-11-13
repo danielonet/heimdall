@@ -49,7 +49,7 @@ you then write the sentence. Add a row when you add a document, in the same chan
 | `docs/architecture/09-docker-compose.md` | reference | You change `docker-compose.yml`, the install tiers, first-run setup or the Suricata, OpenCanary and Zeek configuration. |
 | `docs/architecture/10-mock-router.md` | reference | You use or extend the mock Sagemcom adapter or its WireMock recording. |
 | `docs/architecture/11-multi-adapter-auto-detection.md` | proposal | You design router adapters or startup discovery. A specification: the `AdapterRegistry` it names is not in `sentinel/`, though many adapters exist under `sentinel/adapter/`. Its heading says "10."; the file is 11. |
-| `docs/architecture/12-switch-discovery-snmp.md` | proposal | You consider managed-switch support (LLDP, SNMP BRIDGE-MIB, per-device wired traffic). Not built: no `sentinel/switches/` and no SNMP code. Read section 2.10 of `docs/router-and-switch-expansion-plan.md` first: its enricher copies a port's totals onto every MAC on that port and swaps upload and download. Its heading says "11."; the file is 12. |
+| `docs/architecture/12-switch-discovery-snmp.md` | proposal | You consider SNMP or LLDP discovery of switches (BRIDGE-MIB, per-device wired traffic). Not built: there is no SNMP code. The switch monitoring that does exist reads a switch's web pages (`sentinel/switches/`). Read section 2.10 of `docs/router-and-switch-expansion-plan.md` first: its enricher copies a port's totals onto every MAC on that port and swaps upload and download. Its heading says "11."; the file is 12. |
 | `docs/architecture/13-wifi-monitor.md` | reference | You touch the WiFi Monitor, rogue-AP detection or the WiFi tab. Live-verified on a monitor-mode USB adapter. |
 | `docs/architecture/14-passive-adapter.md` | reference | You touch the "Other / not listed" passive mode for routers Heimdall has no adapter for. |
 
@@ -88,7 +88,7 @@ feature before you change it, not for how it behaves today.
 | `docs/deployment-tiers-plan.md` | plan | You touch the minimal, intermediate and full tiers and which services each one runs. |
 | `docs/network-map-plan.md` | plan | You touch the Network Map tab (the BIFRÖST radial layout). |
 | `docs/dashboard-rail-and-palette-plan.md` | plan | You touch the dashboard's right rail or the palette toggle. It shipped with Amber CRT, not the Arctic Ops palette it first named. |
-| `docs/router-and-switch-expansion-plan.md` | proposal | You add router adapters, or you add or design managed-switch support. Part 1 is partly built (many adapters exist); Part 2 (a driver-based switch pipeline; first target HC-SWTGW218AS, adding a switch = a definition plus captured pages) is a design only, not built. Its Part 1 line saying no registry exists predates those adapters. |
+| `docs/router-and-switch-expansion-plan.md` | plan | You add router adapters, or you add or change managed-switch support. Part 1 is partly built (many adapters exist; the rest are proposals). Part 2 (a driver-based switch pipeline; adding a switch = a definition plus captured pages) is built for the HC-SWTGW218AS (`sentinel/switches/`) and was run on that real switch; its phases 4 to 6 are not started, and its status banner lists what changed from the first draft. Its Part 1 line saying no registry exists predates those adapters. |
 
 ## Running and verifying
 
@@ -108,7 +108,7 @@ feature before you change it, not for how it behaves today.
 | `docs/website/mockups/README.md` | mockup | You compare the built site with the reviewed mockups. |
 | `website/README.md` | guide | You build, develop or deploy the site; lists which files are generated and must not be committed. |
 | `website/src/content/docs/manual/index.md` | guide | You want the manual's table of contents. One chapter per dashboard page: change a page, change its chapter. |
-| `website/src/content/docs/manual/network-setup.md` | guide | You change how a router or access point is connected, the WiFi monitor / evil-twin setup, or the switch placeholder. |
+| `website/src/content/docs/manual/network-setup.md` | guide | You change how a router or access point is connected, the WiFi monitor / evil-twin setup, or the managed-switch part (Part 5). |
 | `website/src/content/docs/manual/notifications-setup.md` | guide | You change a notification channel (ntfy, Telegram, email) or its error messages. |
 | `website/src/content/docs/manual/upgrade.md` | guide | You change how an installed Heimdall is upgraded (script, .deb, by hand) or what an upgrade keeps. |
 | `website/src/content/docs/manual/first-login.md` | guide | You change sign-in, first-run setup or the initial password flow. |
@@ -121,7 +121,8 @@ feature before you change it, not for how it behaves today.
 | `website/src/content/docs/manual/threats.md` | guide | You change the Threats page, the threat score or the IP lookup. |
 | `website/src/content/docs/manual/rules.md` | guide | You change the Rules page. |
 | `website/src/content/docs/manual/reports.md` | guide | You change the Reports page or a report chart. |
-| `website/src/content/docs/manual/equipment.md` | guide | You change the Equipment page or the router list. |
+| `website/src/content/docs/manual/equipment.md` | guide | You change the Equipment page, the router list or the Switches section. |
+| `website/src/content/docs/manual/notifications.md` | guide | You change the Notifications page: a channel's fields, its test button or the wording of a test result. The step-by-step setup is in `notifications-setup.md`. |
 | `website/src/content/docs/manual/settings.md` | guide | You add, remove or rename a setting. |
 | `website/src/content/docs/manual/mobile.md` | guide | You change the mobile layout (breakpoint 768px). |
 | `website/src/content/docs/manual/glossary.md` | guide | You introduce or redefine a term users will see. |

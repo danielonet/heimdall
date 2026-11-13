@@ -33,6 +33,11 @@ function PaletteToggle() {
   )
 }
 
+// The header (brand + these tabs + the NOC/SOC, palette, logout and clock block) has to fit on one line, and
+// anything that does not fit is cut off at the right edge. Twelve tabs at the roomy spacing (px-4, 2px
+// letter-spacing) need a 1780px-wide screen; the tighter spacing (px-3, 1.5px) makes the row exactly as wide as
+// the eleven tabs were at the roomy one, so the header still fits wherever it did before NOTIFICATIONS was added.
+// Screens at least 1780px wide get the roomy spacing back.
 const NAV_ITEMS = [
   { to: '/', label: 'DASHBOARD', end: true },
   { to: '/map', label: 'MAP' },
@@ -44,6 +49,7 @@ const NAV_ITEMS = [
   { to: '/rules', label: 'RULES' },
   { to: '/reports', label: 'REPORTS' },
   { to: '/equipment', label: 'EQUIPMENT' },
+  { to: '/notifications', label: 'NOTIFICATIONS' },
   { to: '/settings', label: 'SETTINGS' },
 ]
 
@@ -106,7 +112,7 @@ export function DesktopShell() {
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `flex items-center border-r border-border px-4 text-[10px] tracking-[2px] transition-colors ${
+                `flex items-center border-r border-border px-3 text-[10px] tracking-[1.5px] transition-colors min-[1780px]:px-4 min-[1780px]:tracking-[2px] ${
                   isActive
                     ? 'border-b-2 border-b-accent-green text-accent-green'
                     : 'text-text-muted hover:text-text-primary'

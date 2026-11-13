@@ -5,7 +5,6 @@ import { AlertLifecycleSection } from '../components/settings/AlertLifecycleSect
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DataRetentionSection } from '../components/settings/DataRetentionSection'
 import { LearningStatusSection } from '../components/settings/LearningStatusSection'
-import { NotificationsSection } from '../components/settings/NotificationsSection'
 import { PurgeDatabaseSection } from '../components/settings/PurgeDatabaseSection'
 import heimdallLogo from '../assets/heimdall-icon.png'
 
@@ -13,25 +12,27 @@ export function SettingsPage() {
   const mode = useLayoutMode()
   const navigate = useNavigate()
 
-  // Everything that used to be the separate NOTIFICATIONS tab now lives in
-  // this one tile grid too (requested directly: consolidate the tab into
-  // Settings) — and several formerly-standalone tiles were merged into
-  // denser ones along the way (AlertLifecycleSection = staleness +
-  // auto-resolve, DataRetentionSection = DB retention + device archive/
-  // purge, NotificationsSection = ntfy + SMTP)
-  // specifically so the whole page reads as fewer, richer cards instead of
-  // many thin ones — the actual ask, not just a relocation. Router,
-  // WiFi monitor and (future) switch configuration live on the EQUIPMENT page, not here.
+  // Heimdall-wide options only: learning, auto-block, alert lifecycle, data
+  // retention and the purge. Router, WiFi monitor and managed-switch
+  // configuration live on the EQUIPMENT page and the alert channels (ntfy,
+  // Telegram, email) on the NOTIFICATIONS page. Notifications was folded
+  // into this page once and came out again because the page had become too
+  // heavy. Several formerly-standalone tiles were merged into denser ones
+  // (AlertLifecycleSection = staleness + auto-resolve, DataRetentionSection
+  // = DB retention + device archive/purge), so the page reads as a few
+  // richer cards instead of many thin ones.
   //
   // Responsive beyond the binary mobile/desktop split this codebase
   // otherwise uses everywhere else: base desktop is 2-up, xl (>=1280px) is
-  // 4-up, so this fits as one wide page on a real monitor without forcing
-  // a scroll a phone-width layout wouldn't need either. The two content-
-  // heavy merged tiles (DATA RETENTION, NOTIFICATIONS) span 2 columns at
-  // every desktop width — full-width at 2-up, half-width side-by-side once
-  // 4-up kicks in — since their own multi-field rows need more than one
-  // quarter of a narrow-ish desktop window to lay out cleanly.
-  const tilesClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-2 xl:grid-cols-4 gap-3'
+  // 3-up. The one content-heavy tile (DATA RETENTION) spans 2 columns at
+  // every desktop width, since its multi-field rows need more than one
+  // narrow column. DOM order is what keeps the grid gap-free under plain
+  // (sparse) auto-flow: four single tiles, then the wide one. At 2-up that
+  // is two full rows and the wide tile on its own row; at 3-up it is three
+  // singles, then the last single beside the wide tile. grid-flow-dense
+  // would let the dangerous PURGE DATABASE tile jump ahead of its DOM
+  // position, so the order is tuned instead.
+  const tilesClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-2 xl:grid-cols-3 gap-3'
   const wideTileClass = mode === 'mobile' ? '' : 'col-span-2'
 
   async function handleLogout() {
@@ -48,9 +49,6 @@ export function SettingsPage() {
         <PurgeDatabaseSection />
         <div className={wideTileClass}>
           <DataRetentionSection />
-        </div>
-        <div className={wideTileClass}>
-          <NotificationsSection />
         </div>
       </div>
 

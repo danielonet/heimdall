@@ -8,7 +8,7 @@ The dashboard has two layouts. On a screen up to 768 pixels wide it switches to 
 In the phone layout:
 
 - The **NOC / SOC** switch sits under the title, next to the status pills (see [Dashboard](/manual/dashboard/)).
-- A row of tabs at the top (Overview, Devices, Alerts, Threats, Rules, Reports, Equipment) scrolls sideways.
+- A row of tabs at the top (Overview, Devices, Alerts, Threats, Rules, Reports, Equipment, Notifications) scrolls sideways.
 - A bar at the bottom has **Home**, **Devices**, **Alerts**, **Threats** and **Config** (the Settings page).
 - The overview shows the same figures as the full dashboard as four tiles in two columns (devices online, open alerts, threat score, services active), then your connected devices.
 

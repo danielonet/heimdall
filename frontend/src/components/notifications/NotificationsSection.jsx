@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLayoutMode } from '../../hooks/useLayoutMode'
 import { useSettings, useTestEmail, useTestNtfy, useTestTelegram, useUpdateSettings } from '../../hooks/useSettings'
 
 const EMPTY_SMTP_FORM = {
@@ -16,20 +17,37 @@ function TestResult({ test, okText }) {
   )
 }
 
-/** Merged NtfyUrlSection + SmtpSection — the two outbound notification
- * channels, one card. Consolidated out of the standalone Notifications tab
- * into Settings; see SettingsPage's own note on that. Each channel keeps
- * its own independent form/save (two PATCH bodies, two dirty-trackers),
- * just under one shared intro instead of two — the "CRITICAL now, everything
- * else in the daily digest" behavior is identical for both channels
- * (NotificationService.notify() fans the same event out to whichever
- * channels are configured), so a single accurate paragraph replaces what
- * used to be two — one of which had drifted out of sync with the actual
- * severity gate (notify_new_critical_alert is CRITICAL-only, not
- * CRITICAL/WARNING as the old ntfy copy claimed). */
+/** One channel's card: its title and its own form. */
+function ChannelCard({ title, children }) {
+  return (
+    <div className="border border-border bg-surface p-3">
+      <div className="mb-2 text-[8px] tracking-[3px] text-text-muted">{title}</div>
+      {children}
+    </div>
+  )
+}
+
+/** Why saving one channel failed, shown inside that channel's card. */
+function SaveError({ mutation }) {
+  if (!mutation.isError) return null
+  return <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>
+}
+
+/** The content of the Notifications page: what every channel receives, then one card per outbound channel
+ * (ntfy push, Telegram, SMTP email). It was a single tile of the Settings page until that page grew too
+ * heavy; the fields, the saved settings and the test buttons are unchanged. Each channel keeps its own
+ * independent form, SAVE button and error line (three PATCH bodies, three dirty-trackers, three
+ * mutations), so saving one channel never greys out or relabels another's button.
+ *
+ * The intro is shared because the "CRITICAL now, everything else in the daily digest" behavior is identical
+ * for every channel (NotificationService.notify() fans the same event out to whichever channels are
+ * configured). It is CRITICAL-only: notify_new_critical_alert does not send WARNING. */
 export function NotificationsSection() {
+  const mode = useLayoutMode()
   const { data, isLoading } = useSettings()
-  const mutation = useUpdateSettings()
+  const ntfySave = useUpdateSettings()
+  const telegramSave = useUpdateSettings()
+  const smtpSave = useUpdateSettings()
   const telegramTest = useTestTelegram()
   const ntfyTest = useTestNtfy()
   const emailTest = useTestEmail()
@@ -65,7 +83,7 @@ export function NotificationsSection() {
     const body = { telegram_chat_id: telegramChat.trim() }
     if (telegramToken) body.telegram_bot_token = telegramToken
     telegramTest.reset()
-    mutation.mutate(body, { onSuccess: () => setTelegramToken('') })
+    telegramSave.mutate(body, { onSuccess: () => setTelegramToken('') })
   }
 
   const smtpPort = Number(smtpForm.smtp_port)
@@ -92,25 +110,29 @@ export function NotificationsSection() {
     }
     if (smtpPassword) body.smtp_password = smtpPassword
     emailTest.reset()
-    mutation.mutate(body, { onSuccess: () => setSmtpPassword('') })
+    smtpSave.mutate(body, { onSuccess: () => setSmtpPassword('') })
   }
 
-  return (
-    <div className="border border-border bg-surface p-3">
-      <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">NOTIFICATIONS</div>
-      <p className="mb-3 text-[10px] leading-relaxed text-text-secondary">
-        All channels below get the same events: an immediate push the moment a CRITICAL alert fires
-        (confirmed attacks, new devices, unauthorized access), plus a daily 7am digest covering
-        everything else. Leave a channel's fields blank to disable it. Changes apply immediately, no
-        restart needed.
-      </p>
+  // Keyed off layout mode, not viewport (see PortsPage/ThreatsPage): the three cards sit side by side on a
+  // desktop screen from 1024px up and stack in one column below that and in the phone layout.
+  const channelsClass = mode === 'mobile' ? 'space-y-3' : 'grid grid-cols-1 items-start gap-3 lg:grid-cols-3'
 
-      {isLoading && <div className="text-[10px] text-text-muted">Loading…</div>}
+  return (
+    <div className="space-y-3">
+      <div className="border border-border bg-surface p-3">
+        <div className="mb-1 text-[8px] tracking-[3px] text-text-muted">NOTIFICATIONS</div>
+        <p className="text-[10px] leading-relaxed text-text-secondary">
+          All channels below get the same events: an immediate push the moment a CRITICAL alert fires
+          (confirmed attacks, new devices, unauthorized access), plus a daily 7am digest covering
+          everything else. Leave a channel's fields blank to disable it. Changes apply immediately, no
+          restart needed.
+        </p>
+        {isLoading && <div className="mt-2 text-[10px] text-text-muted">Loading…</div>}
+      </div>
 
       {!isLoading && (
-        <div className="space-y-3">
-          <div>
-            <div className="mb-1 text-[8px] tracking-[2px] text-text-muted">PUSH — NTFY.SH</div>
+        <div className={channelsClass}>
+          <ChannelCard title="PUSH — NTFY.SH">
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex-1 min-w-[14rem]">
                 <label htmlFor="ntfy-url" className="mb-1 block text-[9px] tracking-wider text-text-muted">
@@ -126,14 +148,14 @@ export function NotificationsSection() {
               </div>
               <button
                 type="button"
-                disabled={!ntfyDirty || mutation.isPending}
+                disabled={!ntfyDirty || ntfySave.isPending}
                 onClick={() => {
                   ntfyTest.reset()
-                  mutation.mutate({ ntfy_url: ntfyUrl })
+                  ntfySave.mutate({ ntfy_url: ntfyUrl })
                 }}
                 className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
               >
-                {mutation.isPending ? 'SAVING…' : 'SAVE'}
+                {ntfySave.isPending ? 'SAVING…' : 'SAVE'}
               </button>
               <button
                 type="button"
@@ -145,10 +167,10 @@ export function NotificationsSection() {
               </button>
             </div>
             <TestResult test={ntfyTest} okText="✓ Sent. Check your ntfy app." />
-          </div>
+            <SaveError mutation={ntfySave} />
+          </ChannelCard>
 
-          <div className="border-t border-border/50 pt-3">
-            <div className="mb-1 text-[8px] tracking-[2px] text-text-muted">TELEGRAM</div>
+          <ChannelCard title="TELEGRAM">
             <p className="mb-2 text-[9px] leading-relaxed text-text-muted">
               Create a bot with @BotFather and paste its token. Add the bot to your channel as an
               administrator that may post messages, then enter the channel name (for example @myhomealerts) or its
@@ -185,11 +207,11 @@ export function NotificationsSection() {
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                disabled={!telegramDirty || mutation.isPending}
+                disabled={!telegramDirty || telegramSave.isPending}
                 onClick={saveTelegram}
                 className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
               >
-                {mutation.isPending ? 'SAVING…' : 'SAVE'}
+                {telegramSave.isPending ? 'SAVING…' : 'SAVE'}
               </button>
               <button
                 type="button"
@@ -209,11 +231,10 @@ export function NotificationsSection() {
               )}
               {telegramTest.isError && <span className="text-[10px] text-accent-red">✗ {telegramTest.error.message}</span>}
             </div>
-          </div>
+            <SaveError mutation={telegramSave} />
+          </ChannelCard>
 
-          <div className="border-t border-border/50 pt-3">
-            <div className="mb-2 text-[8px] tracking-[2px] text-text-muted">EMAIL — SMTP</div>
-
+          <ChannelCard title="EMAIL — SMTP">
             <div className="space-y-2">
               <div className="flex flex-wrap gap-3">
                 <div className="flex-1 min-w-[10rem]">
@@ -306,14 +327,14 @@ export function NotificationsSection() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={!smtpDirty || !isSmtpPortValid || mutation.isPending}
+                  disabled={!smtpDirty || !isSmtpPortValid || smtpSave.isPending}
                   onClick={saveSmtp}
                   className="border border-accent-green/30 bg-accent-green/5 px-3 py-1.5 text-[10px] tracking-wider text-accent-green transition-colors hover:bg-accent-green/20 disabled:opacity-40"
                 >
-                  {mutation.isPending ? 'SAVING…' : 'SAVE'}
+                  {smtpSave.isPending ? 'SAVING…' : 'SAVE'}
                 </button>
                 <button
                   type="button"
@@ -331,12 +352,11 @@ export function NotificationsSection() {
                 test={emailTest}
                 okText={`✓ Sent to ${emailTest.data?.to}. Check the inbox, and the spam folder.`}
               />
+              <SaveError mutation={smtpSave} />
             </div>
-          </div>
+          </ChannelCard>
         </div>
       )}
-
-      {mutation.isError && <div className="mt-2 text-[9px] text-accent-red">{mutation.error.message}</div>}
     </div>
   )
 }

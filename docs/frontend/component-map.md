@@ -35,7 +35,8 @@ App
 | `/ports` | `PortsPage` | PHY1–5 port status and history |
 | `/threats` | `ThreatIntelPage` | Feed status, IP lookup |
 | `/rules` | `RulesPage` | Rule list + editor |
-| `/settings` | `SettingsPage` | Config, notifications |
+| `/notifications` | `NotificationsPage` | Push, Telegram and email alert channels |
+| `/settings` | `SettingsPage` | Learning, auto-block, alert lifecycle, data retention, purge |
 
 ---
 
@@ -120,6 +121,17 @@ EquipmentPage
     ├── SwitchFormModal     — add or edit; its fields come from GET /api/switches/catalog
     └── SwitchPortsTable    — latest reading of each port (link, speed, device, down/up)
 ```
+
+## Notifications page
+
+```
+NotificationsPage
+└── NotificationsSection    — what every channel receives, then one card per channel
+    ├── ChannelCard × 3     — PUSH (ntfy.sh), TELEGRAM, EMAIL (SMTP): its own form, SAVE, test button and save error
+    └── TestResult          — the ✓/✗ line under a channel after its test button
+```
+
+Three cards side by side from 1024px up, one column below that and in the phone layout. It was a tile of the Settings page until that page grew too heavy; the `/api/settings` fields and test endpoints are unchanged.
 
 ## Alerts page components
 
