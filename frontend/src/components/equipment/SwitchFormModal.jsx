@@ -22,6 +22,10 @@ export function SwitchFormModal({ catalog, current, onClose }) {
     password: '',
     poll_interval_s: current?.poll_interval_s || 15,
   })
+  // A new switch is created by the first submit. If the login test then fails the modal stays open for another try,
+  // and that try must update the switch just created, not create a second one: remember its id.
+  const [createdId, setCreatedId] = useState(null)
+  const switchId = current?.id || createdId
   const hasPassword = Boolean(current?.password_configured)
   const editing = Boolean(current)
   const canSave =
@@ -37,7 +41,7 @@ export function SwitchFormModal({ catalog, current, onClose }) {
     if (!canSave) return
     test.reset()
     const body = {
-      id: current?.id,
+      id: switchId,
       spec_id: spec.id,
       name: values.name.trim(),
       host: values.host.trim(),
@@ -47,7 +51,11 @@ export function SwitchFormModal({ catalog, current, onClose }) {
     }
     // Save, then really try the login: closing silently on "saved" leaves people unsure whether it worked.
     save.mutate(body, {
-      onSuccess: (data) => test.mutate({ id: current?.id || data.switch.id }),
+      onSuccess: (data) => {
+        const id = switchId || data.switch.id
+        setCreatedId(id)
+        test.mutate({ id })
+      },
     })
   }
 
