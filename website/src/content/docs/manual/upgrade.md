@@ -51,7 +51,16 @@ Every version has its own images, so each upgrade used to leave the previous bac
 
 It is deliberately narrow. It removes only Heimdall's own backend and frontend images of versions other than the one in use. It never touches the database, Redis or any other image, whoever's it is, and it never forces anything: an image that a container still uses stays, with a message saying so. If the new version is not on the machine (a failed download), it removes nothing.
 
-To run it yourself, in the install folder: `./setup.sh --prune-old-images` (.deb: `cd /opt/heimdall && sudo ./setup.sh --prune-old-images`). To keep the old images instead, for example to try an older version again without downloading it, add `KEEP_OLD_IMAGES=1` to `.env`.
+### Old volumes
+
+Docker volumes hold data (the database is one), so they are never deleted just because nothing is using them: even `docker compose down` leaves the database volume unused. After an upgrade the installer therefore only **lists** unused Heimdall volumes and how much disk each takes, in two groups:
+
+- **Leftovers:** volumes of this install that no container uses and that the current version no longer declares, such as those of a service that was removed. `./setup.sh --prune-old-volumes` (.deb: `cd /opt/heimdall && sudo ./setup.sh --prune-old-volumes`) deletes exactly these.
+- **May still hold data:** unused volumes the current version does declare (for example the Zeek logs after you moved to a smaller tier), and Heimdall volumes left by an install in another folder, which can hold an old database. These are never deleted for you; if you are sure, `docker volume rm NAME` frees one.
+
+Volumes with no Docker Compose labels, and anything belonging to other applications, are not looked at.
+
+To run the image cleanup yourself, in the install folder: `./setup.sh --prune-old-images` (.deb: `cd /opt/heimdall && sudo ./setup.sh --prune-old-images`). To keep the old images instead, for example to try an older version again without downloading it, add `KEEP_OLD_IMAGES=1` to `.env`.
 
 ## After the upgrade
 

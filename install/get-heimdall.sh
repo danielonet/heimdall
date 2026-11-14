@@ -13,7 +13,8 @@
 #   6. once the new version is up, removes the Heimdall images of older versions (an upgrade would otherwise leave
 #      up to about 1.4 GB behind each time): './setup.sh --prune-old-images'. It touches only Heimdall's own backend and
 #      frontend images, never the database or any other image, and keeps one a container still uses. To keep older
-#      versions, put KEEP_OLD_IMAGES=1 in .env.
+#      versions, put KEEP_OLD_IMAGES=1 in .env. It also lists unused Heimdall volumes and the disk each takes, and
+#      deletes none of them ('./setup.sh --prune-old-volumes' removes only the certain leftovers, on request).
 # It does not touch your router or network configuration. It needs no sudo unless Docker itself does.
 #
 # Options: --tier=minimal|intermediate|full  --dir=PATH  --version=vX.Y.Z (default: latest)

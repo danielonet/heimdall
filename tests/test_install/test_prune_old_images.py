@@ -62,6 +62,34 @@ def env(name, default):
 
 if args[:2] == ['compose', 'version']:
     sys.exit(0)
+if args[:4] == ['compose', 'config', '--format', 'json']:
+    print('{\n  "name": "heimdall",\n  "services": {}\n}')
+    sys.exit(0)
+if args[:3] == ['compose', 'config', '--volumes']:
+    print('\n'.join(['ml-models', 'pgdata', 'zeek-logs', 'threat-feeds']))
+    sys.exit(0)
+if args[:2] == ['volume', 'ls']:
+    for vol in state.get('volumes', []):
+        if not vol.get('used'):
+            print(vol['name'])
+    sys.exit(0)
+if args[:2] == ['volume', 'inspect']:
+    key = args[3].split('"')[1]
+    vol = next(v for v in state['volumes'] if v['name'] == args[4])
+    print(vol.get('labels', {}).get(key, ''))
+    sys.exit(0)
+if args[:3] == ['system', 'df', '-v']:
+    print(json.dumps({'Volumes': [{'Name': v['name'], 'Size': v.get('size', '0B')} for v in state.get('volumes', [])]}, separators=(',', ':')))
+    sys.exit(0)
+if args[:2] == ['volume', 'rm']:
+    if len(args) != 3:
+        fail('this fake refuses flags such as --force')
+    vol = next((v for v in state['volumes'] if v['name'] == args[2]), None)
+    if vol is None or vol.get('used'):
+        fail('Error response from daemon: volume is in use')
+    state['volumes'].remove(vol)
+    save()
+    sys.exit(0)
 if args[:3] == ['compose', 'config', '--images']:
     if state.get('config_fails'):
         sys.exit(1)
@@ -160,6 +188,19 @@ class Engine:
         self.state['images'].append({'id': image_id, 'tags': list(tags), 'digests': list(digests), 'listed_under': list(listed_under)})
         self.save()
 
+    def volume(self, name, project=None, label=None, used=False, size='1.5GB'):
+        labels = {}
+        if project:
+            labels['com.docker.compose.project'] = project
+        if label:
+            labels['com.docker.compose.volume'] = label
+        self.state.setdefault('volumes', []).append({'name': name, 'labels': labels, 'used': used, 'size': size})
+        self.save()
+
+    def volumes(self):
+        self.load()
+        return {v['name'] for v in self.state.get('volumes', [])}
+
     def container(self, image_id):
         self.state['containers'].append({'image': image_id})
         self.save()
@@ -201,6 +242,59 @@ def three_versions(engine):
     engine.image('sha256:be2', f'{BACKEND}:0.2.2')
     engine.image('sha256:fe1', f'{FRONTEND}:0.2.1')
     engine.image('sha256:fe2', f'{FRONTEND}:0.2.2')
+
+
+def mixed_volumes(engine):
+    engine.volume('heimdall_old-service', 'heimdall', 'old-service', size='900MB')      # ours, undeclared, unused: a leftover
+    engine.volume('heimdall_busy-old', 'heimdall', 'busy-old', used=True)               # undeclared but a container uses it
+    engine.volume('heimdall_pgdata', 'heimdall', 'pgdata', size='4GB')                  # declared, unused (stack is down)
+    engine.volume('heimdall_zeek-logs', 'heimdall', 'zeek-logs', size='2GB')            # declared, unused (tier changed)
+    engine.volume('oldfolder_pgdata', 'oldfolder', 'pgdata', size='3GB')                # an install in another folder
+    engine.volume('someone_else_data', 'otherapp', 'data')                              # another application's volume
+    engine.volume('0123abcd')                                                           # anonymous, no labels
+
+
+class TestOldVolumes:
+    def test_after_an_upgrade_they_are_reported_with_sizes_and_nothing_is_removed(self, engine):
+        three_versions(engine)
+        mixed_volumes(engine)
+        r = engine.prune()
+        assert r.returncode == 0
+        assert 'heimdall_old-service  900MB' in r.stdout and '--prune-old-volumes' in r.stdout
+        assert 'oldfolder_pgdata  3GB' in r.stdout and 'heimdall_pgdata  4GB' in r.stdout and 'heimdall_zeek-logs  2GB' in r.stdout
+        assert 'someone_else_data' not in r.stdout and '0123abcd' not in r.stdout
+        assert len(engine.volumes()) == 7
+
+    def test_prune_old_volumes_removes_only_this_installs_undeclared_unused_ones(self, engine):
+        mixed_volumes(engine)
+        r = engine.run('--prune-old-volumes')
+        assert r.returncode == 0, r.stderr
+        assert engine.volumes() == {'heimdall_busy-old', 'heimdall_pgdata', 'heimdall_zeek-logs', 'oldfolder_pgdata',
+                                    'someone_else_data', '0123abcd'}
+        assert 'Removed old volume heimdall_old-service (900MB)' in r.stdout
+
+    def test_the_database_volume_is_never_removed_even_with_the_stack_down(self, engine):
+        engine.volume('heimdall_pgdata', 'heimdall', 'pgdata')
+        engine.volume('heimdall_ml-models', 'heimdall', 'ml-models')
+        assert engine.run('--prune-old-volumes').returncode == 0
+        assert engine.volumes() == {'heimdall_pgdata', 'heimdall_ml-models'}
+
+    def test_never_forces_and_leaves_the_images_alone(self, engine):
+        three_versions(engine)
+        mixed_volumes(engine)
+        engine.run('--prune-old-volumes')
+        assert not any('volume rm' in c and (' -f' in c or '--force' in c) for c in engine.calls())
+        assert len(engine.tags()) == 5
+
+    def test_says_so_when_there_is_nothing_to_remove(self, engine):
+        engine.volume('heimdall_pgdata', 'heimdall', 'pgdata')
+        assert 'No old volumes to remove' in engine.run('--prune-old-volumes').stdout
+
+    def test_does_not_combine_with_other_options(self, engine):
+        mixed_volumes(engine)
+        r = engine.run('--prune-old-volumes', '--tier=minimal')
+        assert r.returncode != 0 and 'do not combine' in r.stderr
+        assert len(engine.volumes()) == 7
 
 
 class TestPruneOldImages:
@@ -339,7 +433,7 @@ class TestPruneOldImages:
     def test_does_not_combine_with_other_options(self, engine):
         three_versions(engine)
         r = engine.run('--prune-old-images', '--tier=minimal')
-        assert r.returncode != 0 and 'does not combine' in r.stderr
+        assert r.returncode != 0 and 'do not combine' in r.stderr
         assert len(engine.tags()) == 5
 
     def test_help_documents_the_option_and_prints_the_whole_header(self, engine):

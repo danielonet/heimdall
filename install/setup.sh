@@ -8,6 +8,7 @@
 #
 # Usage:  ./setup.sh [--tier=minimal|intermediate|full] [--router=sagemcom|passive] [--iface=eth0] [--subnet=192.168.1.0/24] [--skip-disk-check] [--ram-mb=N]
 #         ./setup.sh --prune-old-images
+#         ./setup.sh --prune-old-volumes
 #
 # The dashboard login is not made here: the first time you open the dashboard it asks you to
 # create the admin account, and keeps only a salted hash of the password in its database. No
@@ -21,6 +22,12 @@
 # take the whole machine down. setup.sh reads the machine's RAM (/proc/meminfo; --ram-mb=N overrides it) and writes caps
 # sized for it: under 6 GB, 6-12 GB (an "8 GB" machine), 12-24 GB (16 GB) or 24 GB and up (32 GB). A cap already in
 # .env is never changed, so edit them freely.
+#
+# Old volumes: Docker volumes hold data, so they are never deleted just for being unused ('docker compose down'
+# leaves even the database volume unused). After an upgrade the installer only REPORTS unused Heimdall volumes and how
+# much disk each takes. './setup.sh --prune-old-volumes' removes only the ones that are certainly leftovers: volumes
+# of this install that no container uses and that the current docker-compose.yml no longer declares (a removed service's).
+# Volumes it still declares (the database, ML models, logs), and those of another install folder, are listed, never removed.
 #
 # --prune-old-images removes the Heimdall images of older versions. Every release has its own image tag, so each
 # upgrade would otherwise leave the previous backend and frontend images behind (up to about 1.4 GB per version). The
@@ -119,7 +126,57 @@ prune_old_images() {
     return 0
 }
 
-TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK="" PRUNE_ONLY="" RAM_MB=""
+# ── Old volumes ─────────────────────────────────────────────────────────────
+# old_volumes report|remove. See the header: report lists, remove deletes only certain leftovers (never --force).
+volume_label() { docker volume inspect --format "{{index .Labels \"$2\"}}" "$1" 2>/dev/null || true; }
+
+old_volumes() {
+    local mode="$1" project declared df_json v name vproject
+    local -a orphans=() others=()
+    project=$(docker compose config --format json 2>/dev/null | grep -m1 '"name":' | sed 's/.*"name": *"\([^"]*\)".*/\1/') || true
+    declared=$(docker compose config --volumes 2>/dev/null) || true
+    if [ -z "$project" ] || [ -z "$declared" ]; then
+        warn "Could not read the volume list from docker-compose.yml: not checking for old volumes."
+        return 0
+    fi
+    df_json=$(docker system df -v --format json 2>/dev/null) || df_json=""
+    # Unused volumes (no container, running or stopped, refers to them) that came from a Heimdall compose file.
+    while IFS= read -r v; do
+        [ -n "$v" ] || continue
+        name=$(volume_label "$v" com.docker.compose.volume)
+        [ -n "$name" ] || continue                       # no label: not provably ours, left alone
+        vproject=$(volume_label "$v" com.docker.compose.project)
+        if [ "$vproject" = "$project" ] && ! grep -qxF "$name" <<< "$declared"; then
+            orphans+=("$v")
+        elif grep -qxF "$name" <<< "$declared"; then
+            others+=("$v")
+        fi
+    done < <(docker volume ls -q --filter dangling=true 2>/dev/null)
+
+    size_of() { grep -o "{[^{}]*\"Name\":\"$1\"[^{}]*}" <<< "$df_json" | grep -o '"Size":"[^"]*"' | head -1 | cut -d'"' -f4; }
+    if [ "${#orphans[@]}" -gt 0 ]; then
+        if [ "$mode" = remove ]; then
+            for v in "${orphans[@]}"; do
+                if docker volume rm "$v" >/dev/null 2>&1; then ok "Removed old volume $v ($(size_of "$v"))";
+                else warn "Kept $v: Docker would not remove it."; fi
+            done
+        else
+            info "Old volumes of this install that nothing uses and docker-compose.yml no longer declares:"
+            for v in "${orphans[@]}"; do echo "    $v  $(size_of "$v")"; done
+            echo "    Remove them with: ./setup.sh --prune-old-volumes"
+        fi
+    elif [ "$mode" = remove ]; then
+        info "No old volumes to remove."
+    fi
+    if [ "${#others[@]}" -gt 0 ]; then
+        info "Unused Heimdall volumes that may still hold data (an install in another folder, or a tier you switched away from); not removed automatically:"
+        for v in "${others[@]}"; do echo "    $v  $(size_of "$v")"; done
+        echo "    To free one after checking you do not need it: docker volume rm NAME"
+    fi
+    return 0
+}
+
+TIER="" IFACE="" SUBNET="" ROUTER="" SKIP_DISK_CHECK="" PRUNE_ONLY="" PRUNE_VOLUMES="" RAM_MB=""
 for arg in "$@"; do
     case "$arg" in
         --tier=*)   TIER="${arg#--tier=}" ;;
@@ -129,12 +186,13 @@ for arg in "$@"; do
         --skip-disk-check) SKIP_DISK_CHECK=1 ;;
         --ram-mb=*) RAM_MB="${arg#--ram-mb=}" ;;
         --prune-old-images) PRUNE_ONLY=1 ;;
+        --prune-old-volumes) PRUNE_VOLUMES=1 ;;
         -h|--help)  awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "Unknown argument: $arg" ;;
     esac
 done
 case "$RAM_MB" in ""|*[!0-9]*) [ -z "$RAM_MB" ] || die "--ram-mb needs a number of megabytes." ;; esac
-[ -z "$PRUNE_ONLY" ] || [ "$#" -eq 1 ] || die "--prune-old-images does not combine with other options."
+{ [ -z "$PRUNE_ONLY" ] && [ -z "$PRUNE_VOLUMES" ]; } || [ "$#" -eq 1 ] || die "--prune-old-images and --prune-old-volumes do not combine with other options."
 
 [ "$(uname -s)" = "Linux" ] || die "Heimdall must run on Linux: it sniffs the LAN with host networking."
 [ -f docker-compose.yml ] || die "docker-compose.yml not found next to setup.sh — run this from the extracted bundle."
@@ -142,6 +200,11 @@ command -v docker >/dev/null || die "Docker is not installed. See https://docs.d
 docker compose version >/dev/null 2>&1 || die "The 'docker compose' plugin is missing. See https://docs.docker.com/compose/install/linux/"
 if [ -n "$PRUNE_ONLY" ]; then
     prune_old_images
+    old_volumes report
+    exit 0
+fi
+if [ -n "$PRUNE_VOLUMES" ]; then
+    old_volumes remove
     exit 0
 fi
 command -v openssl >/dev/null || die "openssl is required to generate secrets."
