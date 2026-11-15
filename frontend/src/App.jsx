@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthGuard } from './AuthGuard'
 import { Shell } from './Shell'
 import { LoginPage } from './pages/LoginPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { NetworkMapPage } from './pages/NetworkMapPage'
 import { DevicesPage } from './pages/DevicesPage'
@@ -28,6 +29,7 @@ function App() {
         <AuthGuard>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route element={<Shell />}>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/map" element={<NetworkMapPage />} />

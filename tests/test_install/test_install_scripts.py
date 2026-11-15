@@ -352,14 +352,15 @@ class TestDashboardAccount:
         assert code == 0, out
         assert 'Password' not in out and 'User name' not in out
 
-    def test_an_older_install_keeps_its_password_file_and_says_so(self, dist, tmp_path, fake_bin):
+    def test_an_older_install_keeps_its_password_file_but_creates_an_account(self, dist, tmp_path, fake_bin):
+        """The old file is left alone, but it no longer signs in: the browser asks for an account."""
         extract(dist, tmp_path)
         (tmp_path / 'secrets').mkdir()
         (tmp_path / 'secrets' / 'admin_password.txt').write_text('from-an-older-install\n')
         r = run(['./setup.sh', '--tier=minimal'], tmp_path, fake_bin)
         assert r.returncode == 0
         assert (tmp_path / 'secrets' / 'admin_password.txt').read_text() == 'from-an-older-install\n'
-        assert 'existing one' in r.stdout and 'create your admin account' not in r.stdout
+        assert 'create your admin account' in r.stdout and 'existing one' not in r.stdout
 
     def test_the_compose_file_still_passes_the_user_name_for_older_installs(self, dist, tmp_path):
         extract(dist, tmp_path)

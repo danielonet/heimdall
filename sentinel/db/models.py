@@ -600,12 +600,14 @@ class SwitchPortStat(Base):
 class AdminAccount(Base):
     """The dashboard's single admin login, created from the browser on first
     run. Only a salted hash is stored (never the password), and `id` is pinned
-    to 1 so a second account cannot exist. Installs from before this table
-    keep logging in with the admin_password secret file until it is used."""
+    to 1 so a second account cannot exist. It is the only way to sign in: the
+    old admin_password secret file is no longer read."""
 
     __tablename__ = 'admin_account'
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     username: Mapped[str] = mapped_column(String(32))
     password_hash: Mapped[str] = mapped_column(String(255))
+    # Where a password-reset link goes. Required: accounts without one were removed.
+    email: Mapped[str] = mapped_column(String(254))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

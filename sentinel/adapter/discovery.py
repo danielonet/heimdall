@@ -68,3 +68,14 @@ def discover_local_ips() -> set[str]:
     ips = set(re.findall(r'inet ([\d.]+)/\d+', out))
     ips.discard('127.0.0.1')
     return ips
+
+
+def discover_interface_ip(iface: str) -> str | None:
+    """This host's first IPv4 address on `iface` (e.g. the LAN interface), or None."""
+    try:
+        out = subprocess.check_output(['ip', '-4', 'addr', 'show', 'dev', iface], text=True, timeout=5)
+    except Exception as exc:
+        logger.warning('Could not read the IPv4 address of %s (%s)', iface, exc)
+        return None
+    match = re.search(r'inet ([\d.]+)/\d+', out)
+    return match.group(1) if match else None

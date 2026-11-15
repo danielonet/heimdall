@@ -13,6 +13,6 @@ Settings is one page of panels. Each has its own **Save** button, which stays gr
 | **Reset & relearn** | **Purge database…** deletes every known device, trust decision, traffic history, alert and trained model, and returns to learning. It asks you to confirm and cannot be undone. |
 | **Data retention** | How long to keep traffic, port statistics, WAN changes and alerts (90 days by default), when an idle device is archived and hidden from counts (90 days), and when an archived device is permanently deleted (a further 90 days). Trusted, blocked and quarantined devices are exempt from archiving. It also shows the database size and lists archived devices so you can restore them. |
 
-**Log out** is at the bottom of the page and on the top bar.
+**Log out** is at the bottom of the page and on the top bar. Next to it are the signed-in user name and the account's **reset email**, the address a forgotten-password link is sent to. **Change** asks for the current password before saving a new address.
 
 Push, Telegram and email alerts have their own page: [Notifications](/manual/notifications/).

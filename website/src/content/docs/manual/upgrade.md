@@ -8,9 +8,20 @@ Every push to the main branch of the project is released as a new version, so th
 ## Before you start
 
 - Check what you run now: `sudo heimdall version` (.deb), or `cat VERSION` in the install folder (`~/heimdall` for the script, `/opt/heimdall` for the .deb). The newest is on the [releases page](https://github.com/danielonet/heimdall/releases/latest).
-- An upgrade keeps your **secrets**, your **`.env`** (tier, network card, subnet, router choice), your **admin account** and your **database**: devices, alerts, trust decisions and the trained models. It only replaces the program files and the images.
+- An upgrade keeps your **secrets**, your **`.env`** (tier, network card, subnet, router choice), your **database** and, except for the one-time change below, your **admin account**: devices, alerts, trust decisions and the trained models. It only replaces the program files and the images.
 - Heimdall is stopped and started again for a minute or so, and it does not watch the network meanwhile.
+- Upgrading from a version without the reset email removes the old login once: see [The admin account is created again](#the-admin-account-is-created-again).
 - Check the free disk space first. The new images are downloaded before the old ones are removed, so for a while both are on the disk (Docker stores the layers two versions share only once, so it is less than double). See [Install](/install/) for how much each tier needs.
+
+## The admin account is created again
+
+Versions from this one on need an email on the admin account, so that a forgotten password can be reset by email. The first upgrade from an older version therefore removes the old login: the account created in the browser without an email, or, on older installs, the `admin` login with the password in `secrets/admin_password.txt` (the file is left in place but no longer read). Only the login goes: devices, alerts, trust decisions, settings and the trained models are kept. Every browser that was signed in is signed out.
+
+Right after the upgrade:
+
+1. Open the dashboard. It shows **Welcome** and asks for a user name, the email a reset link should go to, and a password. You can reuse your old user name and password.
+2. Do it straight away. Until the account exists, anyone on your network who opens the page could create it first.
+3. Open **Notifications**, set up email and press **Send test email**, so the reset link can reach you if you ever need it. See [First login](/manual/first-login/).
 
 ## Installed with the one-line script
 

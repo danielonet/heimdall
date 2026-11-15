@@ -158,10 +158,12 @@ class TestCommand:
     def test_password_before_setup(self, cmd):
         assert cmd('password').returncode != 0
 
-    def test_password_after_setup(self, cmd):
+    def test_password_never_shows_an_old_password_file(self, cmd):
+        """The file is no longer used to sign in, so showing it would only mislead."""
         (cmd.home / 'secrets').mkdir()
         (cmd.home / 'secrets' / 'admin_password.txt').write_text('s3cret\n')
-        assert cmd('password').stdout.strip() == 's3cret'
+        r = cmd('password')
+        assert r.returncode != 0 and 's3cret' not in r.stdout and 'Forgot password' in r.stderr
 
     def test_setup_writes_no_password_and_the_password_command_says_why(self, cmd, tmp_path):
         fake = tmp_path / 'bin'

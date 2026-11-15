@@ -20,8 +20,6 @@ def _test_config(**overrides) -> dict:
             'DATABASE_URL', 'postgresql+asyncpg://sentinel:pass@localhost/sentinel'
         ),
         'REDIS_URL': os.environ.get('REDIS_URL', 'redis://localhost:6379'),
-        'ADMIN_PASSWORD': TEST_ADMIN_PASSWORD,
-        'ADMIN_USERNAME': 'admin',
         'SCHEDULER_ENABLED': False,
         'TESTING': True,
     }
@@ -39,8 +37,19 @@ def client(app):
     return app.test_client()
 
 
+TEST_ADMIN = {'username': 'admin', 'password': TEST_ADMIN_PASSWORD, 'email': 'admin@example.com'}
+
+
 @pytest.fixture
-def auth_headers(client):
+def admin_account(client):
+    """Create the admin account (the only way to sign in) as a new install would."""
+    resp = client.post('/api/setup', json=TEST_ADMIN)
+    assert resp.status_code == 201, resp.get_json()
+    return TEST_ADMIN
+
+
+@pytest.fixture
+def auth_headers(client, admin_account):
     """Log in as the test admin and return an Authorization header dict."""
     resp = client.post(
         '/api/login', json={'username': 'admin', 'password': TEST_ADMIN_PASSWORD}

@@ -22,7 +22,7 @@ services:
       - REDIS_URL=redis://localhost:6379
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - OTX_API_KEY_FILE=/run/secrets/otx_api_key
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}   # only for installs that still sign in with secrets/admin_password.txt
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}   # no longer used to sign in (the account is made in the browser); kept for older .env files
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
       - TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_bot_token   # bind-mounted read-write like smtp_password in the real docker-compose.yml
@@ -370,7 +370,7 @@ native `secrets:` mount is always read-only, so those three files are instead
 are still plain files — never stored in the database or passed through the
 environment. The installer creates all three up front (a missing bind-mount
 source would make Docker create a directory there). `jwt_secret`, `otx_api_key`,
-`admin_password` and `db_pass` stay read-only Docker secrets. If a password file
+`admin_password` (no longer read: the login is the browser-created account) and `db_pass` stay read-only Docker secrets. If a password file
 is not writable the API answers 503 with an explanation rather than a 500.
 
 ## Memory caps

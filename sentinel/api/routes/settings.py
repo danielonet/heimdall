@@ -4,7 +4,6 @@ DB purge/reset."""
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import re
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import text
 
 from sentinel.adapter.factory import available_routers
+from sentinel.api.routes.auth import check_admin_password
 from sentinel.config import secret_file_writable, settings, write_secret_file
 from sentinel.db.repositories import SettingsRepository
 from sentinel.db.session import get_session
@@ -557,11 +557,7 @@ async def purge():
     body = request.get_json(silent=True) or {}
     password = body.get('password', '')
 
-    configured_password = current_app.config.get('ADMIN_PASSWORD', '')
-    if not configured_password:
-        logger.error('Purge rejected: ADMIN_PASSWORD is not configured')
-        return jsonify(error='Authentication is not configured'), 503
-    if not hmac.compare_digest(password, configured_password):
+    if not await check_admin_password(password):
         return jsonify(error='Incorrect password'), 401
 
     async with get_session() as session:

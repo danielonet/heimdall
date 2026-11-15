@@ -1189,15 +1189,33 @@ class AdminAccountRepository:
         async with get_session() as session:
             return await session.get(AdminAccount, 1)
 
-    async def create(self, username: str, password_hash: str) -> bool:
+    async def create(self, username: str, password_hash: str, email: str) -> bool:
         """Insert the account; False if one already exists. The primary key makes this
         safe against two browsers racing through first-run setup: exactly one wins."""
         async with get_session() as session:
             result = await session.execute(
-                pg_insert(AdminAccount).values(id=1, username=username, password_hash=password_hash)
+                pg_insert(AdminAccount).values(id=1, username=username, password_hash=password_hash, email=email)
                 .on_conflict_do_nothing()
             )
             return result.rowcount == 1
+
+    async def set_email(self, email: str) -> bool:
+        """Change the reset email; False if there is no account."""
+        async with get_session() as session:
+            row = await session.get(AdminAccount, 1)
+            if row is None:
+                return False
+            row.email = email
+            return True
+
+    async def set_password_hash(self, password_hash: str) -> bool:
+        """Replace the password hash (password reset); False if there is no account."""
+        async with get_session() as session:
+            row = await session.get(AdminAccount, 1)
+            if row is None:
+                return False
+            row.password_hash = password_hash
+            return True
 
 
 class SwitchPortRepository:

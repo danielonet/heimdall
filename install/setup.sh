@@ -12,8 +12,8 @@
 #
 # The dashboard login is not made here: the first time you open the dashboard it asks you to
 # create the admin account, and keeps only a salted hash of the password in its database. No
-# password is written to disk by this script. An install that already has a non-empty
-# secrets/admin_password.txt keeps logging in with it.
+# password is written to disk by this script. secrets/admin_password.txt is no longer read:
+# an older install that signed in with it creates its account in the browser too.
 #
 # Afterwards:  docker compose pull && docker compose up -d
 # (.env sets COMPOSE_PROFILES, so the same command works for every tier.)
@@ -321,7 +321,7 @@ blank() { [ -f "secrets/$1" ] && return; : > "secrets/$1"; ok "Created empty sec
 
 gen jwt_secret.txt
 gen db_pass.txt
-# Empty on a new install: the admin account is created in the browser. A file left by an older install is kept.
+# Empty on a new install and no longer read (the compose file still mounts it). A file left by an older install is kept.
 blank admin_password.txt "the admin account is created in the dashboard"
 # Blank is a valid, working state for all of these; the dashboard writes them
 # when you enter a router login, API key or SMTP password. Compose needs the
@@ -419,11 +419,9 @@ echo ""
 echo "    docker compose pull && docker compose up -d"
 echo ""
 echo "  Dashboard:  http://<this-machine>:3000"
-if [ -s secrets/admin_password.txt ]; then
-    echo "  Login:      the existing one (user and password file kept from before: $(pwd)/secrets/admin_password.txt)"
-else
-    echo "  First visit: the dashboard asks you to create your admin account (user name and password)."
-    echo "               Do that straight away, before anyone else on your network opens the page."
-fi
+echo "  First visit: the dashboard asks you to create your admin account (user name, password and"
+echo "               the email a reset link goes to). Upgrading from a version without a reset email?"
+echo "               It asks again: the old login is gone. Do it straight away, before anyone else"
+echo "               on your network opens the page, then set up email on the Notifications page."
 echo "  Then open the Equipment tab and pick your router (or 'Other / not listed')."
 echo "  Do not expose ports 3000 or 5000 to the internet."

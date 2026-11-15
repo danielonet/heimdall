@@ -7,14 +7,19 @@ description: Common problems and fixes.
 Check that Heimdall is running: `sudo heimdall status` (.deb) or `docker compose ps` in the install folder. Use port 3000 on the Heimdall machine's address, from a device on the same network.
 
 ## I forgot the admin user name or password
-Heimdall cannot show you the password: only a hash of it is stored. To start over, remove the admin account (your data is kept), then create a new one in the browser:
+**Forgot the password:** press **Forgot password?** on the sign-in page and enter the email address you gave when you created the account. Heimdall emails a link to choose a new password. The link works once, for 30 minutes, and using it signs out every other browser. This needs two things set up beforehand: an email server on the [Notifications](/manual/notifications/) page, and the right reset email on the account (given when the account is created; it is shown, and can be changed with the current password, at the bottom of [Settings](/manual/settings/)). The link uses the address you opened the dashboard with, if it is one of the Heimdall machine's own addresses, or else the machine's address on its network interface. Set `DASHBOARD_URL` in `.env` (for example `DASHBOARD_URL=http://<heimdall-address>:3000`) to choose it yourself, then `docker compose up -d`.
+
+**No email set up, or the user name forgotten too:** Heimdall cannot show you the password: only a hash of it is stored. To start over, remove the admin account (your data is kept), then create a new one in the browser:
 
 - **.deb install:** `sudo heimdall reset-login`
-- **Script install:** in the install folder, run `docker compose exec -T postgres psql -U sentinel -d sentinel -c "DELETE FROM admin_account"`, empty `secrets/admin_password.txt`, then run `docker compose restart sentinel-backend`.
+- **Script install:** in the install folder, run `docker compose exec -T postgres psql -U sentinel -d sentinel -c "DELETE FROM admin_account"`.
 
 Then open the dashboard and create the account straight away, because the page is open to anyone who can reach it until you do.
 
-An install made before the admin account existed signs in with `admin` and the password in `secrets/admin_password.txt` (`sudo heimdall password` on a .deb install). The same steps switch it to the new account system.
+Creating the new account signs out every browser that was signed in to the old one.
+
+## After upgrading, the dashboard asks me to create an account again
+That is expected once, when you upgrade from a version without the reset email. See [Upgrade](/manual/upgrade/#the-admin-account-is-created-again).
 
 ## The device list is empty
 You have not chosen a router, or the router login is wrong. Open [Equipment](/manual/equipment/). If your router is not listed, choose **Other / not listed (passive mode)**.

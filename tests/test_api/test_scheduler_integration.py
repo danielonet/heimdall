@@ -25,7 +25,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.test_api.conftest import TEST_ADMIN_PASSWORD
+from tests.test_api.conftest import TEST_ADMIN, TEST_ADMIN_PASSWORD
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PORT = 5099
@@ -67,7 +67,6 @@ def _request_text(method: str, path: str) -> tuple[int, str]:
 @pytest.fixture(scope='module')
 def live_server():
     env = os.environ.copy()
-    env['ADMIN_PASSWORD'] = TEST_ADMIN_PASSWORD
     env['USE_MOCK_ROUTER'] = 'true'
     env['POLL_INTERVAL_SECONDS'] = '2'
     env['SCHEDULER_ENABLED'] = 'true'
@@ -122,6 +121,8 @@ def _wait_for_first_poll(timeout_s: float = 20.0) -> None:
 
 @pytest.fixture
 def access_token(live_server):
+    # The account is the only way in; each test starts with none (tables are emptied after every test).
+    _request('POST', '/api/setup', body=TEST_ADMIN)
     _, body = _request('POST', '/api/login', body={'username': 'admin', 'password': TEST_ADMIN_PASSWORD})
     return body['access_token']
 

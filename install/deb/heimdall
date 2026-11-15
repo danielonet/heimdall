@@ -51,8 +51,7 @@ case "$cmd" in
         need_root start; need_setup
         if has_systemd; then systemctl enable --now "$UNIT"; else compose pull && compose up -d && prune_old_images; fi
         echo "Dashboard: http://<this-machine>:3000"
-        if [ -s "$DIR/secrets/admin_password.txt" ]; then echo "Sign in with the existing login (sudo heimdall password shows the password)."
-        else echo "First visit: create your admin account in the browser (forgotten it later? sudo heimdall reset-login)."; fi
+        echo "First visit: create your admin account in the browser, with a reset email (forgotten it later? 'Forgot password?' on the sign-in page, or sudo heimdall reset-login)."
         ;;
     stop)
         need_root stop
@@ -76,8 +75,7 @@ case "$cmd" in
         ;;
     password)
         need_root password
-        [ -s "$DIR/secrets/admin_password.txt" ] || die "no password file: this install's admin account was created in the dashboard and only a hash is kept. Forgotten it? sudo heimdall reset-login"
-        cat "$DIR/secrets/admin_password.txt"
+        die "there is no password to show: the admin account is created in the dashboard and only a hash is kept. Forgotten it? 'Forgot password?' on the sign-in page, or sudo heimdall reset-login"
         ;;
     reset-login)
         # Removes the dashboard admin account so the next visit offers account creation again. Data is kept.
@@ -85,7 +83,7 @@ case "$cmd" in
         compose exec -T postgres psql -U sentinel -d sentinel -c "DELETE FROM admin_account" >/dev/null \
             || die "could not reach the database — is Heimdall running? (sudo heimdall start)"
         : > "$DIR/secrets/admin_password.txt"
-        # An older install holds its password file's contents in memory: restart so the page opens for setup.
+        # Browsers still signed in to the removed account are signed out once the new account is created.
         compose restart sentinel-backend >/dev/null
         echo "Done. Open the dashboard and create a new admin account; do it now, the page is open to anyone who reaches it until you do."
         ;;

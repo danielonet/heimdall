@@ -29,7 +29,8 @@ export function AuthGuard({ children }) {
     )
   }
 
-  if (!accessToken && location.pathname !== '/login') {
+  // Pages reachable without signing in.
+  if (!accessToken && !['/login', '/reset-password'].includes(location.pathname)) {
     return <Navigate to="/login" replace />
   }
 

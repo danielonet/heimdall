@@ -89,18 +89,40 @@ export async function fetchSetupRequired() {
   return Boolean((await resp.json()).setup_required)
 }
 
+/** Thrown by createAccount when another browser already created the admin: the page then shows sign-in. */
+export class AccountExistsError extends Error {}
+
 /** First run only: create the admin account and sign in with it. */
-export async function createAccount(username, password) {
+export async function createAccount(username, password, email) {
   const resp = await rawFetch('/setup', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, email }),
   })
   const data = await resp.json().catch(() => ({}))
+  if (resp.status === 409) throw new AccountExistsError(data.error || 'An admin account already exists. Sign in instead.')
   if (!resp.ok) throw new Error(data.error || `Could not create the account (${resp.status})`)
   useAuthStore.getState().setTokens({
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
   })
+  return data
+}
+
+/** Asks for a reset link to be emailed. Resolves {sent, email_configured}; the answer is the
+ * same whether or not the address matched, so it only says whether this server can send email. */
+export async function requestPasswordReset(email) {
+  const resp = await rawFetch('/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.error || `Could not ask for a reset link (${resp.status})`)
+  return data
+}
+
+/** Sets a new password with the token from the reset email, and signs in. */
+export async function resetPassword(token, password) {
+  const resp = await rawFetch('/password-reset', { method: 'POST', body: JSON.stringify({ token, password }) })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.error || `Could not reset the password (${resp.status})`)
+  useAuthStore.getState().setTokens({ accessToken: data.access_token, refreshToken: data.refresh_token })
   return data
 }
 

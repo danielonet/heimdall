@@ -289,8 +289,9 @@ echo "your-router-admin-password" > secrets/router_password.txt
 # A real random string, not the installer's placeholder
 openssl rand -hex 32 > secrets/jwt_secret.txt
 
-# The password you'll log into the Heimdall dashboard with
-echo "choose-a-strong-password" > secrets/admin_password.txt
+# No longer read: the dashboard login is created in the browser on the first visit.
+# The file must exist (an empty one) because the compose file still mounts it.
+: > secrets/admin_password.txt
 
 # Optional — AlienVault OTX threat-intel lookups (free API key)
 echo "your-otx-api-key" > secrets/otx_api_key.txt
@@ -314,7 +315,7 @@ exact command at the end of step 1.
 
 The backend container applies the database migrations itself on every start (`python -m sentinel.db.migrate`), so there is no separate schema step. Dev mode (`run.sh`/`dev.sh`) runs `alembic upgrade head` for you.
 
-Dashboard: `http://<host-ip>:3000` — if `secrets/admin_password.txt` is empty, the first visit asks you to create the admin account (only a hash is stored). If you put a password in that file, log in with `admin` (or the `ADMIN_USERNAME` you set in `.env`) and that password.
+Dashboard: `http://<host-ip>:3000` — the first visit asks you to create the admin account: user name, password (only a hash is stored) and the email a password-reset link goes to. Then set up email on the Notifications page, or a forgotten password cannot be reset by email.
 
 Notifications (ntfy/Telegram/SMTP) are configured from the Settings page after first login, not via `.env` — see the **NOTIFICATIONS** section there.
 

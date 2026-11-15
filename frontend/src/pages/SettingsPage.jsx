@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useLayoutMode } from '../hooks/useLayoutMode'
 import { logout } from '../lib/api'
+import { AccountSection } from '../components/settings/AccountSection'
 import { AlertLifecycleSection } from '../components/settings/AlertLifecycleSection'
 import { AutoBlockSection } from '../components/settings/AutoBlockSection'
 import { DataRetentionSection } from '../components/settings/DataRetentionSection'
@@ -53,9 +54,12 @@ export function SettingsPage() {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface p-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           <img src={heimdallLogo} alt="" className="h-6 w-6 flex-shrink-0" />
-          <div className="text-[9px] text-text-muted">Sentinel — Heimdall Home Network Monitor</div>
+          <div className="min-w-0 space-y-1">
+            <div className="text-[9px] text-text-muted">Sentinel — Heimdall Home Network Monitor</div>
+            <AccountSection />
+          </div>
         </div>
         <button
           type="button"

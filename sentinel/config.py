@@ -144,7 +144,7 @@ class Settings(BaseSettings):
 
     # ── Auth ──────────────────────────────────────────────────────────────────
     ADMIN_USERNAME: str = 'admin'
-    ADMIN_PASSWORD: str = ''       # populated from ADMIN_PASSWORD_FILE if blank
+    ADMIN_PASSWORD: str = ''       # populated from ADMIN_PASSWORD_FILE if blank; no longer used to sign in
 
     # ── ML ────────────────────────────────────────────────────────────────────
     ML_MIN_SAMPLES_TO_TRAIN: int = 100
@@ -285,6 +285,10 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_FROM: str = ''
     SMTP_TO: str = ''               # falls back to SMTP_FROM if blank (notify yourself)
+    # Dashboard address used in password-reset emails, e.g. http://192.168.1.10:3000.
+    # Blank = the address the browser used, if it is one of this machine's own IPs,
+    # else this machine's IP on SNIFF_IFACE. Never taken from the request blindly.
+    DASHBOARD_URL: str = ''
     SMTP_USERNAME: str = ''
     SMTP_PASSWORD: str = ''        # populated from SMTP_PASSWORD_FILE if blank
     SMTP_PASSWORD_FILE: str = ''   # also the write target for PATCH /api/settings

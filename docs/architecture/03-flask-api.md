@@ -36,11 +36,15 @@ def create_app(config=None) -> Flask:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/setup` | `{setup_required}`: true until an admin account exists (none in `admin_account`, no `admin_password` secret) |
-| POST | `/api/setup` | First run only: create the admin account (user name 3-32 chars, password 12-128) and sign in. 409 once any admin exists. Only a scrypt hash is stored (`admin_account`, one row) |
-| POST | `/api/login` | Username + password → JWT access token (15 min) + refresh token (7 days). Checks `admin_account` first, then the legacy `admin_password` secret file |
+| GET | `/api/setup` | `{setup_required}`: true until the admin account exists in `admin_account` (the old `admin_password` secret is not read; migration `c4e8a2f61d37` removed accounts without an email) |
+| POST | `/api/setup` | First run only: create the admin account (user name 3-32 chars, password 12-128, reset email) and sign in. Signs out every older session (a removed account's). 409 once any admin exists. Only a scrypt hash is stored (`admin_account`, one row) |
+| POST | `/api/login` | Username + password → JWT access token (15 min) + refresh token (7 days). Checks `admin_account` only (409 `setup_required` if there is none). Tokens carry `ver: 2`; older tokens are refused |
 | POST | `/api/refresh` | Exchange refresh token for new access token |
 | POST | `/api/logout` | Revoke refresh token |
+| GET | `/api/account` | JWT. `{username, email}`: the admin and its reset email |
+| PUT | `/api/account/email` | JWT. `{email, password}`: change the reset email; needs the current password (403 if wrong) |
+| POST | `/api/password-reset/request` | `{email}` → 202 `{sent, email_configured}`, the same whether or not it matched. If it is the account's email and SMTP (Notifications page) is set, emails a single-use link valid 30 min; at most one email a minute. Only sha256(token) is kept, in Redis. Link host: `DASHBOARD_URL`, else the request host only if it is one of this machine's own IPs, else the IP on `SNIFF_IFACE` (never a foreign Host header) |
+| POST | `/api/password-reset` | `{token, password}` → new tokens. Sets the new hash, burns the token, and refuses every token issued before (Redis `jwt:valid_after`). Auth responses all carry `Cache-Control: no-store` |
 
 ### Routers and WiFi helpers
 
